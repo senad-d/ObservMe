@@ -1,0 +1,34 @@
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  lifecycler:
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+  trace_idle_period: 10s
+  max_block_bytes: 1000000
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 168h
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal

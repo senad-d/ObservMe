@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build, coverage, and package outputs
+dist/
+build/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+*.tgz
+
+# OS/editor noise
+.DS_Store
+*.log
+
+# Environment, secrets, and local pi runtime state
+.env
+.env.*
+!.env.example
+.pi/
+
+# Local caches and generated reports
+.cache/
+.local/
+.trivycache/
+trivy-reports/
+odc-reports/
+
+# Temporary files
+tmp/
+temp/

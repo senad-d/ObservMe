@@ -1,0 +1,89 @@
+{
+  "name": "@senad-d/observme",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "ObservMe: a Pi extension that instruments Pi agent sessions and exports OpenTelemetry traces, metrics, and logs to an external observability stack (OTel Collector, Grafana Tempo/Loki/Prometheus).",
+  "license": "MIT",
+  "author": "Senad Dizdarević <112484166+senad-d@users.noreply.github.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/senad-d/ObservMe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/senad-d/ObservMe/issues"
+  },
+  "homepage": "https://github.com/senad-d/ObservMe#readme",
+  "_template": {
+    "comment": "package.json is strict JSON, so this _template block is the inline template note instead of // comments. Remove it once the first real command/tool replaces the template examples.",
+    "renameChecklist": [
+      "Replace name with the final npm package name, for example @your-scope/my-pi-extension.",
+      "Replace description, author, repository, bugs, and homepage with the new project details.",
+      "Keep the pi.extensions entry pointed at the exported extension entry file, or update it if you move src/extension.ts.",
+      "Replace example command and tool names in src/commands and src/tools so they match the new extension purpose.",
+      "Update README.md, docs/STRUCTURE.md, CHANGELOG.md, SECURITY.md, and GitHub templates before publishing."
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "cli",
+    "terminal",
+    "typescript",
+    "coding-agent",
+    "observability",
+    "opentelemetry"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "docs/**/*.md",
+    "src/**/*.ts",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "dev": "pi --no-extensions -e .",
+    "typecheck": "tsc --noEmit",
+    "lint": "npm run typecheck && npm run lint:eslint && npm run format:check && npm run check",
+    "lint:eslint": "eslint . --max-warnings=0",
+    "format:check": "node scripts/check-format.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:coverage": "node scripts/test-coverage.mjs",
+    "test:tui-artifacts": "node scripts/generate-tui-artifacts.mjs",
+    "smoke:discover": "node scripts/smoke-observability.mjs",
+    "smoke:packaged": "node scripts/smoke-packaged-install.mjs",
+    "smoke:handlers": "node scripts/smoke-handler-execution.mjs",
+    "smoke:pi-lifecycle": "node scripts/smoke-pi-lifecycle.mjs",
+    "check": "node --check scripts/check-package-contents.mjs && node --check scripts/test-coverage.mjs && node --check scripts/smoke-observability.mjs && node --check scripts/smoke-packaged-install.mjs && node --check scripts/smoke-handler-execution.mjs && node --check scripts/smoke-pi-lifecycle.mjs",
+    "pack:dry-run": "npm pack --dry-run --json",
+    "check:pack": "node scripts/check-package-contents.mjs",
+    "validate": "npm run lint && npm run test && npm run check:pack && npm run smoke:packaged && npm run smoke:handlers && npm run smoke:pi-lifecycle"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ],
+    "image": "https://raw.githubusercontent.com/senad-d/ObservMe/main/img/demo.gif"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.80.2",
+    "@earendil-works/pi-coding-agent": "^0.80.2",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.0.1",
+    "eslint": "^10.6.0",
+    "globals": "^17.7.0",
+    "typebox": "^1.3.2",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.62.1"
+  }
+}

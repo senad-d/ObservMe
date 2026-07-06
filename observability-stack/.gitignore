@@ -1,0 +1,12 @@
+secrets/*
+!secrets/README.md
+
+.env
+
+# MacOS
+.DS_Store
+.local
+
+*.crt
+*.key
+grafana_admin_password

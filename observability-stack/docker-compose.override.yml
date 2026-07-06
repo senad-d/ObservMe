@@ -1,0 +1,22 @@
+services:
+  grafana:
+    environment:
+      GF_LOG_LEVEL: debug
+    volumes:
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:rw
+
+  otel-collector:
+    volumes:
+      - ./config/otel/otel-collector.yaml:/etc/otel/otel-collector.yaml:rw
+
+  prometheus:
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:rw
+
+  loki:
+    volumes:
+      - ./config/loki/loki.yaml:/etc/loki/loki.yaml:rw
+
+  tempo:
+    volumes:
+      - ./config/tempo/tempo.yaml:/etc/tempo/tempo.yaml:rw

@@ -1,0 +1,258 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  nginx:
+    image: nginx:1.27.4-alpine
+    depends_on:
+      grafana:
+        condition: service_healthy
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    secrets:
+      - source: observability_tls_cert
+        target: /etc/nginx/certs/observability.local.crt
+      - source: observability_tls_key
+        target: /etc/nginx/certs/observability.local.key
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${NGINX_MEM_LIMIT:-128m}
+    cpus: ${NGINX_CPUS:-0.25}
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    networks:
+      - observability-frontend
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    environment:
+      GF_SERVER_DOMAIN: ${OBSERVABILITY_DOMAIN:-observability.local}
+      GF_SERVER_ROOT_URL: https://${OBSERVABILITY_DOMAIN:-observability.local}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_LOG_MODE: console
+      GF_LOG_LEVEL: debug
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./config/grafana/provisioning/dashboards/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:rw
+    secrets:
+      - grafana_admin_password
+    expose:
+      - "${GRAFANA_PORT:-3000}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${GRAFANA_PORT:-3000}/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 2s
+      retries: 3
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${GRAFANA_MEM_LIMIT:-512m}
+    cpus: ${GRAFANA_CPUS:-0.5}
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - observability-frontend
+      - observability-backend
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    command: ["--config=/etc/otel/otel-collector.yaml"]
+    volumes:
+      - ./config/otel/otel-collector.yaml:/etc/otel/otel-collector.yaml:rw
+    expose:
+      - "${OTEL_GRPC_PORT:-4317}"
+      - "${OTEL_HTTP_PORT:-4318}"
+      - "${OTEL_SELF_METRICS_PORT:-8888}"
+      - "${OTEL_PROM_EXPORT_PORT:-8889}"
+      - "${OTEL_HEALTH_PORT:-13133}"
+    ports:
+      - "${OTEL_GRPC_PORT:-4317}:4317"
+      - "${OTEL_HTTP_PORT:-4318}:4318"
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otel/otel-collector.yaml"]
+      interval: 10s
+      timeout: 2s
+      retries: 3
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${OTEL_MEM_LIMIT:-256m}
+    cpus: ${OTEL_CPUS:-0.5}
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - observability-frontend
+      - observability-backend
+
+  prometheus:
+    image: prom/prometheus:v2.53.1
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}"
+    volumes:
+      - prometheus-data:/prometheus
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:rw
+    depends_on:
+      otel-collector:
+        condition: service_healthy
+    expose:
+      - "${PROMETHEUS_PORT:-9090}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${PROMETHEUS_PORT:-9090}/-/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 2s
+      retries: 3
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${PROMETHEUS_MEM_LIMIT:-512m}
+    cpus: ${PROMETHEUS_CPUS:-0.5}
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - observability-backend
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--collector.filesystem.mount-points-exclude=^/(dev|proc|run|sys|var/lib/docker/.+|var/lib/containers/storage/.+)($|/)"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    expose:
+      - "9100"
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${NODE_EXPORTER_MEM_LIMIT:-128m}
+    cpus: ${NODE_EXPORTER_CPUS:-0.25}
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - observability-backend
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
+    command:
+      - "--housekeeping_interval=30s"
+      - "--store_container_labels=true"
+      - "--whitelisted_container_labels=com.docker.compose.project,com.docker.compose.service,com.docker.compose.container-number,com.docker.compose.oneoff"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    expose:
+      - "8080"
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${CADVISOR_MEM_LIMIT:-256m}
+    cpus: ${CADVISOR_CPUS:-0.5}
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - observability-backend
+
+  loki:
+    image: grafana/loki:2.9.8
+    user: "0:0"
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - loki-data:/var/loki
+      - ./config/loki/loki.yaml:/etc/loki/loki.yaml:rw
+    expose:
+      - "${LOKI_PORT:-3100}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${LOKI_PORT:-3100}/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 2s
+      retries: 3
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${LOKI_MEM_LIMIT:-512m}
+    cpus: ${LOKI_CPUS:-0.5}
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - observability-backend
+
+  tempo:
+    image: grafana/tempo:2.5.0
+    user: "0:0"
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - tempo-data:/var/tempo
+      - ./config/tempo/tempo.yaml:/etc/tempo/tempo.yaml:rw
+    expose:
+      - "${TEMPO_PORT:-3200}"
+      - "${TEMPO_GRPC_PORT:-9095}"
+      - "${TEMPO_OTLP_GRPC_PORT:-4317}"
+      - "${TEMPO_OTLP_HTTP_PORT:-4318}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${TEMPO_PORT:-3200}/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 2s
+      retries: 3
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${TEMPO_MEM_LIMIT:-512m}
+    cpus: ${TEMPO_CPUS:-0.5}
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - observability-backend
+
+volumes:
+  prometheus-data:
+  loki-data:
+  tempo-data:
+  grafana-data:
+
+networks:
+  observability-frontend:
+    name: observability-frontend
+  observability-backend:
+    name: observability-backend
+    internal: true
+
+secrets:
+  observability_tls_cert:
+    file: ./secrets/observability.local.crt
+  observability_tls_key:
+    file: ./secrets/observability.local.key
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password

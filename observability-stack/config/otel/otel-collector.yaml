@@ -1,0 +1,58 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+    path: /healthz
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 256
+    spike_limit_mib: 64
+  transform/pi-agent-loki:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - ## ADD HERE
+  batch:
+    timeout: 5s
+    send_batch_size: 8192
+  filter/drop-infrastructure-spans:
+    traces:
+      span:
+        - ## ADD HERE
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    metric_expiration: 60m
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/pi-agent-loki, batch]
+      exporters: [loki]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, filter/drop-infrastructure-spans]
+      exporters: [otlp/tempo]
