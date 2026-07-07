@@ -4,6 +4,10 @@ import type { Counter, Histogram, Meter, Span, Tracer, UpDownCounter } from "@op
 import { context as otelContext, SpanStatusCode, trace } from "@opentelemetry/api";
 import type { Logger } from "@opentelemetry/api-logs";
 import {
+  clearObsAgentsRuntimeState,
+  startObsAgentsRuntimeState,
+} from "../commands/obs-agents-runtime.ts";
+import {
   clearObsSessionRuntimeState,
   recordObsSessionCost,
   recordObsSessionLlmCall,
@@ -655,6 +659,12 @@ function createSessionStartHandler(
       traceId: readSpanTraceId(session.sessionSpan),
       traceUrlTemplate: session.config.query.links.traceUrlTemplate,
     });
+    startObsAgentsRuntimeState({
+      lineage,
+      agentTree: session.agentTree,
+      sessionId: readString(attributes, sessionAttributeKeys.SESSION_ID),
+      traceId: readSpanTraceId(session.sessionSpan),
+    });
     session.workflowStartedAtMs = Date.now();
     session.metrics.sessionsStarted.add(1, labels);
     session.metrics.activeAgents.add(1, labels);
@@ -698,6 +708,7 @@ function createSessionShutdownHandler(
     const shutdownResult = await session.controller.shutdown(session.config.shutdown.flushTimeoutMs);
     recordObsStatusExportResult(shutdownResult);
     clearObsSessionRuntimeState();
+    clearObsAgentsRuntimeState();
     setSession(undefined);
   };
 }

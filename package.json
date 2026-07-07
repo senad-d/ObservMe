@@ -13,16 +13,6 @@
     "url": "https://github.com/senad-d/ObservMe/issues"
   },
   "homepage": "https://github.com/senad-d/ObservMe#readme",
-  "_template": {
-    "comment": "package.json is strict JSON, so this _template block is the inline template note instead of // comments. Remove it once the first real command/tool replaces the template examples.",
-    "renameChecklist": [
-      "Replace name with the final npm package name, for example @your-scope/my-pi-extension.",
-      "Replace description, author, repository, bugs, and homepage with the new project details.",
-      "Keep the pi.extensions entry pointed at the exported extension entry file, or update it if you move src/extension.ts.",
-      "Replace example command and tool names in src/commands and src/tools so they match the new extension purpose.",
-      "Update README.md, docs/STRUCTURE.md, CHANGELOG.md, SECURITY.md, and GitHub templates before publishing."
-    ]
-  },
   "keywords": [
     "pi-package",
     "pi-extension",

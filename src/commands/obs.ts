@@ -1,10 +1,18 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { RegisterObsBackfillCommandOptions } from "./obs-backfill.ts";
+import { handleObsBackfillCommand } from "./obs-backfill.ts";
+import type { ObsAgentsCommandContext, RegisterObsAgentsCommandOptions } from "./obs-agents.ts";
+import { handleObsAgentsCommand } from "./obs-agents.ts";
 import type { ObsCostCommandContext, RegisterObsCostCommandOptions } from "./obs-cost.ts";
 import { handleObsCostCommand } from "./obs-cost.ts";
+import type { ObsErrorsCommandContext, RegisterObsErrorsCommandOptions } from "./obs-errors.ts";
+import { handleObsErrorsCommand } from "./obs-errors.ts";
 import type { ObsHealthCommandContext, RegisterObsHealthCommandOptions } from "./obs-health.ts";
 import { handleObsHealthCommand } from "./obs-health.ts";
 import type { ObsLinkCommandContext, RegisterObsLinkCommandOptions } from "./obs-link.ts";
 import { handleObsLinkCommand } from "./obs-link.ts";
+import type { ObsLogsCommandContext, RegisterObsLogsCommandOptions } from "./obs-logs.ts";
+import { handleObsLogsCommand } from "./obs-logs.ts";
 import type { ObsSessionCommandContext, RegisterObsSessionCommandOptions } from "./obs-session.ts";
 import { handleObsSessionCommand } from "./obs-session.ts";
 import type { ObsStatusCommandContext, RegisterObsStatusCommandOptions } from "./obs-status.ts";
@@ -21,6 +29,9 @@ export interface ObsCommandContext
     ObsCostCommandContext,
     ObsTraceCommandContext,
     ObsToolsCommandContext,
+    ObsAgentsCommandContext,
+    ObsErrorsCommandContext,
+    ObsLogsCommandContext,
     ObsLinkCommandContext {}
 
 export interface RegisterObsCommandOptions {
@@ -30,6 +41,10 @@ export interface RegisterObsCommandOptions {
   readonly cost?: RegisterObsCostCommandOptions;
   readonly trace?: RegisterObsTraceCommandOptions;
   readonly tools?: RegisterObsToolsCommandOptions;
+  readonly agents?: RegisterObsAgentsCommandOptions;
+  readonly backfill?: RegisterObsBackfillCommandOptions;
+  readonly errors?: RegisterObsErrorsCommandOptions;
+  readonly logs?: RegisterObsLogsCommandOptions;
   readonly link?: RegisterObsLinkCommandOptions;
 }
 
@@ -40,6 +55,10 @@ const OBS_SESSION_SUBCOMMAND = "session";
 const OBS_COST_SUBCOMMAND = "cost";
 const OBS_TRACE_SUBCOMMAND = "trace";
 const OBS_TOOLS_SUBCOMMAND = "tools";
+const OBS_AGENTS_SUBCOMMAND = "agents";
+const OBS_BACKFILL_SUBCOMMAND = "backfill";
+const OBS_ERRORS_SUBCOMMAND = "errors";
+const OBS_LOGS_SUBCOMMAND = "logs";
 const OBS_LINK_SUBCOMMAND = "link";
 const obsSubcommands = [
   OBS_STATUS_SUBCOMMAND,
@@ -48,6 +67,10 @@ const obsSubcommands = [
   OBS_COST_SUBCOMMAND,
   OBS_TRACE_SUBCOMMAND,
   OBS_TOOLS_SUBCOMMAND,
+  OBS_AGENTS_SUBCOMMAND,
+  OBS_BACKFILL_SUBCOMMAND,
+  OBS_ERRORS_SUBCOMMAND,
+  OBS_LOGS_SUBCOMMAND,
   OBS_LINK_SUBCOMMAND,
 ] as const;
 
@@ -55,7 +78,7 @@ export function registerObsCommand(pi: ExtensionAPI, options: RegisterObsCommand
   const command = new ObsCommand(options);
 
   pi.registerCommand(OBS_COMMAND_NAME, {
-    description: "Run ObservMe commands. Usage: /obs <status|health|session|cost|trace|tools|link>",
+    description: "Run ObservMe commands. Usage: /obs <status|health|session|cost|trace|tools|agents|backfill|errors|logs|link>",
     getArgumentCompletions: getObsRootCommandArgumentCompletions,
     handler: command.handle.bind(command),
   });
@@ -98,12 +121,32 @@ export async function handleObsCommand(
     return;
   }
 
+  if (subcommand === OBS_AGENTS_SUBCOMMAND) {
+    await handleObsAgentsCommand(args, ctx, options.agents);
+    return;
+  }
+
+  if (subcommand === OBS_BACKFILL_SUBCOMMAND) {
+    await handleObsBackfillCommand(args, ctx, options.backfill);
+    return;
+  }
+
+  if (subcommand === OBS_ERRORS_SUBCOMMAND) {
+    await handleObsErrorsCommand(args, ctx, options.errors);
+    return;
+  }
+
+  if (subcommand === OBS_LOGS_SUBCOMMAND) {
+    await handleObsLogsCommand(args, ctx, options.logs);
+    return;
+  }
+
   if (subcommand === OBS_LINK_SUBCOMMAND) {
     await handleObsLinkCommand(args, ctx, options.link);
     return;
   }
 
-  await ctx.ui.notify("Usage: /obs <status|health|session|cost|trace|tools|link>", "warning");
+  await ctx.ui.notify("Usage: /obs <status|health|session|cost|trace|tools|agents|backfill|errors|logs|link>", "warning");
 }
 
 export function getObsRootCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {

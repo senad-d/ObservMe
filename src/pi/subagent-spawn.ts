@@ -2,6 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Counter, Histogram, Span, SpanContext, Tracer } from "@opentelemetry/api";
 import { context as otelContext, isSpanContextValid, SpanStatusCode, trace } from "@opentelemetry/api";
 import type { Logger } from "@opentelemetry/api-logs";
+import {
+  recordObsAgentWaitJoinHint,
+  updateObsAgentsRuntimeStateFromTree,
+} from "../commands/obs-agents-runtime.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import {
   AGENT_SPAWN_ATTRIBUTES,
@@ -218,6 +222,7 @@ export function startSubagentSpawn(
   });
   session.metrics.subagentsSpawned.add(1, labels);
   recordAgentTreeMetrics(session, treeSummary, labels);
+  recordObsAgentsTreeState(session);
   span.addEvent(LOG_EVENT_NAMES.AGENT_SPAWN_STARTED, attributes);
   emitSubagentLog(session, LOG_EVENT_NAMES.AGENT_SPAWN_STARTED, attributes);
   recordTraceContextFallbackWhenMissing(session, span, spawnId, propagation);
@@ -238,6 +243,7 @@ export function completeSubagentSpawn(
   const attributes = buildSubagentCompletionAttributes(session, spawnId, childAgentId, options.outcome ?? "completed");
 
   updateChildStatus(session, childAgentId, childStatus);
+  recordObsAgentsTreeState(session);
   state.span.setAttributes(attributes);
   state.span.setStatus({ code: SpanStatusCode.OK });
   state.span.addEvent(LOG_EVENT_NAMES.AGENT_SPAWN_COMPLETED, attributes);
@@ -261,6 +267,7 @@ export function failSubagentSpawn(
   };
 
   updateChildStatus(session, childAgentId, "failed");
+  recordObsAgentsTreeState(session);
   state.span.setAttributes(attributes);
   state.span.setStatus({ code: SpanStatusCode.ERROR, message: String(attributes[LOG_ATTRIBUTES.ERROR_TYPE]) });
   state.span.addEvent(LOG_EVENT_NAMES.AGENT_SPAWN_FAILED, attributes);
@@ -381,6 +388,7 @@ export function recordSubagentLineageObservation(
 
   recordAgentTreeMetrics(session, summary, labels);
   if (node.orphaned) recordOrphanAgent(session, node);
+  recordObsAgentsTreeState(session);
   return node;
 }
 
@@ -398,6 +406,7 @@ function startWaitJoinSpan(
   const state = { span, startedAtMs: now(options), labels };
 
   waitJoinRegistry(session, kind).set(id, state);
+  recordObsAgentWaitJoinHint(createWaitJoinRuntimeHint(id, options, kind, true));
   span.addEvent(eventName, attributes);
   emitSubagentLog(session, eventName, attributes);
 
@@ -425,6 +434,8 @@ function endWaitJoinSpan(
   state.span.addEvent(eventName, attributes);
   state.span.end();
   registry.delete(id);
+  recordObsAgentWaitJoinHint(createWaitJoinRuntimeHint(id, options, kind, false, durationMs));
+  recordObsAgentsTreeState(session);
   recordWaitJoinDuration(session, durationMs, state.labels, kind);
   emitSubagentLog(session, eventName, attributes, waitJoinFailed(options) ? "ERROR" : "INFO");
 }
@@ -541,6 +552,30 @@ function recordAgentTreeMetrics(
   session.metrics.agentFanoutCount.record(summary.fanoutCount, labels);
   session.metrics.agentTreeDepth.record(summary.treeDepth, labels);
   session.metrics.agentTreeWidth.record(summary.treeWidth, labels);
+}
+
+function recordObsAgentsTreeState(session: SubagentTelemetrySession): void {
+  updateObsAgentsRuntimeStateFromTree(session.lineage, ensureAgentTree(session), { sessionId: resolveCurrentSessionId(session) });
+}
+
+function createWaitJoinRuntimeHint(
+  id: string,
+  options: AgentWaitJoinOptions,
+  kind: "wait" | "join",
+  active: boolean,
+  durationMs?: number,
+) {
+  return {
+    kind,
+    id,
+    active,
+    spawnId: options.spawnId,
+    childAgentId: options.childAgentId,
+    childStatus: options.childStatus,
+    joinStatus: options.joinStatus,
+    reason: options.reason,
+    durationMs,
+  };
 }
 
 function ensureAgentTree(session: SubagentTelemetrySession): AgentTreeTracker {

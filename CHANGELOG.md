@@ -47,4 +47,10 @@
 - Added the `/obs cost` command with safe model/provider aggregate PromQL, configured timeout/result-limit handling through the Prometheus client, and default rejection of session-scoped metric cost queries.
 - Added `/obs trace` and `/obs link` commands that build Grafana Tempo trace links from the configured URL template for current, last-turn, or safe session-id scopes.
 - Added the `/obs tools` command with safe tool-name/error-class PromQL aggregates plus configured timeout/result-limit handling through the Prometheus client.
+- Added `/obs errors` and `/obs logs` commands with documented Loki LogQL filters, current-session `pi_session_id` scoping, configured log-result caps, and concise structured summaries.
+- Added the `/obs agents` command with in-memory workflow/agent lineage summaries, safe low-cardinality Prometheus aggregate queries, Tempo attribute drill-downs, and wait/join hints.
+- Added the optional `/obs backfill --current-session --since <duration>` command with explicit confirmation, replay markers, capture-gated redaction, and bounded export volume.
+- Removed the remaining template command/tool scaffolding, renamed the extension factory to `observme`, and removed package `_template` metadata now that real ObservMe registration is in place.
+- Added the initial Grafana dashboard pack for ObservMe overview, cost, and latency views with PromQL validation against documented semantic-convention metric names.
+- Added Grafana dashboards for tool reliability, agent/subagent lineage health, and model usage with documented PromQL/LogQL plus safe agent metric labels.
 - Complete ObservMe command behavior and full event coverage are not implemented yet; see `specs/spec-tasks.md` for the planned implementation sequence.

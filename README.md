@@ -109,7 +109,7 @@ pi --no-extensions -e .
 
 ---
 
-## Planned Commands
+## Commands
 
 | Command | Description | Status |
 | --- | --- | --- |
@@ -119,11 +119,11 @@ pi --no-extensions -e .
 | `/obs cost` | Query Prometheus/Mimir for token/cost aggregates | Planned |
 | `/obs trace` | Return a Grafana Tempo trace link for the current or a given session | Planned |
 | `/obs tools` | Query tool call/failure rates | Planned |
-| `/obs errors` | Query Loki for recent error events | Planned |
-| `/obs logs` | Query Loki for the current session's structured logs | Planned |
+| `/obs errors` | Query Loki for recent error events and render a capped structured summary | Implemented |
+| `/obs logs` | Query Loki for the current session's structured logs by `pi_session_id` and render a capped summary | Implemented |
 | `/obs agents` | Show current agent identity and recent parent/child subagent lineage | Planned |
 | `/obs link` | Direct Grafana link helper | Planned |
-| `/obs backfill` | Optional, disabled-by-default historical telemetry replay | Planned, off by default |
+| `/obs backfill` | Optional, disabled-by-default historical telemetry replay | Implemented, explicit confirmation required |
 
 Full command semantics are specified in `ObservMe-Production-Docs/08-query-grafana-integration.md`.
 

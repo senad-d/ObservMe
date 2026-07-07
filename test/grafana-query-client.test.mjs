@@ -40,7 +40,14 @@ function createNeverResolvingFetch(signals) {
 }
 
 async function collectTypeScriptFiles(root) {
-  const entries = await readdir(root, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  }
+
   const files = [];
 
   for (const entry of entries) {

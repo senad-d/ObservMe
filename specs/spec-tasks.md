@@ -851,7 +851,7 @@ Run the documented PromQL through the Prometheus client, aggregate only by allow
 
 ### 37. Implement `/obs errors` and `/obs logs` commands
 
-- [ ] Create `src/commands/obs-errors.ts` and `src/commands/obs-logs.ts` using the Loki client (task 32) to run the LogQL queries from `08-query-grafana-integration.md` §4.
+- [x] Create `src/commands/obs-errors.ts` and `src/commands/obs-logs.ts` using the Loki client (task 32) to run the LogQL queries from `08-query-grafana-integration.md` §4.
 
 #### Why
 
@@ -874,7 +874,7 @@ Build the documented Loki queries through the Loki client, filter errors/session
 
 ### 38. Implement `/obs agents` command
 
-- [ ] Create `src/commands/obs-agents.ts` using the workflow/agent-lineage context (task 12) and the Prometheus/Tempo clients (tasks 31/33) to show current workflow/agent identity, recent parent/child relationships, depth, fan-out, active children, orphan status, and wait/join hints per `08-query-grafana-integration.md` §4.
+- [x] Create `src/commands/obs-agents.ts` using the workflow/agent-lineage context (task 12) and the Prometheus/Tempo clients (tasks 31/33) to show current workflow/agent identity, recent parent/child relationships, depth, fan-out, active children, orphan status, and wait/join hints per `08-query-grafana-integration.md` §4.
 
 #### Why
 
@@ -897,7 +897,7 @@ Combine in-memory lineage context with Prometheus aggregates and Tempo/Loki dril
 
 ### 39. Implement optional `/obs backfill` command
 
-- [ ] Create `src/commands/obs-backfill.ts` implementing the disabled-by-default historical replay command per `07-extension-implementation-blueprint.md` §12, marking replayed telemetry `observme.replayed=true` and requiring explicit user confirmation before sending historical content.
+- [x] Create `src/commands/obs-backfill.ts` implementing the disabled-by-default historical replay command per `07-extension-implementation-blueprint.md` §12, marking replayed telemetry `observme.replayed=true` and requiring explicit user confirmation before sending historical content.
 
 #### Why
 
@@ -921,7 +921,7 @@ Implement an explicit command-only replay flow with user confirmation, rate limi
 
 ### 40. Replace template example command/tool and remove `_template` metadata
 
-- [ ] Remove `src/commands/example-command.ts` and `src/tools/example-tool.ts` (or repurpose them if a genuinely useful agent-facing tool is identified), update `src/extension.ts` to register all real ObservMe modules, rename the exported factory to `observme`, and remove the `_template` block from `package.json`.
+- [x] Remove `src/commands/example-command.ts` and `src/tools/example-tool.ts` (or repurpose them if a genuinely useful agent-facing tool is identified), update `src/extension.ts` to register all real ObservMe modules, rename the exported factory to `observme`, and remove the `_template` block from `package.json`.
 
 #### Why
 
@@ -943,7 +943,7 @@ Delete or repurpose example modules, make `src/extension.ts` registration-only, 
 
 ### 41. Build overview, cost, and latency dashboards
 
-- [ ] Create `dashboards/observme-overview.json`, `dashboards/observme-cost.json`, and `dashboards/observme-latency.json` per `ObservMe-Production-Docs/09-dashboards-alerts-slos.md` §2–3.
+- [x] Create `dashboards/observme-overview.json`, `dashboards/observme-cost.json`, and `dashboards/observme-latency.json` per `ObservMe-Production-Docs/09-dashboards-alerts-slos.md` §2–3.
 
 #### Why
 
@@ -965,7 +965,7 @@ Create valid Grafana dashboard JSON using only documented metric names and PromQ
 
 ### 42. Build tools, agents, and models dashboards
 
-- [ ] Create `dashboards/observme-tools.json`, `dashboards/observme-agents.json`, and `dashboards/observme-models.json` per `09-dashboards-alerts-slos.md` §4–6.
+- [x] Create `dashboards/observme-tools.json`, `dashboards/observme-agents.json`, and `dashboards/observme-models.json` per `09-dashboards-alerts-slos.md` §4–6.
 
 #### Why
 

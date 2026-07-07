@@ -149,6 +149,10 @@ test("root obs command dispatches status and health subcommands", async () => {
     { value: "cost", label: "cost" },
     { value: "trace", label: "trace" },
     { value: "tools", label: "tools" },
+    { value: "agents", label: "agents" },
+    { value: "backfill", label: "backfill" },
+    { value: "errors", label: "errors" },
+    { value: "logs", label: "logs" },
     { value: "link", label: "link" },
   ]);
   assert.equal(notifications[0].message, "Collector: reachable");
