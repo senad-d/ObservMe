@@ -1,4 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ObsCostCommandContext, RegisterObsCostCommandOptions } from "./obs-cost.ts";
+import { handleObsCostCommand } from "./obs-cost.ts";
 import type { ObsHealthCommandContext, RegisterObsHealthCommandOptions } from "./obs-health.ts";
 import { handleObsHealthCommand } from "./obs-health.ts";
 import type { ObsSessionCommandContext, RegisterObsSessionCommandOptions } from "./obs-session.ts";
@@ -6,25 +8,31 @@ import { handleObsSessionCommand } from "./obs-session.ts";
 import type { ObsStatusCommandContext, RegisterObsStatusCommandOptions } from "./obs-status.ts";
 import { handleObsStatusCommand } from "./obs-status.ts";
 
-export interface ObsCommandContext extends ObsStatusCommandContext, ObsHealthCommandContext, ObsSessionCommandContext {}
+export interface ObsCommandContext
+  extends ObsStatusCommandContext,
+    ObsHealthCommandContext,
+    ObsSessionCommandContext,
+    ObsCostCommandContext {}
 
 export interface RegisterObsCommandOptions {
   readonly status?: RegisterObsStatusCommandOptions;
   readonly health?: RegisterObsHealthCommandOptions;
   readonly session?: RegisterObsSessionCommandOptions;
+  readonly cost?: RegisterObsCostCommandOptions;
 }
 
 const OBS_COMMAND_NAME = "obs";
 const OBS_STATUS_SUBCOMMAND = "status";
 const OBS_HEALTH_SUBCOMMAND = "health";
 const OBS_SESSION_SUBCOMMAND = "session";
-const obsSubcommands = [OBS_STATUS_SUBCOMMAND, OBS_HEALTH_SUBCOMMAND, OBS_SESSION_SUBCOMMAND] as const;
+const OBS_COST_SUBCOMMAND = "cost";
+const obsSubcommands = [OBS_STATUS_SUBCOMMAND, OBS_HEALTH_SUBCOMMAND, OBS_SESSION_SUBCOMMAND, OBS_COST_SUBCOMMAND] as const;
 
 export function registerObsCommand(pi: ExtensionAPI, options: RegisterObsCommandOptions = {}): void {
   const command = new ObsCommand(options);
 
   pi.registerCommand(OBS_COMMAND_NAME, {
-    description: "Run ObservMe commands. Usage: /obs <status|health|session>",
+    description: "Run ObservMe commands. Usage: /obs <status|health|session|cost>",
     getArgumentCompletions: getObsRootCommandArgumentCompletions,
     handler: command.handle.bind(command),
   });
@@ -52,7 +60,12 @@ export async function handleObsCommand(
     return;
   }
 
-  await ctx.ui.notify("Usage: /obs <status|health|session>", "warning");
+  if (subcommand === OBS_COST_SUBCOMMAND) {
+    await handleObsCostCommand(args, ctx, options.cost);
+    return;
+  }
+
+  await ctx.ui.notify("Usage: /obs <status|health|session|cost>", "warning");
 }
 
 export function getObsRootCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {

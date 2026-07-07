@@ -146,6 +146,7 @@ test("root obs command dispatches status and health subcommands", async () => {
     { value: "status", label: "status" },
     { value: "health", label: "health" },
     { value: "session", label: "session" },
+    { value: "cost", label: "cost" },
   ]);
   assert.equal(notifications[0].message, "Collector: reachable");
   assert.match(notifications[1].message, /ObservMe: enabled/u);

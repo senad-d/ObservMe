@@ -738,7 +738,7 @@ Build bounded Tempo search requests from generated IDs or hashed fields only, en
 
 ### 32. Implement Loki query client
 
-- [ ] Create `src/query/loki.ts` implementing LogQL queries per `08-query-grafana-integration.md` §4, §6 (`queryLoki`), normalizing dotted attribute names to underscores for Loki queries per `13-source-notes.md`.
+- [x] Create `src/query/loki.ts` implementing LogQL queries per `08-query-grafana-integration.md` §4, §6 (`queryLoki`), normalizing dotted attribute names to underscores for Loki queries per `13-source-notes.md`.
 
 #### Why
 
@@ -760,7 +760,7 @@ Implement bounded LogQL query construction, normalize dotted attributes to under
 
 ### 33. Implement Prometheus query client
 
-- [ ] Create `src/query/prometheus.ts` implementing PromQL queries per `08-query-grafana-integration.md` §4, §6 (`queryPrometheus`).
+- [x] Create `src/query/prometheus.ts` implementing PromQL queries per `08-query-grafana-integration.md` §4, §6 (`queryPrometheus`).
 
 #### Why
 
@@ -782,7 +782,7 @@ Implement bounded PromQL execution, enforce result caps, and add query-construct
 
 ### 34. Implement `/obs cost` command
 
-- [ ] Create `src/commands/obs-cost.ts` using the Prometheus client (task 33) to run the cost aggregate PromQL from `08-query-grafana-integration.md` §4.
+- [x] Create `src/commands/obs-cost.ts` using the Prometheus client (task 33) to run the cost aggregate PromQL from `08-query-grafana-integration.md` §4.
 
 #### Why
 
