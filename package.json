@@ -40,7 +40,8 @@
   "scripts": {
     "dev": "pi --no-extensions -e .",
     "typecheck": "tsc --noEmit",
-    "lint": "npm run typecheck && npm run lint:eslint && npm run format:check && npm run check",
+    "typecheck:test": "tsc --project tsconfig.test.json --noEmit",
+    "lint": "npm run typecheck && npm run typecheck:test && npm run lint:eslint && npm run format:check && npm run check",
     "lint:eslint": "eslint . --max-warnings=0",
     "format:check": "node scripts/check-format.mjs",
     "test": "node --test test/*.test.mjs test/*.test.ts",

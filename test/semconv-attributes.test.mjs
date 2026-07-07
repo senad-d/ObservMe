@@ -113,6 +113,7 @@ const documentedAttributeKeys = [
   "pi.llm.cost.output_usd",
   "pi.llm.cost.total_usd",
   "pi.llm.error_message_hash",
+  "pi.llm.content.kind",
   "pi.llm.prompt.redacted",
   "pi.llm.request.input_chars",
   "pi.llm.request.message_count",

@@ -179,6 +179,8 @@ processors:
       - key: pi.session.id
         action: delete
 
+  # Drops accidental content attributes from logs. Intentional LLM content capture
+  # is emitted as already-redacted log bodies and opt-in span attributes.
   attributes/drop_content_attributes:
     actions:
       - key: gen_ai.input.messages
@@ -228,7 +230,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, resource/observme, attributes/drop_content_attributes, batch]
+      processors: [memory_limiter, resource/observme, batch]
       exporters: [otlp/tempo]
 
     metrics:
@@ -242,9 +244,9 @@ service:
       exporters: [otlphttp/loki]
 ```
 
-The Collector attribute processor is defense in depth for attributes only. It must not be the only redaction layer, and it does not sanitize arbitrary log bodies; ObservMe must redact or drop sensitive content before export.
+The Collector attribute processor is defense in depth for log attributes only. It must not be the only redaction layer, and it does not sanitize arbitrary log bodies; ObservMe must redact or drop sensitive content before export. The traces pipeline intentionally keeps `pi.llm.prompt.redacted`, `pi.llm.response.redacted`, and `pi.llm.thinking.redacted` so Tempo can display redacted content after explicit capture is enabled. Old telemetry that an earlier Collector dropped cannot be recovered; generate new LLM events after updating the Collector.
 
-Keep high-cardinality lineage attributes on traces/logs, but remove them from the metrics pipeline unless the organization explicitly accepts the cardinality. Do not enable Prometheus resource-to-telemetry conversion for `pi.workflow.id`, `pi.agent.id`, `pi.session.id`, trace IDs, or spawn IDs.
+Keep high-cardinality lineage attributes on traces/logs, but remove them from the metrics pipeline unless the organization explicitly accepts the cardinality. The bundled local Loki pipeline promotes `pi.agent.id` and `pi.agent.run.id` as log labels so the LLM Conversations dashboard can filter captured chat content by agent and run. Do not enable Prometheus resource-to-telemetry conversion for `pi.workflow.id`, `pi.agent.id`, `pi.session.id`, trace IDs, or spawn IDs.
 
 ## 7. Direct-to-Backend Development Mode
 

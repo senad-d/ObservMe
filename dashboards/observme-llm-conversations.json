@@ -1,0 +1,259 @@
+{
+  "__requires": [
+    {
+      "id": "grafana",
+      "name": "Grafana",
+      "type": "grafana",
+      "version": "10.0.0"
+    },
+    {
+      "id": "loki",
+      "name": "Loki",
+      "type": "datasource",
+      "version": "1.0.0"
+    },
+    {
+      "id": "logs",
+      "name": "Logs",
+      "type": "panel",
+      "version": ""
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Single timeline of all opt-in redacted LLM chat content. The log line is the redacted content body. Requires OBSERVME_CAPTURE_PROMPTS/RESPONSES/THINKING=true, OBSERVME_REDACTION_ENABLED=true, and OBSERVME_ALLOW_UNSAFE_CAPTURE=true before the conversation occurs.",
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_category=\"llm_content\"}",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Conversation timeline (redacted, opt-in)",
+      "type": "logs"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Captured user/provider prompt bodies only. Query by labels such as pi_session_id in Explore if you need one session; do not query by raw prompt text.",
+      "gridPos": {
+        "h": 10,
+        "w": 8,
+        "x": 0,
+        "y": 12
+      },
+      "id": 2,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_name=\"llm.prompt.captured\"}",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Prompts",
+      "type": "logs"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Captured assistant response bodies only. Values are redacted before export and are visible only for newly emitted captured events.",
+      "gridPos": {
+        "h": 10,
+        "w": 8,
+        "x": 8,
+        "y": 12
+      },
+      "id": 3,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_name=\"llm.response.captured\"}",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Responses",
+      "type": "logs"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Captured assistant thinking/reasoning bodies only, when thinking capture is explicitly enabled.",
+      "gridPos": {
+        "h": 10,
+        "w": 8,
+        "x": 16,
+        "y": 12
+      },
+      "id": 4,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_name=\"llm.thinking.captured\"}",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Thinking",
+      "type": "logs"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "observme",
+    "pi",
+    "llm",
+    "conversation",
+    "redacted"
+  ],
+  "templating": {
+    "list": [
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
+        "definition": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\"}, pi_agent_id)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Agent ID",
+        "multi": true,
+        "name": "agent_id",
+        "options": [],
+        "query": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\"}, pi_agent_id)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
+        "definition": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_agent_id=~\"${agent_id:regex}\"}, pi_agent_run_id)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Agent run ID",
+        "multi": true,
+        "name": "agent_run_id",
+        "options": [],
+        "query": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_agent_id=~\"${agent_id:regex}\"}, pi_agent_run_id)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "ObservMe LLM Conversations",
+  "uid": "observme-llm-conversations",
+  "version": 1,
+  "weekStart": ""
+}

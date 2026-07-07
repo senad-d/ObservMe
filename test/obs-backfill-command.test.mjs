@@ -4,6 +4,7 @@ import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { getObsRootCommandArgumentCompletions, registerObsCommand } from "../src/commands/obs.ts";
 import {
   buildObsBackfillRecords,
+  handleObsBackfillCommand,
   runObsBackfill,
 } from "../src/commands/obs-backfill.ts";
 
@@ -186,6 +187,133 @@ test("backfill record building enforces export rate limits", () => {
   assert.equal(result.entriesEligible, 3);
   assert.equal(result.rateLimited, true);
   assert.equal(result.recordsSkipped, 1);
+});
+
+test("/obs backfill cancellation before confirmation does not export", async () => {
+  const notifications = [];
+  const records = [];
+  const config = cloneDefaultConfig();
+  const controller = new AbortController();
+  controller.abort();
+  const ctx = {
+    ...createContext([userEntry("a1", "2026-07-07T11:30:00.000Z", "one")], notifications),
+    signal: controller.signal,
+  };
+
+  const summary = await runObsBackfill(ctx, {
+    currentSession: true,
+    since: "1h",
+    sinceMs: 60 * 60 * 1000,
+  }, {
+    loadConfig: async () => config,
+    createExporter: () => createExporter(records),
+    now: () => now,
+    maxRecords: 10,
+  });
+
+  assert.equal(summary.status, "cancelled");
+  assert.equal(summary.reason, "operation cancelled");
+  assert.equal(summary.recordsExported, 0);
+  assert.equal(records.length, 0);
+  assert.equal(notifications.length, 0);
+});
+
+test("/obs backfill cancellation during export attempts shutdown and reports partial summary", async () => {
+  const notifications = [];
+  const records = [];
+  const config = cloneDefaultConfig();
+  const controller = new AbortController();
+  const ctx = {
+    ...createContext([
+      userEntry("a1", "2026-07-07T11:10:00.000Z", "one"),
+      userEntry("a2", "2026-07-07T11:20:00.000Z", "two"),
+    ], notifications),
+    signal: controller.signal,
+  };
+  let emitCalls = 0;
+
+  const summary = await runObsBackfill(ctx, {
+    currentSession: true,
+    since: "1h",
+    sinceMs: 60 * 60 * 1000,
+  }, {
+    loadConfig: async () => config,
+    createExporter: () => ({
+      emit: (record, options) => {
+        emitCalls += 1;
+        if (emitCalls === 2) {
+          controller.abort();
+          return new Promise((resolve, reject) => {
+            options.signal.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true });
+          });
+        }
+
+        records.push(record);
+        return undefined;
+      },
+      shutdown: () => records.push({ shutdown: true }),
+    }),
+    now: () => now,
+    maxRecords: 10,
+    exportOperationTimeoutMs: 100,
+  });
+
+  assert.equal(summary.status, "cancelled");
+  assert.equal(summary.reason, "operation cancelled");
+  assert.equal(summary.entriesEligible, 2);
+  assert.equal(summary.recordsExported, 1);
+  assert.equal(summary.recordsSkipped, 1);
+  assert.equal(records.filter(record => record.eventName).length, 1);
+  assert.equal(records.at(-1).shutdown, true);
+});
+
+test("/obs backfill bounds stuck exporters and still attempts shutdown", async () => {
+  const notifications = [];
+  const records = [];
+  const config = cloneDefaultConfig();
+
+  const summary = await runObsBackfill(createContext([userEntry("a1", "2026-07-07T11:30:00.000Z", "one")], notifications), {
+    currentSession: true,
+    since: "1h",
+    sinceMs: 60 * 60 * 1000,
+  }, {
+    loadConfig: async () => config,
+    createExporter: () => ({
+      emit: () => new Promise(() => { /* never resolves */ }),
+      shutdown: () => records.push({ shutdown: true }),
+    }),
+    now: () => now,
+    maxRecords: 10,
+    exportOperationTimeoutMs: 10,
+  });
+
+  assert.equal(summary.status, "cancelled");
+  assert.match(summary.reason, /timed out/u);
+  assert.equal(summary.recordsExported, 0);
+  assert.equal(records.at(-1).shutdown, true);
+});
+
+test("/obs backfill exporter errors are reported without secret-bearing details", async () => {
+  const notifications = [];
+  const config = cloneDefaultConfig();
+  const records = [];
+
+  await handleObsBackfillCommand("backfill --current-session --since 1h", createContext([userEntry("a1", "2026-07-07T11:30:00.000Z", bearerToken)], notifications), {
+    loadConfig: async () => config,
+    createExporter: () => ({
+      emit: () => {
+        throw new Error(`collector failed for ${bearerToken} /tmp/private.env OBSERVME_TOKEN=secret prompt text`);
+      },
+      shutdown: () => records.push({ shutdown: true }),
+    }),
+    now: () => now,
+    maxRecords: 10,
+  });
+
+  assert.equal(notifications.at(-1).type, "error");
+  assert.match(notifications.at(-1).message, /operation failed/u);
+  assert.doesNotMatch(notifications.at(-1).message, /abc123|private\.env|OBSERVME_TOKEN|prompt text/u);
+  assert.equal(records.at(-1).shutdown, true);
 });
 
 test("root obs command dispatches explicit backfill subcommand", async () => {

@@ -2,3 +2,10 @@ services:
   grafana:
     ports:
       - "127.0.0.1::3000"
+
+networks:
+  observability-frontend:
+    name: ${OBSERVME_IT_FRONTEND_NETWORK}
+  observability-backend:
+    name: ${OBSERVME_IT_BACKEND_NETWORK}
+    internal: true

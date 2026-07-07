@@ -206,7 +206,21 @@ query:
       preferIPv4: true
 ```
 
-Create a Grafana service-account token in Grafana (Administration → Users and access → Service accounts → Add service account/token; Viewer is enough for read-only datasource queries) and export it as `OBSERVME_GRAFANA_TOKEN`, or for local-only Basic auth export `OBSERVME_GRAFANA_PASSWORD="$(cat observability-stack/secrets/grafana_admin_password)"`. If you prefer a project-local env file, run `cp .env.example .env`, fill either `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_PASSWORD`, then restart Pi from that project. The local Collector and Loki profile uses `service.name=observme-pi-extension`; Loki queries use normalized labels such as `service_name`, `pi_session_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, run `/obs health` and check extension env loading, Grafana auth, datasource UIDs, TLS, and DNS details.
+Create a Grafana service-account token in Grafana (Administration → Users and access → Service accounts → Add service account/token; Viewer is enough for read-only datasource queries) and export it as `OBSERVME_GRAFANA_TOKEN`, or for local-only Basic auth export `OBSERVME_GRAFANA_PASSWORD="$(cat observability-stack/secrets/grafana_admin_password)"`. If you prefer a project-local env file, run `cp .env.example .env`, fill either `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_PASSWORD`, then restart Pi from that project. The local Collector and Loki profile uses `service.name=observme-pi-extension`; Loki queries use normalized labels such as `service_name`, `pi_session_id`, `pi_agent_id`, `pi_agent_run_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, run `/obs health` and check extension env loading, Grafana auth, datasource UIDs, TLS, and DNS details.
+
+### Show LLM chat content in Grafana
+
+LLM prompt, response, and thinking bodies are hidden by default. To display already-redacted chat content in Tempo span attributes and Loki log panels, restart Pi with explicit capture and the unsafe-capture acknowledgement:
+
+```bash
+export OBSERVME_CAPTURE_PROMPTS=true
+export OBSERVME_CAPTURE_RESPONSES=true
+export OBSERVME_CAPTURE_THINKING=true
+export OBSERVME_REDACTION_ENABLED=true
+export OBSERVME_ALLOW_UNSAFE_CAPTURE=true
+```
+
+Only new LLM events emitted after these settings and the updated Collector are active can show content; older telemetry dropped by the Collector cannot be recovered. Open the **ObservMe LLM Conversations** dashboard for a dedicated redacted chat timeline. Do not query Grafana with raw prompt or response text.
 
 Full configuration schema: `ObservMe-Production-Docs/12-configuration-reference.md`. Full redaction/privacy design: `ObservMe-Production-Docs/06-security-privacy-redaction.md`.
 
@@ -251,7 +265,7 @@ The full production design lives in `ObservMe-Production-Docs/`:
 | `12-configuration-reference.md` | Full configuration schema |
 | `13-source-notes.md` | External documentation cross-check notes |
 
-Implementation specs live in `specs/`: `project-definition-brief.md`, `spec-architecture.md`, `spec-guidelines.md`, `spec-tasks.md`.
+Implementation specs live in `specs/`: `project-definition-brief.md`, `spec-architecture.md`, `spec-guidelines.md`, `spec-tasks.md`. Review-task validation and current `*-2.md` review-spec ordering are documented in [`docs/review-validation.md`](docs/review-validation.md).
 
 ## Development
 
@@ -264,7 +278,8 @@ Useful checks:
 
 ```bash
 npm run typecheck
-npm run lint        # TypeScript, ESLint, formatting, and script syntax checks
+npm run typecheck:test
+npm run lint        # TypeScript, test TypeScript, ESLint, formatting, and script syntax checks
 npm run lint:fix    # optional auto-fix pass
 npm run format:check
 npm run test
@@ -275,6 +290,8 @@ npm run smoke:pi-runtime
 npm run validate:grafana-obs
 pi --no-extensions -e .
 ```
+
+`npm run smoke:pi-runtime` launches a real Pi RPC process against a temporary trusted project, verifies `/obs` discovery plus `/obs status` and `/obs session` routing after `session_start`, and exercises a bounded `/obs cost` timeout against a local deterministic Grafana backend.
 
 End-to-end troubleshooting flow: [`docs/validation-flow.md`](docs/validation-flow.md) provides a deterministic, secret-safe checklist and script for the common user-facing case where Grafana has data but `/obs` commands are failing.
 

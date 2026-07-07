@@ -14,29 +14,32 @@ Review scope and date: 2026-07-07. Final verification review for the current Obs
 
 - Verified: `package.json` declares the Pi extension entry as `./src/extension.ts` and package dry-run includes that source file.
 - Verified: `src/extension.ts` default export registers Pi event handlers and the root `/obs` command.
-- Verified: safe validation commands pass in the current state: typecheck, unit tests, ESLint, format check, package dry-run, and production-dependency audit.
-- Verified: current test count is 245, higher than the earlier review specs' 208-test snapshot, so prior reports are historical and should not be treated as current validation output.
+- Verified: safe validation commands pass in the current state: source typecheck, test typecheck, unit tests, ESLint, format check, package dry-run, and production-dependency audit.
+- Verified: current test count is 264, higher than earlier review specs' 208/245/262-test snapshots, so prior reports are historical and should not be treated as current validation output.
 - Partially verified: command and lifecycle behavior is well covered by imported handler tests and smoke scripts, but this pass did not launch an actual Pi TUI/RPC runtime.
-- Blocked/not verified: cancellation semantics for long-running command handlers in a real Pi context, especially backfill export after confirmation.
+- Resolved in task 1: `npm run smoke:pi-runtime` now launches Pi RPC, verifies `/obs` discovery and session-backed `/obs status`/`/obs session`, and exercises bounded `/obs cost` timeout behavior through the real command path.
 
 ## Safe commands run and results
 
 - `npm run typecheck` — passed.
-- `npm run test` — passed, 245 tests.
+- `npm run typecheck:test` — passed.
+- `npm run test` — passed, 264 tests.
+- `npm run lint:eslint` — passed.
+- `npm run format:check` — passed, 175 files.
+- `npm run check:pack` — passed; package dry-run contained 58 files.
 - `npm audit --omit=dev --audit-level=moderate` — passed, 0 vulnerabilities.
-- `npm run lint:eslint && npm run format:check && npm run check:pack` — passed.
 - Read-only file mapping and static searches were run with `find` and `rg`.
 
 ## Findings summary by severity and category
 
-- Medium / Verification: Real Pi runtime command routing and cancellation semantics remain unverified in this pass.
+- Resolved / Verification: Real Pi runtime command routing and bounded query-command timeout semantics are covered by `npm run smoke:pi-runtime`.
 - Medium / Lifecycle: Backfill has explicit confirmation but needs abort-aware execution after the command starts exporting.
-- Medium / Type Safety: Test TypeScript is not included in source type-checking and should be verified as part of final validation.
-- Low / Maintainability: Prior review specs contain completed historical tasks; future workers need to execute the new `*-2.md` variants in order and avoid redoing completed work.
+- Resolved / Type Safety: Test TypeScript is included in final validation through `npm run typecheck:test`.
+- Resolved / Maintainability: `docs/review-validation.md` documents current `*-2.md` review-task ordering and marks older non-`-2` specs as historical snapshots.
 
 ## Ordered tasks
 
-- [ ] Add a real Pi runtime verification for command routing, session state, and command cancellation
+- [x] Add a real Pi runtime verification for command routing, session state, and command cancellation
 
 #### Why
 
@@ -57,7 +60,7 @@ Imported tests prove that handlers and command functions work in harnesses, but 
 - At least one long-running command path has a tested cancellation or bounded-time behavior.
 - Network/backend portions skip with clear reasons when credentials or services are unavailable.
 
-- [ ] Make final validation include TypeScript tests and current review-spec variants
+- [x] Make final validation include TypeScript tests and current review-spec variants
 
 #### Why
 
@@ -77,7 +80,7 @@ The current `npm run typecheck` validates source only, and existing review specs
 - Validation output records the current test count and commands rather than stale prior-review numbers.
 - The task remains documentation/validation focused and does not mark the extension ready to ship.
 
-- [ ] Verify active-session and post-shutdown observability behavior in one deterministic flow
+- [x] Verify active-session and post-shutdown observability behavior in one deterministic flow
 
 #### Why
 
@@ -99,11 +102,11 @@ The extension has many tests for telemetry emission and shutdown, but final user
 
 ## Unknowns resolved
 
-- The current repository already has improved passing validation compared with earlier specs: 245 tests pass and package dry-run contains 55 files.
+- The current repository already has improved passing validation compared with earlier specs: 264 tests pass and package dry-run contains 58 files.
 - The extension entrypoint and root command registration are simple and directly verified by file inspection plus existing tests.
 
 ## Blocked checks or areas not reviewed
 
-- A real Pi TUI/RPC process was not launched during this pass.
-- Docker/Grafana integration scripts were not run during this pass because the safe core review already had passing unit and static validation.
+- A real Pi RPC process is now covered by `npm run smoke:pi-runtime`; a fully interactive Pi TUI process was not launched during this pass.
+- Docker/Grafana integration scripts were not run during this pass because no running local Grafana stack was confirmed; exact prerequisites are `docker compose -f observability-stack/docker-compose.yml up -d`, Grafana query credentials, datasource UIDs, and then `npm run test:integration:grafana-stack` or `npm run validate:grafana-obs`.
 - The working-tree `.env` file contents were intentionally not read.

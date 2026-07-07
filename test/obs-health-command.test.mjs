@@ -154,6 +154,35 @@ test("/obs health reports an unreachable Collector without throwing", async () =
   assert.match(notifications[0].message, /Grafana: reachable/u);
 });
 
+test("/obs health diagnostics do not render configured header secrets", async () => {
+  const config = cloneDefaultConfig();
+  config.otlp.endpoint = "http://collector.local:4318";
+  config.otlp.headers = { Authorization: "Bearer otlp-header-secret" };
+  config.query.grafana.url = "http://grafana.local:3000";
+  config.query.grafana.token = "grafana-token-secret";
+  const notifications = [];
+
+  const fetcher = async input => {
+    if (String(input) === "http://collector.local:4318") {
+      throw new Error("Authorization: Bearer otlp-header-secret /tmp/private.env OBSERVME_OTLP_TOKEN=otlp-header-secret");
+    }
+
+    throw new Error("Authorization: Bearer grafana-token-secret password=grafana-password-secret");
+  };
+
+  await handleObsHealthCommand("health", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: fetcher,
+    timeoutMs: 25,
+  });
+
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].type, "warning");
+  assert.match(notifications[0].message, /Collector: unreachable/u);
+  assert.match(notifications[0].message, /Grafana: unreachable/u);
+  assert.doesNotMatch(notifications[0].message, /otlp-header-secret|grafana-token-secret|grafana-password-secret|private\.env/u);
+});
+
 test("root obs command dispatches status and health subcommands", async () => {
   const pi = createFakeCommandPi();
   const config = cloneDefaultConfig();

@@ -3,6 +3,7 @@ import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { buildLineageAttributes, createAgentLineageContext } from "../src/pi/agent-lineage.ts";
 import { AgentTreeTracker, assertNoHighCardinalityMetricLabels } from "../src/pi/agent-tree-tracker.ts";
+import type { AgentWaitJoinState, SubagentSpawnState } from "../src/pi/subagent-spawn.ts";
 import {
   completeSubagentSpawn,
   endAgentJoin,
@@ -71,7 +72,7 @@ function makeRootLineage(overrides = {}) {
     agentId: "agent-root",
     rootAgentId: "agent-root",
     depth: 0,
-    role: "root",
+    role: "root" as const,
     orphaned: false,
     ...overrides,
   };
@@ -111,7 +112,7 @@ function createFakeTracer(spanContext = validSpanContext) {
 
   return {
     spans,
-    startSpan: (name, options = {}) => {
+    startSpan: (name, options: { attributes?: Record<string, unknown> } = {}) => {
       const span = createFakeSpan(name, options.attributes ?? {}, spanContext);
       spans.push(span);
       return span;
@@ -128,18 +129,37 @@ function createFakeSpan(name, attributes, spanContext = validSpanContext) {
     ended: false,
     addEvent(eventName, eventAttributes = {}) {
       this.events.push({ name: eventName, attributes: eventAttributes });
+      return this;
     },
     setAttribute(key, value) {
       this.attributes[key] = value;
+      return this;
     },
     setAttributes(values) {
       Object.assign(this.attributes, values);
+      return this;
     },
     setStatus(status) {
       this.status = status;
+      return this;
     },
     spanContext() {
       return spanContext;
+    },
+    addLink() {
+      return this;
+    },
+    addLinks() {
+      return this;
+    },
+    updateName() {
+      return this;
+    },
+    isRecording() {
+      return true;
+    },
+    recordException() {
+      return undefined;
     },
     end() {
       this.ended = true;
@@ -158,15 +178,21 @@ function createFakeLogger() {
 
 function createSpanRegistry() {
   return {
-    activeAgentRuns: new BoundedMap({ maxSize: 8 }),
-    activeTurns: new BoundedMap({ maxSize: 8 }),
-    activeSubagentSpawns: new BoundedMap({ maxSize: 8 }),
-    activeAgentWaits: new BoundedMap({ maxSize: 8 }),
-    activeAgentJoins: new BoundedMap({ maxSize: 8 }),
+    activeAgentRuns: new BoundedMap<string, ReturnType<typeof createFakeSpan>>({ maxSize: 8 }),
+    activeTurns: new BoundedMap<string, ReturnType<typeof createFakeSpan>>({ maxSize: 8 }),
+    activeSubagentSpawns: new BoundedMap<string, SubagentSpawnState>({ maxSize: 8 }),
+    activeAgentWaits: new BoundedMap<string, AgentWaitJoinState>({ maxSize: 8 }),
+    activeAgentJoins: new BoundedMap<string, AgentWaitJoinState>({ maxSize: 8 }),
   };
 }
 
-function createSubagentSession(options = {}) {
+interface SubagentSessionOptions {
+  readonly config?: ReturnType<typeof cloneConfig>;
+  readonly lineage?: ReturnType<typeof makeRootLineage>;
+  readonly spanContext?: typeof validSpanContext;
+}
+
+function createSubagentSession(options: SubagentSessionOptions = {}) {
   const config = options.config ?? cloneConfig();
   const lineage = options.lineage ?? makeRootLineage();
   const metricRecords = [];

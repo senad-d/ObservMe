@@ -2,12 +2,24 @@
 
 ## 0.1.0 - 2026-07-07
 
+- Added a dedicated ObservMe LLM Conversations dashboard with a redacted opt-in chat timeline, separate prompt/response/thinking log panels, and Agent ID / Agent run ID filters.
+- Added opt-in Grafana visibility for redacted LLM prompt, response, and thinking content in Tempo spans and Loki log bodies when the existing capture/redaction/unsafe-capture flags are enabled.
+- Isolated Grafana-stack integration test Docker networks so live local stacks do not steal Tempo/Loki/Collector service discovery from test stacks.
+- Standardized `/obs` command tokenization, completions, usage rendering, and invalid-option handling with shared argument helpers plus regression coverage for unknown subcommands, missing values, repeated options, and extra arguments.
+- Added structure-level tests for extracted Pi handler internals, covering LLM parsing, tool and bash normalization, branch/compaction attributes, redaction capture, and low-cardinality metric labels.
+- Split Pi handler parsing, attribute building, span bookkeeping, and redaction helpers out of `src/pi/handlers.ts` into a focused internal handler module while preserving lifecycle behavior and telemetry contracts.
+- Added explicit secret-hygiene coverage for trusted project `.env` handling, including stricter package-content checks and sanitized `/obs status` and `/obs health` diagnostics.
+- Added abort-aware, timeout-bounded `/obs backfill` export execution with cancellation-safe partial summaries, exporter shutdown attempts, and secret-safe exporter error reporting.
+- Added explicit TypeScript validation for `test/**/*.ts` with `tsconfig.test.json`, the `typecheck:test` script, and lint-pipeline coverage; tightened shared test fakes so test fixtures type-check against source APIs.
+- Documented final review validation with explicit source/test TypeScript checks, current test-count recording, production audit, package check, and active `*-2.md` review-spec ordering.
 - Fixed ObservMe latency/size histogram emission for turn, LLM request, tool, bash, agent-run, prompt-size, and response-size metrics; improved Grafana dashboard reliability by switching short fixed PromQL rate windows to `$__rate_interval`; added an ObservMe Logs and LLM I/O dashboard for session logs, LLM request logs, content-capture audit events, token totals, and prompt/response size panels; and wired local-stack Prometheus alert-rule loading plus Loki ruler API support.
 - Added a root `.env.example` and trusted-project `.env` loading for extension `OBSERVME_*` settings, with system environment variables taking precedence and Grafana datasource UID env overrides documented/tested.
 - Added a deterministic, secret-safe Grafana + `/obs` validation flow with a documented checklist and `npm run validate:grafana-obs` script that classifies ingestion, label, Grafana auth/query, TLS/DNS, Pi command, and session-state failures.
 - Added secret-safe `/obs status` config diagnostics for trusted, untrusted, and missing project config contexts, including effective config source, Grafana URL, and query-readiness reporting.
 - Documented and tested active-session trace visibility: `/obs trace` now explains that ended child spans can appear before the long-lived root `pi.session` span, which is exported after `session_shutdown`.
+- Added a deterministic active-session to post-shutdown lifecycle flow covering `/obs session`, `/obs trace`, exporter status, LLM/tool/bash/subagent telemetry, root-span flush behavior, and secret-safe output.
 - Added a real Pi RPC runtime smoke test that loads the local extension, discovers `/obs`, runs `/obs status`, `/obs session`, and `/obs health`, and verifies trusted project config plus authenticated Grafana health probes against a local deterministic backend.
+- Extended the Pi RPC runtime smoke test with a bounded `/obs cost` timeout path against a delayed local Grafana backend, proving query-backed commands return clear timeout diagnostics without external credentials.
 - Added live Grafana-stack `/obs` command integration coverage for authenticated datasource queries and status, health, cost, tools, errors, logs, agents, trace, and link smoke paths.
 - Added concise, secret-safe `/obs` query-command diagnostics with subsystem-specific recovery hints for Grafana auth, Prometheus, Loki, Tempo, session, timeout, empty-result, and health failures.
 - Documented and tested the supported local-stack `/obs` query profile for nginx HTTPS Grafana at `https://observability.local`, including token/Basic auth setup, datasource UIDs, TLS/IPv4 settings, and Loki label expectations.

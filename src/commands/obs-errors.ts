@@ -5,6 +5,7 @@ import type { ObservMeConfig } from "../config/schema.ts";
 import type { LokiFetch } from "../query/loki.ts";
 import { createLokiQueryClient } from "../query/loki.ts";
 import type { ObsLokiLogSummaryRow, ObsLokiTimeRangeOptions } from "./obs-loki-summary.ts";
+import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
 import {
   createRecentObsLokiTimeRange,
@@ -88,9 +89,7 @@ export async function handleObsErrorsCommand(
 }
 
 export function getObsErrorsCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
-  const normalizedPrefix = prefix.trim().toLowerCase();
-  if (!OBS_ERRORS_SUBCOMMAND.startsWith(normalizedPrefix)) return null;
-  return [{ value: OBS_ERRORS_SUBCOMMAND, label: OBS_ERRORS_SUBCOMMAND }];
+  return completeObsSubcommand(prefix, OBS_ERRORS_SUBCOMMAND);
 }
 
 export async function getObsErrorsSnapshot(
@@ -153,13 +152,7 @@ async function queryObsErrors(config: ObservMeConfig, options: ObsErrorsSnapshot
 }
 
 function isObsErrorsRequest(args: string): boolean {
-  const tokens = args.trim().toLowerCase().split(/\s+/u).filter(isNonEmptyString);
-  const [subcommand, ...rest] = tokens;
-  return subcommand === OBS_ERRORS_SUBCOMMAND && rest.length === 0;
-}
-
-function isNonEmptyString(value: string): boolean {
-  return value.length > 0;
+  return isExactObsSubcommandRequest(args, OBS_ERRORS_SUBCOMMAND);
 }
 
 async function notifyErrors(

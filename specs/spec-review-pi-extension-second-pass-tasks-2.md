@@ -26,7 +26,7 @@ Review scope and date: 2026-07-07. Maintainability, clean-code, logic, type-safe
 
 ## Ordered tasks
 
-- [ ] Split `src/pi/handlers.ts` into focused lifecycle, parser, and attribute modules without changing behavior
+- [x] Split `src/pi/handlers.ts` into focused lifecycle, parser, and attribute modules without changing behavior
 
 #### Why
 
@@ -47,7 +47,7 @@ Review scope and date: 2026-07-07. Maintainability, clean-code, logic, type-safe
 - Tests covering Pi handlers, event mapping, chaos/export failures, and package contents pass.
 - The refactor remains focused and does not include unrelated feature changes.
 
-- [ ] Add structure-level tests for extracted handler parsing and attribute builders
+- [x] Add structure-level tests for extracted handler parsing and attribute builders
 
 #### Why
 
@@ -67,7 +67,7 @@ The current suite verifies many end-to-end handler outcomes, but a future refact
 - Redaction and low-cardinality guarantees remain asserted where content or labels are involved.
 - The task does not weaken existing end-to-end handler tests.
 
-- [ ] Standardize public command argument parsing and usage rendering
+- [x] Standardize public command argument parsing and usage rendering
 
 #### Why
 

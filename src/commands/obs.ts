@@ -21,6 +21,7 @@ import type { ObsToolsCommandContext, RegisterObsToolsCommandOptions } from "./o
 import { handleObsToolsCommand } from "./obs-tools.ts";
 import type { ObsTraceCommandContext, RegisterObsTraceCommandOptions } from "./obs-trace.ts";
 import { handleObsTraceCommand } from "./obs-trace.ts";
+import { completeObsSubcommands, firstObsCommandToken, obsUsageWithError } from "./obs-args.ts";
 
 export interface ObsCommandContext
   extends ObsStatusCommandContext,
@@ -60,6 +61,7 @@ const OBS_BACKFILL_SUBCOMMAND = "backfill";
 const OBS_ERRORS_SUBCOMMAND = "errors";
 const OBS_LOGS_SUBCOMMAND = "logs";
 const OBS_LINK_SUBCOMMAND = "link";
+const OBS_ROOT_USAGE = "Usage: /obs <status|health|session|cost|trace|tools|agents|backfill|errors|logs|link>";
 const obsSubcommands = [
   OBS_STATUS_SUBCOMMAND,
   OBS_HEALTH_SUBCOMMAND,
@@ -78,7 +80,7 @@ export function registerObsCommand(pi: ExtensionAPI, options: RegisterObsCommand
   const command = new ObsCommand(options);
 
   pi.registerCommand(OBS_COMMAND_NAME, {
-    description: "Run ObservMe commands. Usage: /obs <status|health|session|cost|trace|tools|agents|backfill|errors|logs|link>",
+    description: `Run ObservMe commands. ${OBS_ROOT_USAGE}`,
     getArgumentCompletions: getObsRootCommandArgumentCompletions,
     handler: command.handle.bind(command),
   });
@@ -89,7 +91,7 @@ export async function handleObsCommand(
   ctx: ObsCommandContext,
   options: RegisterObsCommandOptions = {},
 ): Promise<void> {
-  const subcommand = firstObsSubcommand(args);
+  const subcommand = firstObsCommandToken(args);
 
   if (!subcommand || subcommand === OBS_STATUS_SUBCOMMAND) {
     await handleObsStatusCommand(OBS_STATUS_SUBCOMMAND, ctx, options.status);
@@ -146,16 +148,11 @@ export async function handleObsCommand(
     return;
   }
 
-  await ctx.ui.notify("Usage: /obs <status|health|session|cost|trace|tools|agents|backfill|errors|logs|link>", "warning");
+  await ctx.ui.notify(obsUsageWithError(OBS_ROOT_USAGE, subcommand ? `Unknown subcommand: ${subcommand}.` : undefined), "warning");
 }
 
 export function getObsRootCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
-  const normalizedPrefix = prefix.trim().toLowerCase();
-  const completions = obsSubcommands
-    .filter(subcommand => subcommand.startsWith(normalizedPrefix))
-    .map(subcommand => ({ value: subcommand, label: subcommand }));
-
-  return completions.length > 0 ? completions : null;
+  return completeObsSubcommands(prefix, obsSubcommands);
 }
 
 class ObsCommand {
@@ -168,9 +165,4 @@ class ObsCommand {
   async handle(args: string, ctx: ObsCommandContext): Promise<void> {
     await handleObsCommand(args, ctx, this.#options);
   }
-}
-
-function firstObsSubcommand(args: string): string | undefined {
-  const [subcommand] = args.trim().toLowerCase().split(/\s+/u);
-  return subcommand;
 }

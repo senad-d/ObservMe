@@ -187,19 +187,25 @@ test("factory-safe loader excludes project config and still applies global/env/r
   assert.equal(config.workflow.idEnv, "GLOBAL_WORKFLOW_ID");
 });
 
-test("session loader does not read project-local config when project is untrusted", async () => {
+test("session loader does not read project-local config or .env when project is untrusted", async () => {
   const calls = [];
   const config = await loadSessionConfig({
     globalConfigPath: "global.yaml",
     projectConfigPath: "project.yaml",
+    envFilePath: "project.env",
     isProjectTrusted: false,
-    readText: createReader({ "global.yaml": globalConfigYaml, "project.yaml": projectConfigYaml }, calls),
+    readText: createReader({
+      "global.yaml": globalConfigYaml,
+      "project.yaml": projectConfigYaml,
+      "project.env": "OBSERVME_GRAFANA_PASSWORD=untrusted-password",
+    }, calls),
     env: {},
   });
 
   assert.deepEqual(calls, ["global.yaml"]);
   assert.equal(config.tenant, "global-tenant");
   assert.equal(config.otlp.endpoint, "https://global.example.test:4318");
+  assert.notEqual(config.query.grafana.password, "untrusted-password");
 });
 
 test("session loader accepts ctx.isProjectTrusted as the Pi trust boundary", async () => {

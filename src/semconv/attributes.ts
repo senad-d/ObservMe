@@ -140,6 +140,7 @@ export const LLM_ATTRIBUTES = {
   PI_LLM_PROMPT_REDACTED: "pi.llm.prompt.redacted",
   PI_LLM_RESPONSE_REDACTED: "pi.llm.response.redacted",
   PI_LLM_THINKING_REDACTED: "pi.llm.thinking.redacted",
+  PI_LLM_CONTENT_KIND: "pi.llm.content.kind",
 } as const;
 
 export const TOOL_ATTRIBUTES = {

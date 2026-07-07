@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { trace } from "@opentelemetry/api";
+import { handleObsSessionCommand, clearObsSessionRuntimeState } from "../src/commands/obs-session.ts";
+import { handleObsStatusCommand, resetObsStatusRuntimeState } from "../src/commands/obs-status.ts";
+import { handleObsTraceCommand } from "../src/commands/obs-trace.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import {
   LOG_EVENT_NAMES,
@@ -20,6 +23,7 @@ import {
   registerHandlers,
   safeHandler,
 } from "../src/pi/handlers.ts";
+import { completeSubagentSpawn, startSubagentSpawn } from "../src/pi/subagent-spawn.ts";
 
 function createFakePi() {
   const handlers = new Map();
@@ -67,6 +71,7 @@ function createFakeSpan(name, attributes, parentSpan) {
     events: [],
     status: undefined,
     ended: false,
+    context: { traceId: "11111111111111111111111111111111", spanId: "2222222222222222" },
     addEvent(eventName, eventAttributes = {}) {
       this.events.push({ name: eventName, attributes: eventAttributes });
     },
@@ -78,6 +83,9 @@ function createFakeSpan(name, attributes, parentSpan) {
     },
     setStatus(status) {
       this.status = status;
+    },
+    spanContext() {
+      return this.context;
     },
     end() {
       this.ended = true;
@@ -133,6 +141,16 @@ function createFakeTelemetry(lineage) {
 
 function loadConfig() {
   return Promise.resolve(defaultObservMeConfig);
+}
+
+function createNotificationContext(notifications) {
+  return {
+    cwd: "/workspace/demo",
+    ui: {
+      notify: (message, type) => notifications.push({ message, type }),
+    },
+    isProjectTrusted: () => false,
+  };
 }
 
 test("safeHandler catches throwing handlers and records observme_handler_errors_total without propagating", async () => {
@@ -345,6 +363,111 @@ test("active traces can contain ended child spans before the pi.session root is 
   assert.deepEqual(telemetry.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
 });
 
+test("deterministic active-session command flow aligns with post-shutdown export state", async t => {
+  clearObsSessionRuntimeState();
+  resetObsStatusRuntimeState();
+  t.after(() => {
+    clearObsSessionRuntimeState();
+    resetObsStatusRuntimeState();
+  });
+
+  const pi = createFakePi();
+  let telemetry;
+  const config = structuredClone(defaultObservMeConfig);
+  config.query.links.traceUrlTemplate = "https://grafana.local/explore?trace={traceId}";
+  registerHandlers(pi, {
+    loadConfig: () => Promise.resolve(config),
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      telemetry.config = config;
+      telemetry.spans = createSpanRegistry(config, telemetry.metrics);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-flow" }, { cwd: "/workspace/demo" });
+  telemetry.controller.flush = async timeoutMs => {
+    telemetry.controller.flushCalls.push(timeoutMs);
+    return { operation: "flush", completed: false, timedOut: true };
+  };
+
+  await pi.handlers.get("agent_start")({ source: "user" }, {});
+  await pi.handlers.get("turn_start")({ turnIndex: 1 }, {});
+  await pi.handlers.get("before_provider_request")(
+    { payload: { messages: [{ role: "user", content: "api_key=prompt-secret" }] } },
+    { model: { provider: "anthropic", model: "claude-test" } },
+  );
+  await pi.handlers.get("message_end")(
+    {
+      message: {
+        role: "assistant",
+        provider: "anthropic",
+        model: "claude-test",
+        stopReason: "stop",
+        usage: { input: 11, output: 22, totalTokens: 33, cost: { total: 0.037 } },
+        content: [{ type: "text", text: "api_key=response-secret" }],
+      },
+    },
+    {},
+  );
+  await pi.handlers.get("tool_execution_start")({ toolCallId: "tool-flow", toolName: "read", arguments: "password=tool-secret" }, {});
+  await pi.handlers.get("tool_execution_end")({ toolCallId: "tool-flow", toolName: "read", success: true, result: "api_key=tool-result-secret" }, {});
+  await pi.handlers.get("user_bash")({ command: "echo bash-secret", output: "bash-output-secret", exitCode: 0 }, {});
+  const subagent = startSubagentSpawn(telemetry, { spawnId: "spawn-flow", childAgentId: "agent-child-flow", command: "pi", args: ["--print"] });
+  completeSubagentSpawn(telemetry, subagent.spawnId, { childAgentId: subagent.childAgentId, childStatus: "completed" });
+
+  const activeSessionNotifications = [];
+  await handleObsSessionCommand("session", createNotificationContext(activeSessionNotifications));
+  assert.match(activeSessionNotifications[0].message, /Session: session-flow/u);
+  assert.match(activeSessionNotifications[0].message, /Turns: 1/u);
+  assert.match(activeSessionNotifications[0].message, /LLM calls: 1/u);
+  assert.match(activeSessionNotifications[0].message, /Tool calls: 1/u);
+  assert.match(activeSessionNotifications[0].message, /Cost: \$0\.04/u);
+
+  const activeTraceNotifications = [];
+  await handleObsTraceCommand("trace", createNotificationContext(activeTraceNotifications), { loadConfig: () => Promise.resolve(config) });
+  assert.match(activeTraceNotifications[0].message, /Trace link \(current session\)/u);
+  assert.match(activeTraceNotifications[0].message, /root pi\.session span; the root is exported after session_shutdown/u);
+
+  const sessionSpan = telemetry.tracer.spans.find(span => span.name === SPAN_NAMES.PI_SESSION);
+  const llmSpan = telemetry.tracer.spans.find(span => span.name === SPAN_NAMES.PI_LLM_REQUEST);
+  const toolSpan = telemetry.tracer.spans.find(span => span.name === SPAN_NAMES.PI_TOOL_CALL);
+  const bashSpan = telemetry.tracer.spans.find(span => span.name === SPAN_NAMES.PI_BASH_EXECUTION);
+  const subagentSpan = telemetry.tracer.spans.find(span => span.name === SPAN_NAMES.PI_AGENT_SPAWN);
+  assert.equal(sessionSpan.ended, false);
+  assert.equal(llmSpan.ended, true);
+  assert.equal(toolSpan.ended, true);
+  assert.equal(bashSpan.ended, true);
+  assert.equal(subagentSpan.ended, true);
+  assert.equal(llmSpan.attributes["pi.llm.prompt.redacted"], undefined);
+  assert.equal(toolSpan.attributes["pi.tool.arguments.redacted"], undefined);
+  assert.equal(bashSpan.attributes["pi.bash.command.redacted"], undefined);
+
+  await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
+
+  assert.equal(sessionSpan.ended, true);
+  assert.deepEqual(telemetry.controller.flushCalls, [config.shutdown.flushTimeoutMs]);
+  assert.deepEqual(telemetry.controller.shutdownCalls, [config.shutdown.flushTimeoutMs]);
+
+  const postShutdownSessionNotifications = [];
+  await handleObsSessionCommand("session", createNotificationContext(postShutdownSessionNotifications));
+  assert.match(postShutdownSessionNotifications[0].message, /Session: unknown/u);
+  assert.match(postShutdownSessionNotifications[0].message, /Trace: unavailable/u);
+
+  const postShutdownStatusNotifications = [];
+  await handleObsStatusCommand("status", createNotificationContext(postShutdownStatusNotifications));
+  assert.match(postShutdownStatusNotifications[0].message, /Last export error: flush timed out/u);
+  assert.doesNotMatch(
+    JSON.stringify({ spans: telemetry.tracer.spans, logs: telemetry.logger.records, notifications: [
+      ...activeSessionNotifications,
+      ...activeTraceNotifications,
+      ...postShutdownSessionNotifications,
+      ...postShutdownStatusNotifications,
+    ] }),
+    /prompt-secret|response-secret|tool-secret|tool-result-secret|bash-secret|bash-output-secret/u,
+  );
+});
+
 test("agent-run and turn handlers create canonical child spans with derived turn ids", async () => {
   const pi = createFakePi();
   let telemetry;
@@ -442,6 +565,7 @@ test("LLM handlers finalize usage and cost metrics from assistant message_end", 
   assert.equal(llmSpan.attributes["pi.llm.prompt.redacted"], undefined);
   assert.equal(llmSpan.attributes["pi.llm.response.redacted"], undefined);
   assert.equal(llmSpan.attributes["pi.llm.thinking.redacted"], undefined);
+  assert.equal(telemetry.logger.records.some(record => record.attributes?.["event.category"] === "llm_content"), false);
   assertMetricValue(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.LLM_REQUESTS_TOTAL, 1);
   assertMetricValue(telemetry.meter.records, OBSERVME_TOKEN_COST_COUNTER_METRIC_NAMES.LLM_INPUT_TOKENS_TOTAL, 11);
   assertMetricValue(telemetry.meter.records, OBSERVME_TOKEN_COST_COUNTER_METRIC_NAMES.LLM_OUTPUT_TOKENS_TOTAL, 22);
@@ -502,6 +626,19 @@ test("LLM content is absent by default and redacted when capture is explicitly e
   assert.doesNotMatch(llmSpan.attributes["pi.llm.prompt.redacted"], /secret123/u);
   assert.doesNotMatch(llmSpan.attributes["pi.llm.response.redacted"], /response-secret/u);
   assert.doesNotMatch(llmSpan.attributes["pi.llm.thinking.redacted"], /super-secret/u);
+
+  const promptLog = telemetry.logger.records.find(record => record.attributes?.["event.name"] === LOG_EVENT_NAMES.LLM_PROMPT_CAPTURED);
+  const responseLog = telemetry.logger.records.find(record => record.attributes?.["event.name"] === LOG_EVENT_NAMES.LLM_RESPONSE_CAPTURED);
+  const thinkingLog = telemetry.logger.records.find(record => record.attributes?.["event.name"] === LOG_EVENT_NAMES.LLM_THINKING_CAPTURED);
+  assert.equal(promptLog.body, llmSpan.attributes["pi.llm.prompt.redacted"]);
+  assert.equal(responseLog.body, llmSpan.attributes["pi.llm.response.redacted"]);
+  assert.equal(thinkingLog.body, llmSpan.attributes["pi.llm.thinking.redacted"]);
+  assert.equal(promptLog.attributes["event.category"], "llm_content");
+  assert.equal(promptLog.attributes["pi.llm.content.kind"], "prompt");
+  assert.equal(responseLog.attributes["pi.llm.content.kind"], "response");
+  assert.equal(thinkingLog.attributes["pi.llm.content.kind"], "thinking");
+  assert.equal(promptLog.attributes.trace_id, "11111111111111111111111111111111");
+  assert.equal(promptLog.attributes.span_id, "2222222222222222");
 });
 
 test("tool handlers create pi.tool.call spans, close success/error status, and keep metric labels low-cardinality", async () => {

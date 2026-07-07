@@ -34,6 +34,7 @@ const dashboardFiles = [
   "dashboards/observme-branches-compactions.json",
   "dashboards/observme-export-health.json",
   "dashboards/observme-logs-llm.json",
+  "dashboards/observme-llm-conversations.json",
 ];
 const grafanaServicePort = 3000;
 const serviceName = "observme-pi-extension";
@@ -209,6 +210,17 @@ function hasTempoTracePayload(payload, ids) {
   return text.includes(ids.sessionId) && text.includes("pi.session") && text.includes(ids.agentId);
 }
 
+function hasTempoLlmContentPayload(payload) {
+  const text = JSON.stringify(payload);
+  return text.includes("pi.llm.prompt.redacted")
+    && text.includes("pi.llm.response.redacted")
+    && text.includes("pi.llm.thinking.redacted")
+    && text.includes("grafana-stack-prompt-marker")
+    && text.includes("grafana-stack-response-marker")
+    && text.includes("grafana-stack-thinking-marker")
+    && !text.includes("grafana-stack-secret");
+}
+
 function hasTempoLineageSearchResult(payload, traceId) {
   const text = JSON.stringify(payload).toLowerCase();
   return text.includes(traceId.toLowerCase());
@@ -222,6 +234,11 @@ function hasLokiSessionLog(payload, ids) {
 function hasLokiErrorLog(payload) {
   const text = JSON.stringify(payload);
   return text.includes("tool.call.failed") && text.includes("IntegrationError");
+}
+
+function hasLokiContentLog(payload, marker) {
+  const text = JSON.stringify(payload);
+  return text.includes(marker) && text.includes("[REDACTED:") && !text.includes("grafana-stack-secret");
 }
 
 function hasPrometheusTokenTotal(payload) {
@@ -333,6 +350,8 @@ async function prepareGrafanaStackState(state) {
   state.env = {
     OTEL_HTTP_PORT: String(otelHttpPort),
     OTEL_GRPC_PORT: String(otelGrpcPort),
+    OBSERVME_IT_FRONTEND_NETWORK: `${state.projectName}-frontend`,
+    OBSERVME_IT_BACKEND_NETWORK: `${state.projectName}-backend`,
   };
 
   await ensureGrafanaSecret(state);
@@ -490,7 +509,7 @@ async function emitRepresentativeObservMeTelemetry(project, ids) {
       requestId: ids.llmRequestId,
       payload: {
         operation: "chat",
-        messages: [{ role: "user", content: "grafana-stack prompt" }],
+        messages: [{ role: "user", content: "grafana-stack-prompt-marker api_key=grafana-stack-secret" }],
         tools: [{ name: "read" }],
         temperature: 0,
         maxTokens: 32,
@@ -520,7 +539,10 @@ async function emitRepresentativeObservMeTelemetry(project, ids) {
             total: 0.003,
           },
         },
-        content: [{ type: "text", text: "grafana-stack response" }],
+        content: [
+          { type: "thinking", thinking: "grafana-stack-thinking-marker api_key=grafana-stack-secret" },
+          { type: "text", text: "grafana-stack-response-marker api_key=grafana-stack-secret" },
+        ],
       },
     },
     context,
@@ -588,6 +610,15 @@ async function waitForTempoTraceById(stack, traceId, ids) {
   );
 }
 
+async function waitForTempoLlmContent(stack, traceId) {
+  return waitForResult(
+    "Tempo LLM content attributes",
+    () => fetchGrafanaJson(stack, tempoTraceUrl(stack, traceId)),
+    hasTempoLlmContentPayload,
+    { timeoutMs: 90000 },
+  );
+}
+
 async function waitForTempoLineageSearch(stack, traceId, ids, range) {
   const tags = `pi.agent.id="${ids.agentId}" pi.agent.parent_id="${ids.parentAgentId}"`;
 
@@ -617,6 +648,17 @@ async function waitForLokiErrorLogs(stack, range) {
     "Loki error label query",
     () => fetchGrafanaJson(stack, lokiQueryRangeUrl(stack, query, range)),
     hasLokiErrorLog,
+    { timeoutMs: 90000 },
+  );
+}
+
+async function waitForLokiContentLog(stack, range, eventName, marker) {
+  const query = `{service_name="${serviceName}", event_name="${eventName}"}`;
+
+  return waitForResult(
+    `Loki ${eventName} content log query`,
+    () => fetchGrafanaJson(stack, lokiQueryRangeUrl(stack, query, range)),
+    payload => hasLokiContentLog(payload, marker),
     { timeoutMs: 90000 },
   );
 }
@@ -734,7 +776,13 @@ observme:
   logs:
     batch:
       scheduledDelayMillis: 100
+  capture:
+    prompts: true
+    responses: true
+    thinking: true
   privacy:
+    redactionEnabled: true
+    allowUnsafeCapture: true
     allowInsecureTransport: true
   query:
     enabled: true
@@ -920,9 +968,13 @@ test("ObservMe telemetry is queryable through the Grafana stack and /obs command
   const range = { from: rangeStart, to: new Date(Date.now() + 120_000) };
 
   await waitForTempoTraceById(stack, traceId, ids);
+  await waitForTempoLlmContent(stack, traceId);
   await waitForTempoLineageSearch(stack, traceId, ids, range);
   await waitForLokiSessionLogs(stack, ids, range);
   await waitForLokiErrorLogs(stack, range);
+  await waitForLokiContentLog(stack, range, "llm.prompt.captured", "grafana-stack-prompt-marker");
+  await waitForLokiContentLog(stack, range, "llm.response.captured", "grafana-stack-response-marker");
+  await waitForLokiContentLog(stack, range, "llm.thinking.captured", "grafana-stack-thinking-marker");
   await waitForPrometheusTokenTotals(stack);
   await waitForPrometheusCommandQueries(stack);
   await waitForDashboardImports(stack);

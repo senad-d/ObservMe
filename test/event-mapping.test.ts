@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { trace } from "@opentelemetry/api";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import type { ObservMeTelemetrySession } from "../src/pi/handlers.ts";
 import {
   createAgentTreeTracker,
   createObservMeMetrics,
@@ -141,7 +142,7 @@ function createFakeTracer(spanContext = validSpanContext) {
   const spans = [];
   return {
     spans,
-    startSpan: (name, options = {}, parentContext) => {
+    startSpan: (name, options: { attributes?: Record<string, unknown> } = {}, parentContext = undefined) => {
       const parentSpan = parentContext ? trace.getSpan(parentContext) : undefined;
       const span = createFakeSpan(name, options.attributes ?? {}, parentSpan, spanContext);
       spans.push(span);
@@ -160,18 +161,37 @@ function createFakeSpan(name, attributes, parentSpan, spanContext) {
     ended: false,
     addEvent(eventName, eventAttributes = {}) {
       this.events.push({ name: eventName, attributes: eventAttributes });
+      return this;
     },
     setAttribute(key, value) {
       this.attributes[key] = value;
+      return this;
     },
     setAttributes(values) {
       Object.assign(this.attributes, values);
+      return this;
     },
     setStatus(status) {
       this.status = status;
+      return this;
     },
     spanContext() {
       return spanContext;
+    },
+    addLink() {
+      return this;
+    },
+    addLinks() {
+      return this;
+    },
+    updateName() {
+      return this;
+    },
+    isRecording() {
+      return true;
+    },
+    recordException() {
+      return undefined;
     },
     end() {
       this.ended = true;
@@ -190,10 +210,10 @@ function createFakeLogger() {
 function createFakeController() {
   return {
     async flush() {
-      return { operation: "flush", completed: true, timedOut: false };
+      return { operation: "flush" as const, completed: true, timedOut: false };
     },
     async shutdown() {
-      return { operation: "shutdown", completed: true, timedOut: false };
+      return { operation: "shutdown" as const, completed: true, timedOut: false };
     },
   };
 }
@@ -205,18 +225,31 @@ function makeLineage(overrides = {}) {
     agentId: "agent-parent",
     rootAgentId: "agent-root",
     depth: 0,
-    role: "root",
+    role: "root" as const,
     orphaned: false,
     ...overrides,
   };
 }
 
-function createFakeTelemetry(config, lineage, options = {}) {
+interface FakeTelemetryOptions {
+  readonly spanContext?: typeof validSpanContext;
+  readonly startSessionSpan?: boolean;
+}
+
+type FakeTelemetrySession = ObservMeTelemetrySession & {
+  readonly meter: ReturnType<typeof createFakeMeter>;
+  readonly tracer: ReturnType<typeof createFakeTracer>;
+  readonly logger: ReturnType<typeof createFakeLogger>;
+  sessionAttributes?: Record<string, string>;
+  sessionSpan?: ReturnType<typeof createFakeSpan>;
+};
+
+function createFakeTelemetry(config, lineage, options: FakeTelemetryOptions = {}): FakeTelemetrySession {
   const meter = createFakeMeter();
   const tracer = createFakeTracer(options.spanContext ?? validSpanContext);
   const logger = createFakeLogger();
   const metrics = createObservMeMetrics(meter);
-  const telemetry = {
+  const telemetry: FakeTelemetrySession = {
     config,
     lineage,
     controller: createFakeController(),
@@ -386,10 +419,22 @@ function assertRedactedContentPresent(telemetry) {
   assert.match(llmSpan.attributes["pi.llm.prompt.redacted"], /\[REDACTED:/u);
   assert.match(llmSpan.attributes["pi.llm.response.redacted"], /\[REDACTED:/u);
   assert.match(llmSpan.attributes["pi.llm.thinking.redacted"], /\[REDACTED:/u);
+  assertCapturedContentLog(telemetry, LOG_EVENT_NAMES.LLM_PROMPT_CAPTURED, "prompt", llmSpan.attributes["pi.llm.prompt.redacted"]);
+  assertCapturedContentLog(telemetry, LOG_EVENT_NAMES.LLM_RESPONSE_CAPTURED, "response", llmSpan.attributes["pi.llm.response.redacted"]);
+  assertCapturedContentLog(telemetry, LOG_EVENT_NAMES.LLM_THINKING_CAPTURED, "thinking", llmSpan.attributes["pi.llm.thinking.redacted"]);
   assert.match(toolSpan.attributes["pi.tool.arguments.redacted"], /\[REDACTED:/u);
   assert.match(toolSpan.attributes["pi.tool.result.redacted"], /\[REDACTED:/u);
   assert.match(bashSpan.attributes["pi.bash.command.redacted"], /\[REDACTED:/u);
   assert.match(bashSpan.attributes["pi.bash.output.redacted"], /\[REDACTED:/u);
+}
+
+function assertCapturedContentLog(telemetry, eventName, kind, body) {
+  const record = telemetry.logger.records.find(log => log.attributes?.["event.name"] === eventName);
+  assert.equal(record?.body, body);
+  assert.equal(record?.attributes?.["event.category"], "llm_content");
+  assert.equal(record?.attributes?.["pi.llm.content.kind"], kind);
+  assert.equal(record?.attributes?.trace_id, validSpanContext.traceId);
+  assert.equal(record?.attributes?.span_id, validSpanContext.spanId);
 }
 
 function createSubagentTelemetry() {

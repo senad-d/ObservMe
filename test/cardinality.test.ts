@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { trace } from "@opentelemetry/api";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import type { AgentLineageContext } from "../src/pi/agent-lineage.ts";
 import {
   createAgentTreeTracker,
   createObservMeMetrics,
@@ -263,7 +264,7 @@ function createFakeTracer(spanContext = validSpanContext, throwOnStart = false) 
 
   return {
     spans,
-    startSpan: (name, options = {}, parentContext) => {
+    startSpan: (name, options: { attributes?: Record<string, unknown> } = {}, parentContext = undefined) => {
       if (throwOnStart) throw new Error("raw error stack should not become a metric label");
       const parentSpan = parentContext ? trace.getSpan(parentContext) : undefined;
       const span = createFakeSpan(name, options.attributes ?? {}, parentSpan, spanContext);
@@ -283,18 +284,37 @@ function createFakeSpan(name, attributes, parentSpan, spanContext) {
     ended: false,
     addEvent(eventName, eventAttributes = {}) {
       this.events.push({ name: eventName, attributes: eventAttributes });
+      return this;
     },
     setAttribute(key, value) {
       this.attributes[key] = value;
+      return this;
     },
     setAttributes(values) {
       Object.assign(this.attributes, values);
+      return this;
     },
     setStatus(status) {
       this.status = status;
+      return this;
     },
     spanContext() {
       return spanContext;
+    },
+    addLink() {
+      return this;
+    },
+    addLinks() {
+      return this;
+    },
+    updateName() {
+      return this;
+    },
+    isRecording() {
+      return true;
+    },
+    recordException() {
+      return undefined;
     },
     end() {
       this.ended = true;
@@ -313,13 +333,21 @@ function makeLineage(overrides = {}) {
     agentId: "agent-parent-cardinality",
     rootAgentId: "agent-root-cardinality",
     depth: 0,
-    role: "root",
+    role: "root" as const,
     orphaned: false,
     ...overrides,
   };
 }
 
-function createTelemetrySession(options = {}) {
+interface TelemetrySessionOptions {
+  readonly config?: typeof defaultObservMeConfig;
+  readonly lineage?: AgentLineageContext;
+  readonly spanContext?: typeof validSpanContext;
+  readonly throwOnStart?: boolean;
+  readonly sessionSpan?: ReturnType<typeof createFakeSpan>;
+}
+
+function createTelemetrySession(options: TelemetrySessionOptions = {}) {
   const config = options.config ?? structuredClone(defaultObservMeConfig);
   const lineage = options.lineage ?? makeLineage();
   const meter = createFakeMeter();

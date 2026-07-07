@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { RedactionOptions } from "../src/privacy/redact.ts";
 import { redactValue } from "../src/privacy/redact.ts";
 
 const syntheticAwsKey = `AKIA${"1".repeat(16)}`;
@@ -57,7 +58,7 @@ const secretCategoryCases = [
   },
 ];
 
-function defaultOptions(overrides = {}) {
+function defaultOptions(overrides: Partial<RedactionOptions> = {}): RedactionOptions {
   return {
     pathMode: "hash",
     customRedactionPatterns: [],

@@ -4,6 +4,7 @@ import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../query/prometheus.ts";
 import { createPrometheusQueryClient } from "../query/prometheus.ts";
+import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
 
 export interface ObsToolsCommandContext {
@@ -103,9 +104,7 @@ export async function handleObsToolsCommand(
 }
 
 export function getObsToolsCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
-  const normalizedPrefix = prefix.trim().toLowerCase();
-  if (!OBS_TOOLS_SUBCOMMAND.startsWith(normalizedPrefix)) return null;
-  return [{ value: OBS_TOOLS_SUBCOMMAND, label: OBS_TOOLS_SUBCOMMAND }];
+  return completeObsSubcommand(prefix, OBS_TOOLS_SUBCOMMAND);
 }
 
 export async function getObsToolsSnapshot(
@@ -258,15 +257,7 @@ function isObsToolFailureRow(row: ObsToolFailureRow | undefined): row is ObsTool
 }
 
 function parseObsToolsRequest(args: string): ObsToolsRequestStatus {
-  const tokens = args.trim().toLowerCase().split(/\s+/u).filter(isNonEmptyString);
-  const [subcommand, ...rest] = tokens;
-
-  if (subcommand !== OBS_TOOLS_SUBCOMMAND) return "usage";
-  return rest.length === 0 ? "tools" : "usage";
-}
-
-function isNonEmptyString(value: string): boolean {
-  return value.length > 0;
+  return isExactObsSubcommandRequest(args, OBS_TOOLS_SUBCOMMAND) ? "tools" : "usage";
 }
 
 async function notifyTools(

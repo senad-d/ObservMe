@@ -188,22 +188,36 @@ If content exceeds limit:
 - Add attribute `observme.truncated=true`
 - Add original length attribute
 
-## 10. Log vs Span Content Rule
+## 10. Opt-in LLM Content Export
 
-Do not put large content in span attributes. If capture is enabled, send content as logs correlated with trace/span IDs.
+Prompt, response, and thinking bodies are not exported by default. They become visible in Tempo and Loki only when the corresponding capture flag is enabled, redaction remains enabled, and the unsafe-capture acknowledgement is explicit for the session:
+
+```text
+OBSERVME_CAPTURE_PROMPTS=true
+OBSERVME_CAPTURE_RESPONSES=true
+OBSERVME_CAPTURE_THINKING=true
+OBSERVME_REDACTION_ENABLED=true
+OBSERVME_ALLOW_UNSAFE_CAPTURE=true
+```
+
+When enabled, ObservMe writes the already-redacted value to the LLM span attribute (`pi.llm.prompt.redacted`, `pi.llm.response.redacted`, or `pi.llm.thinking.redacted`) and emits one correlated Loki log whose body is the same redacted value.
 
 Example:
 
 ```json
 {
   "event.name": "llm.prompt.captured",
+  "event.category": "llm_content",
   "pi.session.id": "...",
   "pi.turn.id": "...",
+  "pi.llm.content.kind": "prompt",
   "trace_id": "...",
   "span_id": "...",
   "body": "<redacted prompt>"
 }
 ```
+
+The Collector cannot recover content dropped by an older configuration; generate new LLM events after updating the Collector and dashboards. Do not use raw chat text in Loki or Tempo query strings.
 
 ## 11. Authentication
 

@@ -8,6 +8,7 @@ import { createPrometheusQueryClient } from "../query/prometheus.ts";
 import type { TimeRange, TraceSummary } from "../query/tempo.ts";
 import { createTempoQueryClient } from "../query/tempo.ts";
 import { COMMON_SPAN_ATTRIBUTES } from "../semconv/attributes.ts";
+import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { formatObsCommandFailure, readObsDiagnosticMessage, type ObsCommandRecoveryHint } from "./obs-diagnostics.ts";
 import type { ObsAgentWaitJoinHint, ObsAgentsRuntimeSnapshot } from "./obs-agents-runtime.ts";
 import { getLocalObsAgentsRuntimeSnapshot } from "./obs-agents-runtime.ts";
@@ -163,9 +164,7 @@ export async function handleObsAgentsCommand(
 }
 
 export function getObsAgentsCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
-  const normalizedPrefix = prefix.trim().toLowerCase();
-  if (!OBS_AGENTS_SUBCOMMAND.startsWith(normalizedPrefix)) return null;
-  return [{ value: OBS_AGENTS_SUBCOMMAND, label: OBS_AGENTS_SUBCOMMAND }];
+  return completeObsSubcommand(prefix, OBS_AGENTS_SUBCOMMAND);
 }
 
 export async function getObsAgentsSnapshot(
@@ -431,13 +430,7 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
 }
 
 function isObsAgentsRequest(args: string): boolean {
-  const tokens = args.trim().toLowerCase().split(/\s+/u).filter(isNonEmptyString);
-  const [subcommand, ...rest] = tokens;
-  return subcommand === OBS_AGENTS_SUBCOMMAND && rest.length === 0;
-}
-
-function isNonEmptyString(value: string): boolean {
-  return value.length > 0;
+  return isExactObsSubcommandRequest(args, OBS_AGENTS_SUBCOMMAND);
 }
 
 async function notifyAgents(

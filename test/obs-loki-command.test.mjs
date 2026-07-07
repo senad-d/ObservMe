@@ -156,7 +156,7 @@ test("/obs logs queries the current session with normalized pi_session_id and ca
 
   assert.equal(calls.length, 1);
   const url = new URL(calls[0].input);
-  assert.equal(url.searchParams.get("query"), '{service_name="observme-pi-extension", pi_session_id="session-1"}');
+  assert.equal(url.searchParams.get("query"), '{service_name="observme-pi-extension", event_category!="llm_content", pi_session_id="session-1"}');
   assert.equal(url.searchParams.get("limit"), "2");
   assert.equal(snapshot.query, buildObsLogsLogQl("session-1"));
   assert.equal(snapshot.logs.length, 2);

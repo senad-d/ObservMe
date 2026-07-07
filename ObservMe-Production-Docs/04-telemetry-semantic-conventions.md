@@ -301,9 +301,10 @@ gen_ai.output.messages                        # only if explicit content capture
 pi.llm.prompt.redacted
 pi.llm.response.redacted
 pi.llm.thinking.redacted
+pi.llm.content.kind                         # log attribute: prompt|response|thinking
 ```
 
-Do not put large prompt, response, or thinking bodies into span attributes in production. Prefer OTEL logs with trace/span correlation when capture is enabled.
+When prompt, response, or thinking capture is explicitly enabled, ObservMe exports already-redacted content to both the LLM span attributes above and correlated OTEL logs. Keep capture disabled by default; for high-volume production deployments, prefer dashboards and retention policies that treat these opt-in attributes and log bodies as sensitive even after redaction.
 
 ## 8. Tool Call Span
 

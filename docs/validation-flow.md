@@ -51,7 +51,17 @@ export OBSERVME_VALIDATION_SESSION_ID=<session-id-from-/obs-session>
 export OBSERVME_VALIDATION_TRACE_ID=<32-hex-trace-id>
 ```
 
-## 2. Run the deterministic validation script
+## 2. Run the local lifecycle flow test
+
+Before using a live backend, the unit-level lifecycle flow can be reproduced without credentials:
+
+```bash
+node --test --test-name-pattern "deterministic active-session command flow" test/pi-handlers.test.mjs
+```
+
+This starts a fake ObservMe session, emits representative LLM, tool, bash, and subagent telemetry, checks active `/obs session` and `/obs trace` output, then runs `session_shutdown` and verifies root-span export state, bounded flush/shutdown calls, exporter-status messaging, and secret-safe output.
+
+## 3. Run the deterministic validation script
 
 ```bash
 npm run validate:grafana-obs

@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 
 export interface ObsSessionCommandContext {
   readonly ui: {
@@ -83,9 +84,7 @@ export async function handleObsSessionCommand(
 }
 
 export function getObsSessionCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
-  const normalizedPrefix = prefix.trim().toLowerCase();
-  if (!OBS_SESSION_SUBCOMMAND.startsWith(normalizedPrefix)) return null;
-  return [{ value: OBS_SESSION_SUBCOMMAND, label: OBS_SESSION_SUBCOMMAND }];
+  return completeObsSubcommand(prefix, OBS_SESSION_SUBCOMMAND);
 }
 
 export function getLocalObsSessionSnapshot(): ObsSessionSnapshot {
@@ -244,8 +243,7 @@ function formatUsd(value: number): string {
 }
 
 function isObsSessionRequest(args: string): boolean {
-  const [subcommand] = args.trim().toLowerCase().split(/\s+/u);
-  return subcommand === OBS_SESSION_SUBCOMMAND;
+  return isExactObsSubcommandRequest(args, OBS_SESSION_SUBCOMMAND);
 }
 
 async function notifySession(

@@ -4,6 +4,7 @@ import test from "node:test";
 import { trace } from "@opentelemetry/api";
 import { getObsStatusRuntimeState, resetObsStatusRuntimeState } from "../src/commands/obs-status.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import type { AgentLineageContext } from "../src/pi/agent-lineage.ts";
 import { runBoundedOtelOperation } from "../src/otel/shutdown.ts";
 import { COMMON_SPAN_ATTRIBUTES } from "../src/semconv/attributes.ts";
 import { LOG_EVENT_NAMES, OBSERVME_COUNTER_METRIC_NAMES } from "../src/semconv/metrics.ts";
@@ -44,7 +45,7 @@ function makeLineage() {
     agentId: "agent-root",
     rootAgentId: "agent-root",
     depth: 0,
-    role: "root",
+    role: "root" as const,
     orphaned: false,
   };
 }
@@ -82,7 +83,7 @@ function createFakeTracer() {
 
   return {
     spans,
-    startSpan: (name, options = {}, parentContext) => {
+    startSpan: (name, options: { attributes?: Record<string, unknown> } = {}, parentContext = undefined) => {
       const parentSpan = parentContext ? trace.getSpan(parentContext) : undefined;
       const span = createFakeSpan(name, options.attributes ?? {}, parentSpan);
       spans.push(span);
@@ -101,18 +102,37 @@ function createFakeSpan(name, attributes, parentSpan) {
     ended: false,
     addEvent(eventName, eventAttributes = {}) {
       this.events.push({ name: eventName, attributes: eventAttributes });
+      return this;
     },
     setAttribute(key, value) {
       this.attributes[key] = value;
+      return this;
     },
     setAttributes(values) {
       Object.assign(this.attributes, values);
+      return this;
     },
     setStatus(status) {
       this.status = status;
+      return this;
     },
     spanContext() {
       return validSpanContext;
+    },
+    addLink() {
+      return this;
+    },
+    addLinks() {
+      return this;
+    },
+    updateName() {
+      return this;
+    },
+    isRecording() {
+      return true;
+    },
+    recordException() {
+      return undefined;
     },
     end() {
       this.ended = true;
@@ -155,11 +175,17 @@ function createCollectorSlowController() {
   };
 }
 
-function neverResolve() {
+function neverResolve(): Promise<void> {
   return new Promise(() => undefined);
 }
 
-function createFakeTelemetry(options = {}) {
+interface FakeTelemetryOptions {
+  readonly config?: ReturnType<typeof cloneConfig>;
+  readonly lineage?: AgentLineageContext;
+  readonly controller?: ReturnType<typeof createCompletedController>;
+}
+
+function createFakeTelemetry(options: FakeTelemetryOptions = {}) {
   const config = options.config ?? cloneConfig();
   const lineage = options.lineage ?? makeLineage();
   const meter = createFakeMeter();

@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { Counter, Histogram, Span, SpanContext, Tracer } from "@opentelemetry/api";
+import type { Counter, Histogram, Span, SpanContext } from "@opentelemetry/api";
 import { context as otelContext, isSpanContextValid, SpanStatusCode, trace } from "@opentelemetry/api";
-import type { Logger } from "@opentelemetry/api-logs";
 import {
   recordObsAgentWaitJoinHint,
   updateObsAgentsRuntimeStateFromTree,
@@ -20,14 +19,20 @@ import type { AgentChildStatus, AgentTreeNode, AgentTreeSummary } from "./agent-
 import { AgentTreeTracker } from "./agent-tree-tracker.ts";
 import type { AgentLineageContext, AgentRole } from "./agent-lineage.ts";
 import { createAgentLineageContext, createPropagationEnvironment } from "./agent-lineage.ts";
+import type { TelemetryLogger, TelemetryTracer } from "./handlers.ts";
 
 export type SubagentSpawnType = "command" | "tool" | "extension" | "unknown";
 export type AgentJoinStatus = "completed" | "failed" | "cancelled" | "timeout" | "unknown" | "waiting";
 export type AttributePrimitive = boolean | number | string;
 export type AttributeMap = Record<string, AttributePrimitive>;
+export type TestableSpan = Span & {
+  readonly name?: string;
+  readonly attributes?: Record<string, unknown>;
+  readonly parentSpan?: Span;
+};
 
 export interface SubagentSpawnState {
-  readonly span: Span;
+  readonly span: TestableSpan;
   readonly childAgentId: string;
   readonly startedAtMs: number;
   readonly labels: Record<string, string>;
@@ -35,7 +40,7 @@ export interface SubagentSpawnState {
 }
 
 export interface AgentWaitJoinState {
-  readonly span: Span;
+  readonly span: TestableSpan;
   readonly startedAtMs: number;
   readonly labels: Record<string, string>;
 }
@@ -63,8 +68,8 @@ export interface SubagentMetrics {
 export interface SubagentTelemetrySession {
   readonly config: ObservMeConfig;
   readonly lineage: AgentLineageContext;
-  readonly tracer: Tracer;
-  readonly logger: Logger;
+  readonly tracer: TelemetryTracer;
+  readonly logger: TelemetryLogger;
   readonly metrics: SubagentMetrics;
   readonly spans: SubagentSpanRegistry;
   sessionSpan?: Span;
@@ -108,7 +113,7 @@ export interface StartedSubagentSpawn {
   readonly spawnId: string;
   readonly childAgentId: string;
   readonly env: NodeJS.ProcessEnv;
-  readonly span: Span;
+  readonly span: TestableSpan;
   readonly traceContextPropagated: boolean;
   readonly attributes: AttributeMap;
 }
@@ -153,7 +158,7 @@ export interface AgentWaitJoinOptions {
 
 export interface StartedAgentWaitJoin {
   readonly id: string;
-  readonly span: Span;
+  readonly span: TestableSpan;
   readonly attributes: AttributeMap;
 }
 
@@ -726,9 +731,9 @@ function readSpanContext(span: Span): SpanContext | undefined {
   }
 }
 
-function startChildSpan(tracer: Tracer, name: string, parent: Span | undefined, attributes: AttributeMap): Span {
+function startChildSpan(tracer: TelemetryTracer, name: string, parent: Span | undefined, attributes: AttributeMap): TestableSpan {
   const parentContext = parent ? trace.setSpan(otelContext.active(), parent) : otelContext.active();
-  return tracer.startSpan(name, { attributes }, parentContext);
+  return tracer.startSpan(name, { attributes }, parentContext) as TestableSpan;
 }
 
 function resolveSubagentParentSpan(session: SubagentTelemetrySession): Span | undefined {

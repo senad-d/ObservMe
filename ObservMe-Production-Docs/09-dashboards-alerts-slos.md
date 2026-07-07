@@ -14,7 +14,9 @@ dashboards/
 ├── observme-models.json
 ├── observme-errors.json
 ├── observme-branches-compactions.json
-└── observme-export-health.json
+├── observme-export-health.json
+├── observme-logs-llm.json
+└── observme-llm-conversations.json
 ```
 
 ## 2. Overview Dashboard
@@ -252,6 +254,16 @@ LLM failures:
 
 ```logql
 {service_name="observme-pi-extension", event_name="llm.request.failed"}
+```
+
+The dedicated `observme-llm-conversations.json` dashboard shows a full redacted conversation timeline plus separate prompt, response, and thinking panels. It includes Loki template filters for `pi_agent_id` and `pi_agent_run_id`; the local Collector promotes `pi.agent.id` and `pi.agent.run.id` as Loki labels for this dashboard.
+
+Captured prompts, responses, and thinking (redacted, opt-in log bodies):
+
+```logql
+{service_name="observme-pi-extension", event_name="llm.prompt.captured"}
+{service_name="observme-pi-extension", event_name="llm.response.captured"}
+{service_name="observme-pi-extension", event_name="llm.thinking.captured"}
 ```
 
 Compactions:

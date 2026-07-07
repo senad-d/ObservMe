@@ -172,6 +172,10 @@ async function collectorExampleIncludesCardinalityAndContentDropProcessors() {
   );
   assert.match(
     collector,
+    /processors: \[memory_limiter, resource\/observme, batch\]/u,
+  );
+  assert.match(
+    collector,
     /processors: \[memory_limiter, resource\/observme, attributes\/drop_content_attributes, batch\]/u,
   );
 

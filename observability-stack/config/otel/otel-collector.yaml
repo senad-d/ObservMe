@@ -49,6 +49,8 @@ processors:
         action: delete
       - key: pi.session.id
         action: delete
+  # Drops accidental content attributes from logs. Intentional LLM content capture
+  # is emitted as already-redacted log bodies and opt-in span attributes.
   attributes/drop_content_attributes:
     actions:
       - key: gen_ai.input.messages
@@ -68,7 +70,7 @@ processors:
   attributes/loki_query_hints:
     actions:
       - key: loki.attribute.labels
-        value: event.name,event.category,pi.session.id,pi.agent.id,pi.agent.parent_id,pi.llm.stop_reason,pi.bash.exit_code
+        value: event.name,event.category,pi.session.id,pi.agent.id,pi.agent.parent_id,pi.agent.run.id,pi.llm.stop_reason,pi.bash.exit_code
         action: insert
   resource/loki_query_hints:
     attributes:
@@ -103,5 +105,5 @@ service:
       exporters: [loki]
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, resource/observme, attributes/drop_content_attributes, batch]
+      processors: [memory_limiter, resource/observme, batch]
       exporters: [otlp/tempo]

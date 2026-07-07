@@ -3,6 +3,8 @@ import type { LoadSessionConfigOptions, SessionConfigDiagnostics, SessionConfigE
 import { loadSessionConfigWithDiagnostics } from "../config/load-config.ts";
 import type { CaptureConfig, ObservMeConfig } from "../config/schema.ts";
 import { getGrafanaQueryReadiness } from "../query/grafana-readiness.ts";
+import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
+import { sanitizeObsDiagnosticText } from "./obs-diagnostics.ts";
 
 export interface ObsStatusCommandContext {
   readonly cwd?: string;
@@ -96,14 +98,12 @@ export async function handleObsStatusCommand(
     const snapshot = await resolveObsStatusSnapshot(ctx, options);
     await notifyStatus(ctx, renderObsStatus(snapshot), "info");
   } catch (error) {
-    await notifyStatus(ctx, `ObservMe status unavailable: ${formatError(error)}`, "error");
+    await notifyStatus(ctx, `ObservMe status unavailable: ${sanitizeObsDiagnosticText(formatError(error))}`, "error");
   }
 }
 
 export function getObsCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
-  const normalizedPrefix = prefix.trim().toLowerCase();
-  if (!OBS_STATUS_SUBCOMMAND.startsWith(normalizedPrefix)) return null;
-  return [{ value: OBS_STATUS_SUBCOMMAND, label: OBS_STATUS_SUBCOMMAND }];
+  return completeObsSubcommand(prefix, OBS_STATUS_SUBCOMMAND);
 }
 
 export async function getLocalObsStatusSnapshot(
@@ -125,7 +125,7 @@ export function renderObsStatus(snapshot: ObsStatusSnapshot): string {
   const config = snapshot.config;
   const lines = [
     `ObservMe: ${formatEnabled(config.enabled)}`,
-    `OTLP endpoint: ${config.otlp.endpoint}`,
+    `OTLP endpoint: ${formatSafeConfiguredEndpoint(config.otlp.endpoint)}`,
     ...formatConfigDiagnosticsLines(snapshot.configDiagnostics),
     `Grafana URL: ${formatSafeConfiguredUrl(config.query.grafana.url)}`,
     `Grafana query readiness: ${formatGrafanaQueryReadiness(config)}`,
@@ -176,7 +176,7 @@ export function recordObsStatusExportResult(result: ObsStatusOperationResult): v
     return;
   }
 
-  if (result.error) runtimeStatusState.lastExportError = `${result.operation} failed: ${formatError(result.error)}`;
+  if (result.error) runtimeStatusState.lastExportError = sanitizeObsDiagnosticText(`${result.operation} failed: ${formatError(result.error)}`);
 }
 
 export function clearObsStatusExportError(): void {
@@ -231,8 +231,7 @@ function createObsStatusLoadOptions(
 }
 
 function isObsStatusRequest(args: string): boolean {
-  const [subcommand] = args.trim().toLowerCase().split(/\s+/u);
-  return !subcommand || subcommand === OBS_STATUS_SUBCOMMAND;
+  return isExactObsSubcommandRequest(args, OBS_STATUS_SUBCOMMAND, { allowEmpty: true });
 }
 
 async function notifyStatus(ctx: ObsStatusCommandContext, message: string, type: "info" | "warning" | "error"): Promise<void> {
@@ -315,7 +314,26 @@ function normalizeQueueDrops(value: number | undefined): number {
 
 function normalizeLastExportError(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return trimmed ? sanitizeObsDiagnosticText(trimmed) : undefined;
+}
+
+function formatSafeConfiguredEndpoint(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "not configured";
+
+  try {
+    const parsed = new URL(trimmed);
+    const hasExplicitRootPath = trimmed.endsWith("/");
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    const formatted = parsed.toString();
+    if (parsed.pathname === "/" && !hasExplicitRootPath) return formatted.replace(/\/$/u, "");
+    return formatted;
+  } catch (_error) {
+    return "invalid configured URL";
+  }
 }
 
 function formatError(error: unknown): string {

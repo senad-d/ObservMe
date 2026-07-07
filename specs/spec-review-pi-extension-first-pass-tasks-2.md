@@ -27,7 +27,7 @@ Review scope and date: 2026-07-07. Security, runtime correctness, input validati
 
 ## Ordered tasks
 
-- [ ] Add TypeScript type checking for TypeScript tests and shared test fixtures
+- [x] Add TypeScript type checking for TypeScript tests and shared test fixtures
 
 #### Why
 
@@ -48,7 +48,7 @@ Review scope and date: 2026-07-07. Security, runtime correctness, input validati
 - Existing source strictness is not relaxed and no TypeScript errors are silenced.
 - The relevant type-check, test, and lint commands pass.
 
-- [ ] Add abort-aware bounded execution to confirmed backfill export
+- [x] Add abort-aware bounded execution to confirmed backfill export
 
 #### Why
 
@@ -69,7 +69,7 @@ Review scope and date: 2026-07-07. Security, runtime correctness, input validati
 - Tests cover cancellation before export and during export.
 - Relevant validation commands pass or an exact Pi-runtime blocker is documented.
 
-- [ ] Preserve explicit secret-hygiene checks for project-local `.env` handling
+- [x] Preserve explicit secret-hygiene checks for project-local `.env` handling
 
 #### Why
 

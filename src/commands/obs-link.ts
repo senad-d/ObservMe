@@ -6,9 +6,10 @@ import type {
   ObsTraceSnapshot,
   ObsTraceSnapshotOptions,
 } from "./obs-trace.ts";
+import { completeObsSubcommand, obsUsageWithError } from "./obs-args.ts";
 import {
   getObsTraceSnapshot,
-  parseObsTraceRequestForSubcommand,
+  parseObsTraceArgsForSubcommand,
   renderObsTraceWithTitle,
 } from "./obs-trace.ts";
 
@@ -38,12 +39,14 @@ export async function handleObsLinkCommand(
   ctx: ObsLinkCommandContext,
   options: RegisterObsLinkCommandOptions = {},
 ): Promise<void> {
-  const request = parseObsTraceRequestForSubcommand(args, OBS_LINK_SUBCOMMAND);
+  const parsed = parseObsTraceArgsForSubcommand(args, OBS_LINK_SUBCOMMAND);
 
-  if (!request) {
-    await notifyLink(ctx, OBS_LINK_USAGE, "warning");
+  if (!parsed.request) {
+    await notifyLink(ctx, obsUsageWithError(OBS_LINK_USAGE, parsed.error), "warning");
     return;
   }
+
+  const request = parsed.request;
 
   try {
     const snapshot = await resolveObsLinkSnapshot(ctx, request, options);
@@ -54,9 +57,7 @@ export async function handleObsLinkCommand(
 }
 
 export function getObsLinkCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
-  const normalizedPrefix = prefix.trim().toLowerCase();
-  if (!OBS_LINK_SUBCOMMAND.startsWith(normalizedPrefix)) return null;
-  return [{ value: OBS_LINK_SUBCOMMAND, label: OBS_LINK_SUBCOMMAND }];
+  return completeObsSubcommand(prefix, OBS_LINK_SUBCOMMAND);
 }
 
 export function renderObsLink(snapshot: ObsTraceSnapshot): string {

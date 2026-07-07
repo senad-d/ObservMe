@@ -30,6 +30,15 @@ observme:
       password: smoke
 `;
 
+const trustedProjectEnvText = `
+OBSERVME_OTLP_ENDPOINT=https://otlp-user:otlp-password@collector.local:4318?token=otlp-query-secret
+OBSERVME_OTLP_TOKEN=otlp-header-secret
+OBSERVME_GRAFANA_URL=https://grafana-user:grafana-password@grafana.local:3000?token=grafana-query-secret
+OBSERVME_GRAFANA_TOKEN=grafana-token-secret
+OBSERVME_GRAFANA_USERNAME=admin
+OBSERVME_GRAFANA_PASSWORD=grafana-basic-secret
+`;
+
 function createCommandContext(notifications, projectTrusted = false) {
   return {
     cwd: "/workspace/demo",
@@ -157,6 +166,56 @@ test("/obs status reports trusted project config source and Grafana query readin
   assert.match(notifications[0].message, /Project config: loaded \(trusted \.pi\/observme\.yaml\)/u);
   assert.match(notifications[0].message, /Grafana URL: https:\/\/grafana\.project\.test\//u);
   assert.match(notifications[0].message, /Grafana query readiness: ready/u);
+});
+
+test("/obs status does not render trusted project .env secret values", async t => {
+  resetObsStatusRuntimeState();
+  t.after(() => resetObsStatusRuntimeState());
+
+  const notifications = [];
+  await handleObsStatusCommand("status", createCommandContext(notifications, true), {
+    globalConfigPath: "global.yaml",
+    projectConfigPath: "project.yaml",
+    readText: createReader({ "/workspace/demo/.env": trustedProjectEnvText }),
+    env: {},
+  });
+
+  assert.equal(notifications.length, 1);
+  assert.match(notifications[0].message, /OTLP endpoint: https:\/\/collector\.local:4318/u);
+  assert.match(notifications[0].message, /Grafana URL: https:\/\/grafana\.local:3000\//u);
+  assert.doesNotMatch(
+    notifications[0].message,
+    /otlp-user|otlp-password|otlp-query-secret|otlp-header-secret|grafana-user|grafana-password|grafana-query-secret|grafana-token-secret|grafana-basic-secret/u,
+  );
+});
+
+test("/obs status sanitizes load and export diagnostics", async t => {
+  resetObsStatusRuntimeState();
+  t.after(() => resetObsStatusRuntimeState());
+
+  const loadNotifications = [];
+  await handleObsStatusCommand("status", createCommandContext(loadNotifications), {
+    loadConfig: async () => {
+      throw new Error("Authorization: Bearer loader-token prompt: hidden prompt /tmp/private.env OBSERVME_GRAFANA_PASSWORD=loader-secret");
+    },
+  });
+
+  assert.equal(loadNotifications[0].type, "error");
+  assert.doesNotMatch(loadNotifications[0].message, /loader-token|hidden prompt|private\.env|loader-secret/u);
+
+  const config = cloneDefaultConfig();
+  updateObsStatusRuntimeState({ config });
+  recordObsStatusExportResult({
+    operation: "flush",
+    error: new Error("Authorization: Bearer export-token command: curl secret /Users/alice/private/.env OBSERVME_TOKEN=export-secret"),
+  });
+
+  const exportNotifications = [];
+  await handleObsStatusCommand("status", createCommandContext(exportNotifications));
+
+  assert.equal(exportNotifications[0].type, "info");
+  assert.match(exportNotifications[0].message, /Last export error: flush failed/u);
+  assert.doesNotMatch(exportNotifications[0].message, /export-token|curl secret|private\/\.env|export-secret/u);
 });
 
 test("/obs status explains untrusted project config is skipped", async t => {

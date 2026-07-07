@@ -15,6 +15,12 @@ import {
   TOOL_ATTRIBUTES,
 } from "../semconv/attributes.ts";
 import { LOG_EVENT_NAMES } from "../semconv/metrics.ts";
+import {
+  completeObsSubcommand,
+  missingObsOptionValueMessage,
+  parseObsSubcommandArgs,
+  unknownObsOptionMessage,
+} from "./obs-args.ts";
 
 export type ObsBackfillAttributeValue = boolean | number | string | string[];
 export type ObsBackfillAttributes = Record<string, ObsBackfillAttributeValue>;
@@ -22,13 +28,18 @@ export type ObsBackfillAttributes = Record<string, ObsBackfillAttributeValue>;
 export interface ObsBackfillCommandContext {
   readonly cwd?: string;
   readonly hasUI?: boolean;
+  readonly signal?: AbortSignal;
   readonly ui: {
     notify: (message: string, type?: "info" | "warning" | "error") => Promise<void> | void;
     confirm?: (title: string, message: string, options?: { timeout?: number; signal?: AbortSignal }) => Promise<boolean> | boolean;
   };
   readonly isProjectTrusted?: () => boolean | Promise<boolean>;
-  readonly waitForIdle?: () => Promise<void> | void;
+  readonly waitForIdle?: (options?: ObsBackfillOperationOptions) => Promise<void> | void;
   readonly sessionManager?: ObsBackfillSessionManager;
+}
+
+export interface ObsBackfillOperationOptions {
+  readonly signal?: AbortSignal;
 }
 
 export interface ObsBackfillSessionManager {
@@ -47,9 +58,9 @@ export interface ObsBackfillTelemetryRecord {
 }
 
 export interface ObsBackfillExporter {
-  emit: (record: ObsBackfillTelemetryRecord) => Promise<void> | void;
-  flush?: () => Promise<void> | void;
-  shutdown?: () => Promise<void> | void;
+  emit: (record: ObsBackfillTelemetryRecord, options?: ObsBackfillOperationOptions) => Promise<void> | void;
+  flush?: (options?: ObsBackfillOperationOptions) => Promise<void> | void;
+  shutdown?: (options?: ObsBackfillOperationOptions) => Promise<void> | void;
 }
 
 export interface ObsBackfillSummary {
@@ -86,6 +97,7 @@ export interface ObsBackfillOptions {
   readonly now?: () => Date;
   readonly maxRecords?: number;
   readonly confirmTimeoutMs?: number;
+  readonly exportOperationTimeoutMs?: number;
 }
 
 export type RegisterObsBackfillCommandOptions = ObsBackfillOptions;
@@ -125,6 +137,7 @@ const OBS_COMMAND_NAME = "obs";
 const OBS_BACKFILL_SUBCOMMAND = "backfill";
 const OBS_BACKFILL_USAGE = "Usage: /obs backfill --current-session --since 1h";
 const OBS_BACKFILL_DEFAULT_MAX_RECORDS = 100;
+const OBS_BACKFILL_DEFAULT_OPERATION_TIMEOUT_MS = 30_000;
 const OBS_BACKFILL_CATEGORY = "backfill";
 const OBS_BACKFILL_UNKNOWN_SESSION = "unknown";
 const millisecondsPerSecond = 1000;
@@ -132,6 +145,7 @@ const millisecondsPerMinute = 60 * millisecondsPerSecond;
 const millisecondsPerHour = 60 * millisecondsPerMinute;
 const millisecondsPerDay = 24 * millisecondsPerHour;
 const sincePattern = /^(\d+)(ms|s|m|h|d)$/iu;
+const abortErrorNames = new Set(["AbortError", "TimeoutError"]);
 
 export function registerObsBackfillCommand(
   pi: ExtensionAPI,
@@ -161,16 +175,14 @@ export async function handleObsBackfillCommand(
     const summary = await resolveObsBackfillSummary(ctx, parsed.request, options);
     await notifyBackfill(ctx, renderObsBackfillSummary(summary), notificationTypeForSummary(summary));
   } catch (error) {
-    await notifyBackfill(ctx, `ObservMe backfill unavailable: ${formatError(error)}`, "error");
+    await notifyBackfill(ctx, `ObservMe backfill unavailable: ${formatBackfillError(error)}`, "error");
   }
 }
 
 export function getObsBackfillCommandArgumentCompletions(
   prefix: string,
 ): Array<{ value: string; label: string }> | null {
-  const normalizedPrefix = prefix.trim().toLowerCase();
-  if (!OBS_BACKFILL_SUBCOMMAND.startsWith(normalizedPrefix)) return null;
-  return [{ value: OBS_BACKFILL_SUBCOMMAND, label: OBS_BACKFILL_SUBCOMMAND }];
+  return completeObsSubcommand(prefix, OBS_BACKFILL_SUBCOMMAND);
 }
 
 export async function runObsBackfill(
@@ -178,40 +190,43 @@ export async function runObsBackfill(
   request: ObsBackfillRequest,
   options: ObsBackfillOptions = {},
 ): Promise<ObsBackfillSummary> {
+  if (isAbortSignalAborted(ctx.signal)) return cancelledBackfillSummary(ctx, request, "operation cancelled");
+
   const config = await loadObsBackfillConfig(ctx, options);
   const skippedSummary = resolveSkippedBackfillSummary(config, ctx, request);
   if (skippedSummary) return skippedSummary;
 
-  const confirmed = await confirmObsBackfill(ctx, request, config, options);
-  if (!confirmed) return cancelledBackfillSummary(ctx, request);
+  const confirmed = await confirmBackfillOrCancel(ctx, request, config, options);
+  if (!confirmed) return cancelledBackfillSummary(ctx, request, isAbortSignalAborted(ctx.signal) ? "operation cancelled" : undefined);
+  if (isAbortSignalAborted(ctx.signal)) return cancelledBackfillSummary(ctx, request, "operation cancelled");
 
-  await ctx.waitForIdle?.();
+  const operationTimeoutMs = normalizeBackfillOperationTimeoutMs(options.exportOperationTimeoutMs);
+  try {
+    await waitForObsBackfillIdle(ctx, operationTimeoutMs);
+  } catch (error) {
+    if (error instanceof ObsBackfillInterruptedError) return cancelledBackfillSummary(ctx, request, error.reason);
+    throw error;
+  }
+
   const entries = readCurrentSessionEntries(ctx);
   const sessionId = resolveCurrentSessionId(ctx);
   const sessionFile = ctx.sessionManager?.getSessionFile?.();
   const buildResult = buildObsBackfillRecords(entries, config, request, sessionId, options);
 
-  if (buildResult.records.length > 0) {
-    await exportObsBackfillRecords(buildResult.records, config, ctx, options);
-  }
+  try {
+    const recordsExported = buildResult.records.length > 0 ? await exportObsBackfillRecords(buildResult.records, config, ctx, operationTimeoutMs, options) : 0;
+    return completedBackfillSummary(ctx, request, buildResult, recordsExported, sessionId, sessionFile);
+  } catch (error) {
+    if (error instanceof ObsBackfillInterruptedError) {
+      return interruptedBackfillSummary(ctx, request, buildResult, error.recordsExported, error.reason, sessionId, sessionFile);
+    }
 
-  return {
-    status: "completed",
-    sessionId,
-    sessionFile,
-    since: request.since,
-    entriesScanned: buildResult.entriesScanned,
-    entriesEligible: buildResult.entriesEligible,
-    recordsExported: buildResult.records.length,
-    recordsSkipped: buildResult.recordsSkipped,
-    rateLimited: buildResult.rateLimited,
-    contentCaptured: buildResult.contentCaptured,
-    redactionFailures: buildResult.redactionFailures,
-  };
+    throw error;
+  }
 }
 
 export function renderObsBackfillSummary(summary: ObsBackfillSummary): string {
-  if (summary.status === "cancelled") return `ObservMe backfill cancelled: ${summary.reason ?? "user did not confirm"}.`;
+  if (summary.status === "cancelled") return renderCancelledObsBackfillSummary(summary);
   if (summary.status === "skipped") return `ObservMe backfill skipped: ${summary.reason ?? "not available"}.`;
 
   const lines = [
@@ -279,6 +294,18 @@ export function createObsBackfillLogExporter(config: ObservMeConfig): ObsBackfil
   return new ObsBackfillLogExporter(sdk);
 }
 
+class ObsBackfillInterruptedError extends Error {
+  readonly reason: string;
+  readonly recordsExported: number;
+
+  constructor(reason: string, recordsExported = 0) {
+    super(reason);
+    this.name = "ObsBackfillInterruptedError";
+    this.reason = reason;
+    this.recordsExported = recordsExported;
+  }
+}
+
 class ObsBackfillCommand {
   readonly #options: RegisterObsBackfillCommandOptions;
 
@@ -298,7 +325,7 @@ class ObsBackfillLogExporter implements ObsBackfillExporter {
     this.#sdk = sdk;
   }
 
-  emit(record: ObsBackfillTelemetryRecord): void {
+  emit(record: ObsBackfillTelemetryRecord, _options?: ObsBackfillOperationOptions): void {
     this.#sdk.logger.emit({
       severityText: "INFO",
       body: record.body,
@@ -310,11 +337,11 @@ class ObsBackfillLogExporter implements ObsBackfillExporter {
     });
   }
 
-  async flush(): Promise<void> {
+  async flush(_options?: ObsBackfillOperationOptions): Promise<void> {
     await this.#sdk.forceFlush();
   }
 
-  async shutdown(): Promise<void> {
+  async shutdown(_options?: ObsBackfillOperationOptions): Promise<void> {
     await this.#sdk.shutdown();
   }
 }
@@ -348,6 +375,20 @@ function resolveSkippedBackfillSummary(
   return undefined;
 }
 
+async function confirmBackfillOrCancel(
+  ctx: ObsBackfillCommandContext,
+  request: ObsBackfillRequest,
+  config: ObservMeConfig,
+  options: ObsBackfillOptions,
+): Promise<boolean> {
+  try {
+    return await confirmObsBackfill(ctx, request, config, options);
+  } catch (error) {
+    if (isAbortLikeError(error) || isAbortSignalAborted(ctx.signal)) return false;
+    throw error;
+  }
+}
+
 async function confirmObsBackfill(
   ctx: ObsBackfillCommandContext,
   request: ObsBackfillRequest,
@@ -357,6 +398,7 @@ async function confirmObsBackfill(
   if (!canConfirmBackfill(ctx)) return false;
 
   return ctx.ui.confirm("Confirm ObservMe backfill", buildBackfillConfirmationMessage(request, config, options), {
+    signal: ctx.signal,
     timeout: options.confirmTimeoutMs,
   });
 }
@@ -382,8 +424,12 @@ function buildBackfillConfirmationMessage(
   ].join("\n");
 }
 
-function cancelledBackfillSummary(ctx: ObsBackfillCommandContext, request: ObsBackfillRequest): ObsBackfillSummary {
-  const reason = canConfirmBackfill(ctx) ? "user did not confirm" : "interactive confirmation is required";
+function cancelledBackfillSummary(
+  ctx: ObsBackfillCommandContext,
+  request: ObsBackfillRequest,
+  explicitReason?: string,
+): ObsBackfillSummary {
+  const reason = explicitReason ?? (canConfirmBackfill(ctx) ? "user did not confirm" : "interactive confirmation is required");
   return {
     status: "cancelled",
     sessionId: resolveCurrentSessionId(ctx),
@@ -421,29 +467,157 @@ function skippedBackfillSummary(
   };
 }
 
+function completedBackfillSummary(
+  ctx: ObsBackfillCommandContext,
+  request: ObsBackfillRequest,
+  buildResult: ObsBackfillBuildResult,
+  recordsExported: number,
+  sessionId = resolveCurrentSessionId(ctx),
+  sessionFile = ctx.sessionManager?.getSessionFile?.(),
+): ObsBackfillSummary {
+  return backfillSummary("completed", ctx, request, buildResult, recordsExported, undefined, sessionId, sessionFile);
+}
+
+function interruptedBackfillSummary(
+  ctx: ObsBackfillCommandContext,
+  request: ObsBackfillRequest,
+  buildResult: ObsBackfillBuildResult,
+  recordsExported: number,
+  reason: string,
+  sessionId = resolveCurrentSessionId(ctx),
+  sessionFile = ctx.sessionManager?.getSessionFile?.(),
+): ObsBackfillSummary {
+  return backfillSummary("cancelled", ctx, request, buildResult, recordsExported, reason, sessionId, sessionFile);
+}
+
+function backfillSummary(
+  status: ObsBackfillSummary["status"],
+  _ctx: ObsBackfillCommandContext,
+  request: ObsBackfillRequest,
+  buildResult: ObsBackfillBuildResult,
+  recordsExported: number,
+  reason: string | undefined,
+  sessionId: string | undefined,
+  sessionFile: string | undefined,
+): ObsBackfillSummary {
+  return {
+    status,
+    sessionId,
+    sessionFile,
+    since: request.since,
+    entriesScanned: buildResult.entriesScanned,
+    entriesEligible: buildResult.entriesEligible,
+    recordsExported,
+    recordsSkipped: buildResult.recordsSkipped + (buildResult.records.length - recordsExported),
+    rateLimited: buildResult.rateLimited,
+    contentCaptured: buildResult.contentCaptured,
+    redactionFailures: buildResult.redactionFailures,
+    reason,
+  };
+}
+
+async function waitForObsBackfillIdle(ctx: ObsBackfillCommandContext, operationTimeoutMs: number): Promise<void> {
+  if (!ctx.waitForIdle) return;
+  await runBackfillOperation(ctx.waitForIdle({ signal: ctx.signal }), ctx.signal, operationTimeoutMs, "wait for idle");
+}
+
 async function exportObsBackfillRecords(
   records: readonly ObsBackfillTelemetryRecord[],
   config: ObservMeConfig,
   ctx: ObsBackfillCommandContext,
+  operationTimeoutMs: number,
   options: ObsBackfillOptions,
-): Promise<void> {
-  const exporter = await createObsBackfillExporter(config, ctx, options);
+): Promise<number> {
+  const exporter = await createObsBackfillExporter(config, ctx, operationTimeoutMs, options);
+  let recordsExported = 0;
+  let pendingError: unknown;
 
   try {
-    for (const record of records) await exporter.emit(record);
-    await exporter.flush?.();
+    for (const record of records) {
+      throwIfBackfillAborted(ctx.signal);
+      await runBackfillOperation(exporter.emit(record, { signal: ctx.signal }), ctx.signal, operationTimeoutMs, "export emit");
+      recordsExported += 1;
+    }
+
+    throwIfBackfillAborted(ctx.signal);
+    await runBackfillOperation(exporter.flush?.({ signal: ctx.signal }), ctx.signal, operationTimeoutMs, "export flush");
+  } catch (error) {
+    pendingError = addExportCountToBackfillInterruption(error, recordsExported);
   } finally {
-    await exporter.shutdown?.();
+    pendingError = await shutdownObsBackfillExporter(exporter, ctx.signal, operationTimeoutMs, pendingError);
   }
+
+  if (pendingError !== undefined) throw pendingError;
+  return recordsExported;
 }
 
 async function createObsBackfillExporter(
   config: ObservMeConfig,
   ctx: ObsBackfillCommandContext,
+  operationTimeoutMs: number,
   options: ObsBackfillOptions,
 ): Promise<ObsBackfillExporter> {
-  if (options.createExporter) return options.createExporter(config, ctx);
-  return createObsBackfillLogExporter(config);
+  throwIfBackfillAborted(ctx.signal);
+  const exporter = options.createExporter ? options.createExporter(config, ctx) : createObsBackfillLogExporter(config);
+  return runBackfillOperation(exporter, ctx.signal, operationTimeoutMs, "exporter setup");
+}
+
+async function shutdownObsBackfillExporter(
+  exporter: ObsBackfillExporter,
+  signal: AbortSignal | undefined,
+  operationTimeoutMs: number,
+  pendingError: unknown,
+): Promise<unknown> {
+  try {
+    await runBackfillOperation(exporter.shutdown?.({ signal }), undefined, operationTimeoutMs, "export shutdown");
+    return pendingError;
+  } catch (shutdownError) {
+    return pendingError ?? shutdownError;
+  }
+}
+
+async function runBackfillOperation<T>(
+  operation: Promise<T> | T,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  throwIfBackfillAborted(signal);
+
+  const abortPromise = createBackfillAbortPromise<T>(signal);
+  const timeoutPromise = createBackfillTimeoutPromise<T>(timeoutMs, label);
+
+  try {
+    return await Promise.race([Promise.resolve(operation), abortPromise.promise, timeoutPromise.promise]);
+  } finally {
+    abortPromise.cleanup();
+    timeoutPromise.cleanup();
+  }
+}
+
+function createBackfillAbortPromise<T>(signal: AbortSignal | undefined): { readonly promise: Promise<T>; readonly cleanup: () => void } {
+  if (!signal) return { promise: new Promise<T>(() => { /* never resolves */ }), cleanup: noop };
+
+  let cleanup = noop;
+  const promise = new Promise<T>((_resolve, reject) => {
+    const abortOperation = (): void => reject(new ObsBackfillInterruptedError("operation cancelled"));
+    signal.addEventListener("abort", abortOperation, { once: true });
+    cleanup = () => signal.removeEventListener("abort", abortOperation);
+  });
+  return { promise, cleanup };
+}
+
+function createBackfillTimeoutPromise<T>(timeoutMs: number, label: string): { readonly promise: Promise<T>; readonly cleanup: () => void } {
+  let timeout: NodeJS.Timeout | undefined;
+  const promise = new Promise<T>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new ObsBackfillInterruptedError(`${label} timed out`)), timeoutMs);
+  });
+  return { promise, cleanup: () => clearTimeout(timeout) };
+}
+
+function addExportCountToBackfillInterruption(error: unknown, recordsExported: number): unknown {
+  if (error instanceof ObsBackfillInterruptedError) return new ObsBackfillInterruptedError(error.reason, recordsExported);
+  return error;
 }
 
 function readCurrentSessionEntries(ctx: ObsBackfillCommandContext): readonly SessionEntry[] {
@@ -457,11 +631,9 @@ function resolveCurrentSessionId(ctx: ObsBackfillCommandContext): string | undef
 }
 
 function parseObsBackfillArgs(args: string): ParsedObsBackfillArgs {
-  const tokens = args.trim().split(/\s+/u).filter(isNonEmptyString);
-  const [subcommand, ...rest] = tokens;
-
-  if (subcommand?.toLowerCase() !== OBS_BACKFILL_SUBCOMMAND) return { error: undefined };
-  return parseObsBackfillFlags(rest);
+  const parsed = parseObsSubcommandArgs(args, OBS_BACKFILL_SUBCOMMAND);
+  if (!parsed.matched) return { error: undefined };
+  return parseObsBackfillFlags(parsed.values);
 }
 
 function parseObsBackfillFlags(tokens: readonly string[]): ParsedObsBackfillArgs {
@@ -472,26 +644,30 @@ function parseObsBackfillFlags(tokens: readonly string[]): ParsedObsBackfillArgs
   while (index < tokens.length) {
     const token = tokens[index];
     if (token === "--current-session") {
+      if (currentSession) return { error: "Repeated option: --current-session." };
       currentSession = true;
       index += 1;
       continue;
     }
 
     if (token === "--since") {
+      if (since !== undefined) return { error: "Repeated option: --since." };
       const value = tokens[index + 1];
-      if (!value) return { error: "Missing duration after --since." };
+      if (!value || value.startsWith("--")) return { error: missingObsOptionValueMessage("--since") };
       since = value;
       index += 2;
       continue;
     }
 
     if (token.startsWith("--since=")) {
+      if (since !== undefined) return { error: "Repeated option: --since." };
       since = token.slice("--since=".length);
+      if (!since) return { error: missingObsOptionValueMessage("--since") };
       index += 1;
       continue;
     }
 
-    return { error: `Unknown backfill option: ${token}` };
+    return { error: unknownObsOptionMessage(token) };
   }
 
   if (!currentSession) return { error: "Backfill requires --current-session so historical replay is always explicit." };
@@ -925,6 +1101,25 @@ function normalizeMaxRecords(value: number | undefined): number {
   return Math.trunc(value);
 }
 
+function normalizeBackfillOperationTimeoutMs(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value < 1) return OBS_BACKFILL_DEFAULT_OPERATION_TIMEOUT_MS;
+  return Math.trunc(value);
+}
+
+function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
+function throwIfBackfillAborted(signal: AbortSignal | undefined): void {
+  if (isAbortSignalAborted(signal)) throw new ObsBackfillInterruptedError("operation cancelled");
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  if (!isRecord(error)) return false;
+  const name = error["name"];
+  return typeof name === "string" && abortErrorNames.has(name);
+}
+
 function anyBackfillContentCaptureEnabled(config: ObservMeConfig): boolean {
   return (
     config.capture.prompts ||
@@ -940,6 +1135,15 @@ function anyBackfillContentCaptureEnabled(config: ObservMeConfig): boolean {
 function notificationTypeForSummary(summary: ObsBackfillSummary): "info" | "warning" {
   if (summary.status === "completed" && !summary.rateLimited && summary.redactionFailures === 0) return "info";
   return "warning";
+}
+
+function renderCancelledObsBackfillSummary(summary: ObsBackfillSummary): string {
+  const lines = [`ObservMe backfill cancelled: ${summary.reason ?? "user did not confirm"}.`];
+  if (summary.entriesScanned > 0) lines.push(`Entries scanned: ${summary.entriesScanned}`);
+  if (summary.entriesEligible > 0) lines.push(`Entries eligible: ${summary.entriesEligible}`);
+  if (summary.recordsExported > 0) lines.push(`Records exported before cancellation: ${summary.recordsExported}`);
+  if (summary.recordsSkipped > 0) lines.push(`Records not exported: ${summary.recordsSkipped}`);
+  return lines.join("\n");
 }
 
 async function notifyBackfill(
@@ -1011,6 +1215,12 @@ function formatBoolean(value: boolean): string {
   return value ? "yes" : "no";
 }
 
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function formatBackfillError(error: unknown): string {
+  if (error instanceof ObsBackfillInterruptedError) return error.reason;
+  if (isAbortLikeError(error)) return "operation cancelled";
+  return "operation failed";
+}
+
+function noop(): void {
+  // Intentionally empty.
 }

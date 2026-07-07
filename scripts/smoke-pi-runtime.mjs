@@ -22,6 +22,7 @@ const expectedGrafanaAuthorization = `Basic ${Buffer.from(`${smokeUsername}:${sm
 class SmokeBackendServer {
   constructor() {
     this.grafanaRequests = [];
+    this.slowPrometheusQueryDelayMs = 0;
     this.server = createServer(this.handleRequest.bind(this));
   }
 
@@ -43,12 +44,21 @@ class SmokeBackendServer {
     await once(this.server, "close");
   }
 
+  delayPrometheusQueries(delayMs) {
+    this.slowPrometheusQueryDelayMs = Math.max(0, Math.trunc(delayMs));
+  }
+
   handleRequest(request, response) {
     const requestUrl = request.url ?? "/";
     const authorization = String(request.headers.authorization ?? "");
 
     if (requestUrl.startsWith("/api/")) {
       this.grafanaRequests.push({ url: requestUrl, authorization });
+      if (this.shouldDelayPrometheusQuery(requestUrl)) {
+        this.respondToDelayedGrafanaRequest(authorization, response);
+        return;
+      }
+
       this.respondToGrafanaRequest(authorization, response);
       return;
     }
@@ -63,6 +73,20 @@ class SmokeBackendServer {
     }
 
     writeJsonResponse(response, 200, { status: "ok" });
+  }
+
+  respondToDelayedGrafanaRequest(authorization, response) {
+    const timeout = setTimeout(this.respondToDelayedGrafanaRequestNow.bind(this, authorization, response), this.slowPrometheusQueryDelayMs);
+    timeout.unref?.();
+  }
+
+  respondToDelayedGrafanaRequestNow(authorization, response) {
+    if (response.destroyed || response.writableEnded) return;
+    this.respondToGrafanaRequest(authorization, response);
+  }
+
+  shouldDelayPrometheusQuery(requestUrl) {
+    return this.slowPrometheusQueryDelayMs > 0 && requestUrl.startsWith("/api/datasources/proxy/uid/prometheus/api/v1/query");
   }
 
   assertAuthenticatedGrafanaProbes() {
@@ -243,8 +267,9 @@ async function main() {
     await assertObsSessionCommand(client);
     await assertObsHealthCommand(client);
     backend.assertAuthenticatedGrafanaProbes();
+    await assertObsCostTimeoutCommand(client, backend);
 
-    console.log("Pi runtime smoke passed: real RPC process discovered /obs and executed status, session, and health commands.");
+    console.log("Pi runtime smoke passed: real RPC process discovered /obs and executed status, session, health, and bounded query commands.");
   } finally {
     await client?.stop();
     await backend.close();
@@ -317,7 +342,7 @@ function renderSmokeObservMeConfig(baseUrl) {
     allowInsecureTransport: true
     customRedactionPatterns: []
   query:
-    timeoutMs: 1000
+    timeoutMs: 500
     links:
       traceUrlTemplate: ${baseUrl}/explore?traceId=\${traceId}
     grafana:
@@ -374,6 +399,23 @@ async function assertObsHealthCommand(client) {
   assert.match(message, /Tempo datasource: ok/u, "/obs health should verify the Tempo datasource");
   assert.match(message, /Loki datasource: ok/u, "/obs health should verify the Loki datasource");
   assert.match(message, /Metrics datasource: ok/u, "/obs health should verify the Prometheus datasource");
+}
+
+async function assertObsCostTimeoutCommand(client, backend) {
+  const notification = client.waitForNotifyMessage("ObservMe cost unavailable:");
+  const startedAtMs = Date.now();
+
+  backend.delayPrometheusQueries(2_000);
+  try {
+    await client.request({ type: "prompt", message: "/obs cost" });
+    const message = await notification;
+    const elapsedMs = Date.now() - startedAtMs;
+
+    assert.match(message, /Prometheus query timed out\./u, "/obs cost should surface the query timeout reason");
+    assert.ok(elapsedMs < 1_500, `/obs cost should complete within the bounded query timeout, got ${elapsedMs}ms`);
+  } finally {
+    backend.delayPrometheusQueries(0);
+  }
 }
 
 async function waitForProcessExit(child, timeoutMs) {

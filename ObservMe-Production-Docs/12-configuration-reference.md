@@ -292,9 +292,12 @@ privacy:
 capture:
   prompts: true
   responses: true
+  thinking: true
   toolArguments: true
   toolResults: true
 ```
+
+To show LLM chat content in Grafana Tempo and Loki, set `OBSERVME_CAPTURE_PROMPTS=true`, `OBSERVME_CAPTURE_RESPONSES=true`, `OBSERVME_CAPTURE_THINKING=true`, keep `OBSERVME_REDACTION_ENABLED=true`, and acknowledge with `OBSERVME_ALLOW_UNSAFE_CAPTURE=true`. The dashboard shows only new LLM events emitted after these settings and the updated Collector are active; older data dropped by the Collector cannot be recovered.
 
 ObservMe must display a warning when unsafe capture is active. Unsafe mode must still pass all configured redactors unless redaction is explicitly disabled with a separately validated exception.
 

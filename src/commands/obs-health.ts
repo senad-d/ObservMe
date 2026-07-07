@@ -3,6 +3,7 @@ import type { LoadSessionConfigOptions } from "../config/load-config.ts";
 import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import { getGrafanaHealth, type GrafanaFetch } from "../query/grafana.ts";
+import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
 
 export interface ObsHealthCommandContext {
@@ -97,9 +98,7 @@ export async function handleObsHealthCommand(
 }
 
 export function getObsHealthCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
-  const normalizedPrefix = prefix.trim().toLowerCase();
-  if (!OBS_HEALTH_SUBCOMMAND.startsWith(normalizedPrefix)) return null;
-  return [{ value: OBS_HEALTH_SUBCOMMAND, label: OBS_HEALTH_SUBCOMMAND }];
+  return completeObsSubcommand(prefix, OBS_HEALTH_SUBCOMMAND);
 }
 
 export async function getObsHealthSnapshot(
@@ -278,8 +277,7 @@ function resolveCollectorHealthFetch(fetcher: ObsHealthFetch | undefined): ObsHe
 }
 
 function isObsHealthRequest(args: string): boolean {
-  const [subcommand] = args.trim().toLowerCase().split(/\s+/u);
-  return subcommand === OBS_HEALTH_SUBCOMMAND;
+  return isExactObsSubcommandRequest(args, OBS_HEALTH_SUBCOMMAND);
 }
 
 async function notifyHealth(

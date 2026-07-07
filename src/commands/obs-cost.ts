@@ -4,6 +4,7 @@ import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../query/prometheus.ts";
 import { createPrometheusQueryClient } from "../query/prometheus.ts";
+import { completeObsSubcommand, parseObsSubcommandArgs } from "./obs-args.ts";
 import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
 
 export interface ObsCostCommandContext {
@@ -94,9 +95,7 @@ export async function handleObsCostCommand(
 }
 
 export function getObsCostCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
-  const normalizedPrefix = prefix.trim().toLowerCase();
-  if (!OBS_COST_SUBCOMMAND.startsWith(normalizedPrefix)) return null;
-  return [{ value: OBS_COST_SUBCOMMAND, label: OBS_COST_SUBCOMMAND }];
+  return completeObsSubcommand(prefix, OBS_COST_SUBCOMMAND);
 }
 
 export async function getObsCostSnapshot(
@@ -215,20 +214,15 @@ function isObsCostRow(row: ObsCostRow | undefined): row is ObsCostRow {
 }
 
 function parseObsCostRequest(args: string): ObsCostRequestStatus {
-  const tokens = args.trim().toLowerCase().split(/\s+/u).filter(isNonEmptyString);
-  const [subcommand, ...rest] = tokens;
-
-  if (subcommand !== OBS_COST_SUBCOMMAND) return "usage";
-  if (rest.some(isSessionScopeCostToken)) return "session-disabled";
-  return rest.length === 0 ? "cost" : "usage";
+  const parsed = parseObsSubcommandArgs(args, OBS_COST_SUBCOMMAND);
+  if (!parsed.matched) return "usage";
+  if (parsed.values.some(isSessionScopeCostToken)) return "session-disabled";
+  return parsed.values.length === 0 ? "cost" : "usage";
 }
 
 function isSessionScopeCostToken(token: string): boolean {
-  return token === "--session" || token.startsWith("--session=") || token === "--current-session";
-}
-
-function isNonEmptyString(value: string): boolean {
-  return value.length > 0;
+  const normalizedToken = token.toLowerCase();
+  return normalizedToken === "--session" || normalizedToken.startsWith("--session=") || normalizedToken === "--current-session";
 }
 
 async function notifyCost(ctx: ObsCostCommandContext, message: string, type: "info" | "warning" | "error"): Promise<void> {

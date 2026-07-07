@@ -4,6 +4,7 @@ import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { LokiFetch } from "../query/loki.ts";
 import { createLokiQueryClient } from "../query/loki.ts";
+import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { appendObsRecoveryHint, formatObsCommandFailure, readObsDiagnosticMessage, type ObsCommandRecoveryHint } from "./obs-diagnostics.ts";
 import type { ObsLokiLogSummaryRow, ObsLokiTimeRangeOptions } from "./obs-loki-summary.ts";
 import {
@@ -50,7 +51,7 @@ export interface RegisterObsLogsCommandOptions extends ObsLogsSnapshotOptions {
   readonly getLogs?: ObsLogsProvider;
 }
 
-export const OBS_LOGS_LOGQL_PREFIX = '{service_name="observme-pi-extension", pi_session_id=';
+export const OBS_LOGS_LOGQL_PREFIX = '{service_name="observme-pi-extension", event_category!="llm_content", pi_session_id=';
 
 const OBS_COMMAND_NAME = "obs";
 const OBS_LOGS_SUBCOMMAND = "logs";
@@ -95,9 +96,7 @@ export async function handleObsLogsCommand(
 }
 
 export function getObsLogsCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
-  const normalizedPrefix = prefix.trim().toLowerCase();
-  if (!OBS_LOGS_SUBCOMMAND.startsWith(normalizedPrefix)) return null;
-  return [{ value: OBS_LOGS_SUBCOMMAND, label: OBS_LOGS_SUBCOMMAND }];
+  return completeObsSubcommand(prefix, OBS_LOGS_SUBCOMMAND);
 }
 
 export async function getObsLogsSnapshot(
@@ -203,13 +202,7 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
 }
 
 function isObsLogsRequest(args: string): boolean {
-  const tokens = args.trim().toLowerCase().split(/\s+/u).filter(isNonEmptyString);
-  const [subcommand, ...rest] = tokens;
-  return subcommand === OBS_LOGS_SUBCOMMAND && rest.length === 0;
-}
-
-function isNonEmptyString(value: string): boolean {
-  return value.length > 0;
+  return isExactObsSubcommandRequest(args, OBS_LOGS_SUBCOMMAND);
 }
 
 async function notifyLogs(

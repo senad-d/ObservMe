@@ -4,6 +4,13 @@ import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import { createGrafanaQueryClient, type GrafanaFetch } from "../query/grafana.ts";
 import type { TimeRange, TraceSummary } from "../query/tempo.ts";
+import {
+  completeObsSubcommand,
+  missingObsOptionValueMessage,
+  obsUsageWithError,
+  parseObsSubcommandArgs,
+  unknownObsOptionMessage,
+} from "./obs-args.ts";
 import { formatObsCommandFailure, readObsDiagnosticMessage, type ObsCommandRecoveryHint } from "./obs-diagnostics.ts";
 import { searchTempo } from "../query/tempo.ts";
 import { COMMON_SPAN_ATTRIBUTES } from "../semconv/attributes.ts";
@@ -70,6 +77,11 @@ interface ObsTraceTarget {
   readonly sessionId?: string;
 }
 
+export interface ParsedObsTraceRequest {
+  readonly request?: ObsTraceRequest;
+  readonly error?: string;
+}
+
 const OBS_COMMAND_NAME = "obs";
 const OBS_TRACE_SUBCOMMAND = "trace";
 const OBS_TRACE_USAGE = "Usage: /obs trace [--last-turn|--session <session-id>]";
@@ -103,12 +115,14 @@ export async function handleObsTraceCommand(
   ctx: ObsTraceCommandContext,
   options: RegisterObsTraceCommandOptions = {},
 ): Promise<void> {
-  const request = parseObsTraceRequestForSubcommand(args, OBS_TRACE_SUBCOMMAND);
+  const parsed = parseObsTraceArgsForSubcommand(args, OBS_TRACE_SUBCOMMAND);
 
-  if (!request) {
-    await notifyTrace(ctx, OBS_TRACE_USAGE, "warning");
+  if (!parsed.request) {
+    await notifyTrace(ctx, obsUsageWithError(OBS_TRACE_USAGE, parsed.error), "warning");
     return;
   }
+
+  const request = parsed.request;
 
   try {
     const snapshot = await resolveObsTraceSnapshot(ctx, request, options);
@@ -119,9 +133,7 @@ export async function handleObsTraceCommand(
 }
 
 export function getObsTraceCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
-  const normalizedPrefix = prefix.trim().toLowerCase();
-  if (!OBS_TRACE_SUBCOMMAND.startsWith(normalizedPrefix)) return null;
-  return [{ value: OBS_TRACE_SUBCOMMAND, label: OBS_TRACE_SUBCOMMAND }];
+  return completeObsSubcommand(prefix, OBS_TRACE_SUBCOMMAND);
 }
 
 export async function getObsTraceSnapshot(
@@ -163,11 +175,13 @@ export function renderObsTraceWithTitle(snapshot: ObsTraceSnapshot, title: strin
 }
 
 export function parseObsTraceRequestForSubcommand(args: string, subcommand: string): ObsTraceRequest | undefined {
-  const tokens = tokenizeObsTraceArgs(args);
-  const [rawSubcommand, ...optionTokens] = tokens;
+  return parseObsTraceArgsForSubcommand(args, subcommand).request;
+}
 
-  if (rawSubcommand?.toLowerCase() !== subcommand) return undefined;
-  return parseObsTraceOptions(optionTokens);
+export function parseObsTraceArgsForSubcommand(args: string, subcommand: string): ParsedObsTraceRequest {
+  const parsed = parseObsSubcommandArgs(args, subcommand);
+  if (!parsed.matched) return {};
+  return parseObsTraceOptions(parsed.values);
 }
 
 class ObsTraceCommand {
@@ -329,29 +343,56 @@ function normalizeTurnCount(value: number | undefined): number {
   return Math.trunc(value);
 }
 
-function parseObsTraceOptions(tokens: readonly string[]): ObsTraceRequest | undefined {
-  const [first, second, ...rest] = tokens;
+function parseObsTraceOptions(tokens: readonly string[]): ParsedObsTraceRequest {
+  if (tokens.length === 0) return { request: defaultObsTraceRequest };
 
-  if (first === undefined) return defaultObsTraceRequest;
-  if (rest.length > 0) return undefined;
-  if (isCurrentSessionToken(first) && second === undefined) return defaultObsTraceRequest;
-  if (first.toLowerCase() === "--last-turn" && second === undefined) return { scope: "last-turn" };
-  if (first.toLowerCase() === "--session" && second !== undefined) return { scope: "session", sessionId: second };
-  if (first.toLowerCase().startsWith("--session=") && second === undefined) return parseInlineSessionRequest(first);
-  return undefined;
-}
+  let request: ObsTraceRequest | undefined;
+  let index = 0;
 
-function parseInlineSessionRequest(token: string): ObsTraceRequest | undefined {
-  const sessionId = token.slice("--session=".length);
-  return sessionId ? { scope: "session", sessionId } : undefined;
+  while (index < tokens.length) {
+    const token = tokens[index];
+    const normalizedToken = token.toLowerCase();
+
+    if (isCurrentSessionToken(normalizedToken)) {
+      if (request) return { error: `Repeated or conflicting option: ${token}.` };
+      request = defaultObsTraceRequest;
+      index += 1;
+      continue;
+    }
+
+    if (normalizedToken === "--last-turn") {
+      if (request) return { error: `Repeated or conflicting option: ${token}.` };
+      request = { scope: "last-turn" };
+      index += 1;
+      continue;
+    }
+
+    if (normalizedToken === "--session") {
+      if (request) return { error: `Repeated or conflicting option: ${token}.` };
+      const sessionId = tokens[index + 1];
+      if (!sessionId || sessionId.startsWith("--")) return { error: missingObsOptionValueMessage("--session") };
+      request = { scope: "session", sessionId };
+      index += 2;
+      continue;
+    }
+
+    if (normalizedToken.startsWith("--session=")) {
+      if (request) return { error: "Repeated or conflicting option: --session." };
+      const sessionId = token.slice("--session=".length);
+      if (!sessionId) return { error: missingObsOptionValueMessage("--session") };
+      request = { scope: "session", sessionId };
+      index += 1;
+      continue;
+    }
+
+    return { error: unknownObsOptionMessage(token) };
+  }
+
+  return { request: request ?? defaultObsTraceRequest };
 }
 
 function isCurrentSessionToken(token: string): boolean {
-  return token.toLowerCase() === "--current-session";
-}
-
-function tokenizeObsTraceArgs(args: string): string[] {
-  return args.trim().split(/\s+/u).filter(isString);
+  return token === "--current-session";
 }
 
 function formatObsTraceScope(scope: ObsTraceScope): string {
