@@ -6,6 +6,8 @@ import {
   formatGrafanaHttpFailure,
   resolveGrafanaFetch,
 } from "./grafana-transport.ts";
+import type { GrafanaQueryDatasourceKey } from "./grafana-readiness.ts";
+import { formatGrafanaQueryReadiness, getGrafanaQueryReadiness } from "./grafana-readiness.ts";
 
 export type { GrafanaFetch } from "./grafana-transport.ts";
 export type GrafanaHealthCheckKind = "service" | "datasource";
@@ -38,6 +40,7 @@ interface GrafanaHealthTarget {
 
 interface GrafanaDatasourceDefinition {
   readonly label: string;
+  readonly key: GrafanaQueryDatasourceKey;
   readonly uid: string;
   readonly fallbackHealthPath?: string;
 }
@@ -155,8 +158,8 @@ async function checkGrafanaReachability(
   fetcher: GrafanaFetch,
   timeoutMs: number,
 ): Promise<GrafanaHealthCheckResult> {
-  const skipped = resolveGrafanaSkippedResult(config, "Grafana", "service");
-  if (skipped) return skipped;
+  const preflight = resolveGrafanaPreflightResult(config, "Grafana", "service");
+  if (preflight) return preflight;
 
   try {
     const target = createGrafanaHealthTarget(config);
@@ -172,8 +175,8 @@ async function checkDatasourceReachability(
   fetcher: GrafanaFetch,
   timeoutMs: number,
 ): Promise<GrafanaHealthCheckResult> {
-  const skipped = resolveGrafanaSkippedResult(config, datasource.label, "datasource");
-  if (skipped) return skipped;
+  const preflight = resolveGrafanaPreflightResult(config, datasource.label, "datasource", datasource.key);
+  if (preflight) return preflight;
 
   try {
     const target = createDatasourceHealthTarget(config, datasource);
@@ -261,19 +264,28 @@ function buildGrafanaApiUrl(baseUrl: string, apiPath: string): string {
 function createDatasourceDefinitions(config: ObservMeConfig): GrafanaDatasourceDefinition[] {
   return datasourceDefinitions.map(definition => ({
     label: definition.label,
+    key: definition.key,
     uid: config.query.grafana.datasourceUids[definition.key],
     fallbackHealthPath: definition.fallbackHealthPath,
   }));
 }
 
-function resolveGrafanaSkippedResult(
+function resolveGrafanaPreflightResult(
   config: ObservMeConfig,
   label: string,
   kind: GrafanaHealthCheckKind,
+  datasourceKey?: GrafanaQueryDatasourceKey,
 ): GrafanaHealthCheckResult | undefined {
-  if (!config.query.enabled) return skippedHealthResult(label, kind, "query disabled");
-  if (!config.query.grafana.url.trim()) return skippedHealthResult(label, kind, "Grafana URL not configured");
-  return undefined;
+  const readiness = getGrafanaQueryReadiness(config, datasourceKey);
+  if (readiness.status === "ready") return undefined;
+  if (readiness.status === "disabled") return skippedHealthResult(label, kind, "query disabled");
+
+  return {
+    label,
+    kind,
+    status: "failed",
+    detail: formatGrafanaQueryReadiness(readiness),
+  };
 }
 
 function responseToHealthResult(target: GrafanaHealthTarget, response: Response): GrafanaHealthCheckResult {

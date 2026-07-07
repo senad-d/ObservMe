@@ -9,6 +9,8 @@ import {
   formatGrafanaHttpFailure,
   resolveGrafanaFetch,
 } from "../query/grafana-transport.ts";
+import type { GrafanaQueryDatasourceKey } from "../query/grafana-readiness.ts";
+import { formatGrafanaQueryReadiness, getGrafanaQueryReadiness } from "../query/grafana-readiness.ts";
 
 export interface ObsHealthCommandContext {
   readonly cwd?: string;
@@ -60,6 +62,7 @@ interface HttpHealthTarget {
 
 interface DatasourceDefinition {
   readonly label: string;
+  readonly key: GrafanaQueryDatasourceKey;
   readonly uid: string;
   readonly fallbackHealthPath?: string;
 }
@@ -159,6 +162,7 @@ async function loadObsHealthConfig(
 function createDatasourceDefinitions(config: ObservMeConfig): DatasourceDefinition[] {
   return datasourceDefinitions.map(definition => ({
     label: definition.label,
+    key: definition.key,
     uid: config.query.grafana.datasourceUids[definition.key],
     fallbackHealthPath: definition.fallbackHealthPath,
   }));
@@ -185,8 +189,8 @@ async function checkGrafanaReachability(
   fetcher: ObsHealthFetch,
   timeoutMs: number,
 ): Promise<ObsHealthCheckResult> {
-  const skipped = resolveGrafanaSkippedResult(config, "Grafana", "service");
-  if (skipped) return skipped;
+  const preflight = resolveGrafanaPreflightResult(config, "Grafana", "service");
+  if (preflight) return preflight;
 
   try {
     const target = createGrafanaHealthTarget(config);
@@ -202,8 +206,8 @@ async function checkDatasourceReachability(
   fetcher: ObsHealthFetch,
   timeoutMs: number,
 ): Promise<ObsHealthCheckResult> {
-  const skipped = resolveGrafanaSkippedResult(config, datasource.label, "datasource");
-  if (skipped) return skipped;
+  const preflight = resolveGrafanaPreflightResult(config, datasource.label, "datasource", datasource.key);
+  if (preflight) return preflight;
 
   try {
     const target = createDatasourceHealthTarget(config, datasource);
@@ -297,14 +301,22 @@ function hasUnresolvedEnvironmentPlaceholder(value: string): boolean {
   return /\$\{[A-Z0-9_]+\}/u.test(value);
 }
 
-function resolveGrafanaSkippedResult(
+function resolveGrafanaPreflightResult(
   config: ObservMeConfig,
   label: string,
   kind: ObsHealthCheckKind,
+  datasourceKey?: GrafanaQueryDatasourceKey,
 ): ObsHealthCheckResult | undefined {
-  if (!config.query.enabled) return skippedHealthResult(label, kind, "query disabled");
-  if (!config.query.grafana.url.trim()) return skippedHealthResult(label, kind, "Grafana URL not configured");
-  return undefined;
+  const readiness = getGrafanaQueryReadiness(config, datasourceKey);
+  if (readiness.status === "ready") return undefined;
+  if (readiness.status === "disabled") return skippedHealthResult(label, kind, "query disabled");
+
+  return {
+    label,
+    kind,
+    status: "failed",
+    detail: formatGrafanaQueryReadiness(readiness),
+  };
 }
 
 function responseToHealthResult(target: HttpHealthTarget, response: Response): ObsHealthCheckResult {

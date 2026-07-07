@@ -2,6 +2,7 @@
 
 ## 0.1.0 - 2026-07-07
 
+- Added Grafana query readiness preflight so query-backed `/obs` commands and `/obs health` fail fast on unresolved tokens, missing auth, invalid Grafana URLs, or missing datasource UIDs without exposing credential values.
 - Added resilient Grafana query transport/auth handling for `/obs` commands: bearer tokens, local Basic auth fallback, local self-signed TLS and IPv4 transport options, and secret-safe 401/403/TLS/DNS/timeout diagnostics.
 - Aligned Loki label provisioning, `/obs errors` and `/obs logs` LogQL, and Loki-backed dashboard selectors with the local Collector output, including `service.name`, `event_name`, `event_category`, and session labels.
 - Completed the ObservMe MVP scope from `ObservMe-Production-Docs/00-README.md`: extension load and health checks, session/workflow/agent/turn/LLM/tool/bash/subagent/compaction/branch/model telemetry, OTLP trace/metric/log exporters, privacy-preserving redaction and capture controls, bounded queues/timeouts, Grafana dashboards, Collector configs, tests, and the required `/obs` commands.

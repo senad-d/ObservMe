@@ -6,6 +6,7 @@ import {
   formatGrafanaHttpFailure,
   resolveGrafanaFetch,
 } from "./grafana-transport.ts";
+import { assertGrafanaQueryReady } from "./grafana-readiness.ts";
 
 export type PrometheusFetch = GrafanaFetch;
 export type PrometheusResultLimit = "metricSeries" | "agents";
@@ -121,8 +122,9 @@ export async function queryPrometheus(
   time?: Date,
   options: PrometheusQueryOptions = {},
 ): Promise<QueryResult> {
-  if (isPrometheusQueryUnavailable(config)) return emptyPrometheusQueryResult();
+  if (!config.query.enabled) return emptyPrometheusQueryResult();
 
+  assertGrafanaQueryReady(config, "prometheus");
   const normalizedQuery = normalizePrometheusQuery(query);
   const queryTime = normalizeQueryTime(time);
   const resultLimit = resolveResultLimit(config, options.resultLimit);
@@ -365,14 +367,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isPrometheusQueryUnavailable(config: ObservMeConfig): boolean {
-  return !config.query.enabled || !config.query.grafana.url.trim() || !config.query.grafana.datasourceUids.prometheus.trim();
-}
-
 function emptyPrometheusQueryResult(): QueryResult {
   return { resultType: "vector", series: [] };
 }
-
 
 function resolveResultLimit(config: ObservMeConfig, limit: PrometheusResultLimit | number | undefined): number {
   if (limit === "agents") return resolveMaxAgents(config);

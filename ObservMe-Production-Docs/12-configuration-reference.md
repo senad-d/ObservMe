@@ -266,6 +266,7 @@ Rules:
 
 - A resolved `query.grafana.token` is sent as `Authorization: Bearer ...` and takes precedence.
 - When the token is blank or an unresolved placeholder, a resolved `query.grafana.username` and `query.grafana.password` are sent as Basic auth for local development.
+- Query-backed commands and `/obs health` must fail fast before Grafana calls when `query.grafana.token` is unresolved, auth is missing/incomplete, `query.grafana.url` is invalid, or a required datasource UID is blank.
 - `/obs health` must report Grafana `401`/`403` responses as authentication failures and must not print token or password values.
 - `tls.insecureSkipVerify=true` is only for local self-signed certificates; production should trust the CA instead.
 - `transport.preferIPv4=true` uses Node's local HTTP(S) transport with IPv4 DNS lookup for Grafana calls.

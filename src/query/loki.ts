@@ -6,6 +6,7 @@ import {
   formatGrafanaHttpFailure,
   resolveGrafanaFetch,
 } from "./grafana-transport.ts";
+import { assertGrafanaQueryReady } from "./grafana-readiness.ts";
 
 export type LokiFetch = GrafanaFetch;
 
@@ -72,8 +73,9 @@ export async function queryLoki(
   range: TimeRange,
   options: LokiQueryClientOptions = {},
 ): Promise<LogResult[]> {
-  if (isLokiQueryUnavailable(config)) return [];
+  if (!config.query.enabled) return [];
 
+  assertGrafanaQueryReady(config, "loki");
   const normalizedQuery = normalizeLokiQuery(query);
   const timeRange = normalizeTimeRange(range);
   const maxLogs = resolveMaxLogs(config);
@@ -315,11 +317,6 @@ function isLogResult(value: LogResult | undefined): value is LogResult {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-function isLokiQueryUnavailable(config: ObservMeConfig): boolean {
-  return !config.query.enabled || !config.query.grafana.url.trim() || !config.query.grafana.datasourceUids.loki.trim();
-}
-
 
 function resolveQueryTimeoutMs(config: ObservMeConfig): number {
   const timeoutMs = config.query.timeoutMs;

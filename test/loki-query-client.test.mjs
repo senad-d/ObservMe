@@ -130,6 +130,7 @@ test("Loki attribute normalization converts dotted OTEL attribute names to Loki 
 test("queryLoki rejects raw prompt, command, path, and environment query inputs before fetching", async () => {
   const config = cloneDefaultConfig();
   config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
   const fetcher = async () => {
     throw new Error("fetch should not be called for unsafe Loki query inputs");
   };
@@ -162,6 +163,7 @@ test("queryLoki applies query.timeoutMs as an aborting fetch timeout", async () 
   const config = cloneDefaultConfig();
   config.query.timeoutMs = 1;
   config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
   const signals = [];
 
   await assert.rejects(
@@ -171,6 +173,48 @@ test("queryLoki applies query.timeoutMs as an aborting fetch timeout", async () 
     /Loki query timed out/u,
   );
   assert.equal(signals.length, 1);
+});
+
+test("queryLoki rejects unresolved Grafana token before fetching", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "${OBSERVME_GRAFANA_TOKEN}";
+  let fetchCalls = 0;
+
+  await assert.rejects(
+    queryLoki(config, '{service_name="observme-pi-extension"}', defaultRange, {
+      fetch: async () => {
+        fetchCalls += 1;
+        throw new Error("fetch should not run when query auth is unresolved");
+      },
+    }),
+    error => {
+      assert.match(error.message, /Grafana query configuration is not ready/u);
+      assert.match(error.message, /query\.grafana\.token is unresolved/u);
+      assert.doesNotMatch(error.message, /\$\{OBSERVME_GRAFANA_TOKEN\}/u);
+      return true;
+    },
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("queryLoki rejects missing Loki datasource UID before fetching", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  config.query.grafana.datasourceUids.loki = "";
+  let fetchCalls = 0;
+
+  await assert.rejects(
+    queryLoki(config, '{service_name="observme-pi-extension"}', defaultRange, {
+      fetch: async () => {
+        fetchCalls += 1;
+        throw new Error("fetch should not run when the Loki datasource UID is missing");
+      },
+    }),
+    /query\.grafana\.datasourceUids\.loki is not configured/u,
+  );
+  assert.equal(fetchCalls, 0);
 });
 
 test("queryLoki is optional and skips network calls when query integration is disabled", async () => {

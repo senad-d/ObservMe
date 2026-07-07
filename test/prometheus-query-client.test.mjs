@@ -156,10 +156,10 @@ test("Prometheus queries support local Grafana Basic auth when bearer token is u
   assert.equal(result.series.length, 3);
 });
 
-test("Prometheus queries report missing Grafana auth on 401 without exposing placeholders", async () => {
+test("Prometheus queries report configured Grafana auth failures on 401 without exposing token values", async () => {
   const config = cloneDefaultConfig();
   config.query.grafana.url = "http://grafana.local";
-  config.query.grafana.token = "${OBSERVME_GRAFANA_TOKEN}";
+  config.query.grafana.token = "bad-token";
 
   await assert.rejects(
     queryPrometheus(config, "observme_sessions_started_total", undefined, {
@@ -167,11 +167,71 @@ test("Prometheus queries report missing Grafana auth on 401 without exposing pla
     }),
     error => {
       assert.match(error.message, /Prometheus query failed: HTTP 401 Unauthorized/u);
+      assert.match(error.message, /Grafana authentication failed/u);
+      assert.doesNotMatch(error.message, /bad-token/u);
+      return true;
+    },
+  );
+});
+
+test("queryPrometheus rejects unresolved Grafana token before fetching", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "${OBSERVME_GRAFANA_TOKEN}";
+  let fetchCalls = 0;
+
+  await assert.rejects(
+    queryPrometheus(config, "observme_sessions_started_total", undefined, {
+      fetch: async () => {
+        fetchCalls += 1;
+        throw new Error("fetch should not run when query auth is unresolved");
+      },
+    }),
+    error => {
+      assert.match(error.message, /Grafana query configuration is not ready/u);
       assert.match(error.message, /query\.grafana\.token is unresolved/u);
       assert.doesNotMatch(error.message, /\$\{OBSERVME_GRAFANA_TOKEN\}/u);
       return true;
     },
   );
+  assert.equal(fetchCalls, 0);
+});
+
+test("queryPrometheus rejects blank Grafana auth before fetching", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "";
+  let fetchCalls = 0;
+
+  await assert.rejects(
+    queryPrometheus(config, "observme_sessions_started_total", undefined, {
+      fetch: async () => {
+        fetchCalls += 1;
+        throw new Error("fetch should not run when query auth is missing");
+      },
+    }),
+    /query\.grafana\.token is missing/u,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("queryPrometheus rejects missing Prometheus datasource UID before fetching", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  config.query.grafana.datasourceUids.prometheus = "";
+  let fetchCalls = 0;
+
+  await assert.rejects(
+    queryPrometheus(config, "observme_sessions_started_total", undefined, {
+      fetch: async () => {
+        fetchCalls += 1;
+        throw new Error("fetch should not run when the Prometheus datasource UID is missing");
+      },
+    }),
+    /query\.grafana\.datasourceUids\.prometheus is not configured/u,
+  );
+  assert.equal(fetchCalls, 0);
 });
 
 test("queryPrometheus caps agent summaries by query.maxAgents when requested", async () => {
@@ -179,6 +239,7 @@ test("queryPrometheus caps agent summaries by query.maxAgents when requested", a
   config.query.maxMetricSeries = 20;
   config.query.maxAgents = 1;
   config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
   const calls = [];
   const fetcher = async input => {
     calls.push(String(input));
@@ -201,6 +262,7 @@ test("queryPrometheus caps agent summaries by query.maxAgents when requested", a
 test("documented Prometheus queries built by the client avoid forbidden high-cardinality labels", async () => {
   const config = cloneDefaultConfig();
   config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
   const calls = [];
   const fetcher = async input => {
     calls.push(String(input));
@@ -221,6 +283,7 @@ test("documented Prometheus queries built by the client avoid forbidden high-car
 test("queryPrometheus rejects forbidden high-cardinality Prometheus labels before fetching", async () => {
   const config = cloneDefaultConfig();
   config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
   const fetcher = async () => {
     throw new Error("fetch should not be called for unsafe Prometheus query inputs");
   };
@@ -243,6 +306,7 @@ test("queryPrometheus rejects forbidden high-cardinality Prometheus labels befor
 test("queryPrometheus rejects raw prompt, command, path, and environment query inputs before fetching", async () => {
   const config = cloneDefaultConfig();
   config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
   const fetcher = async () => {
     throw new Error("fetch should not be called for unsafe Prometheus query inputs");
   };
@@ -275,6 +339,7 @@ test("queryPrometheus applies query.timeoutMs as an aborting fetch timeout", asy
   const config = cloneDefaultConfig();
   config.query.timeoutMs = 1;
   config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
   const signals = [];
 
   await assert.rejects(

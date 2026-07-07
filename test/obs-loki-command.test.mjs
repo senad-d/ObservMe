@@ -138,6 +138,7 @@ test("/obs logs queries the current session with normalized pi_session_id and ca
   const config = cloneDefaultConfig();
   config.query.maxLogs = 2;
   config.query.grafana.url = "http://grafana.local/grafana/";
+  config.query.grafana.token = "grafana-token";
   config.query.grafana.datasourceUids.loki = "loki/main";
 
   const calls = [];

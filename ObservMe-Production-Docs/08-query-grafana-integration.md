@@ -45,6 +45,7 @@ Authentication and local transport behavior:
 
 - Prefer `query.grafana.token` for Grafana service-account or bearer tokens.
 - If the token is blank or an unresolved environment placeholder, ObservMe may use `query.grafana.username` plus `query.grafana.password` as a local-development Basic auth fallback.
+- Query-backed commands fail fast before backend calls when `query.grafana.token` is unresolved, auth is missing/incomplete, `query.grafana.url` is invalid, or a required datasource UID is blank.
 - `401` and `403` responses are surfaced as Grafana authentication failures without printing token or password values.
 - For the bundled `observability-stack/` behind `https://observability.local`, set `query.grafana.tls.insecureSkipVerify=true` only for the local self-signed certificate and `query.grafana.transport.preferIPv4=true` when DNS resolution stalls on IPv6.
 
@@ -69,7 +70,7 @@ Last export error: none
 
 ### `/obs health`
 
-Checks Collector and Grafana reachability.
+Checks Collector and Grafana reachability, and reports Grafana query auth/config readiness before datasource calls.
 
 ```text
 Collector: reachable

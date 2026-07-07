@@ -85,7 +85,7 @@ The documented commands and dashboards query Loki with selectors such as `{servi
 - `/obs errors` and `/obs logs` have tests proving their LogQL selectors work against representative Loki payloads and local stack configuration.
 - Documentation, examples, and dashboard selectors do not contradict the implemented Collector/Loki label strategy.
 
-- [ ] Surface unresolved Grafana token and query-configuration problems before running backend queries
+- [x] Surface unresolved Grafana token and query-configuration problems before running backend queries
 
 #### Why
 

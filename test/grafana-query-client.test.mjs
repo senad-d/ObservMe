@@ -166,10 +166,35 @@ test("Grafana health falls back to Tempo proxy readiness when plugin health is u
   assert.ok(calls.includes("http://grafana.local/api/datasources/proxy/uid/tempo/ready"));
 });
 
-test("Grafana health reports unresolved or missing auth as actionable 401 diagnostics", async () => {
+test("Grafana health reports unresolved auth before making backend calls", async () => {
   const config = cloneDefaultConfig();
   config.query.grafana.url = "http://grafana.local";
   config.query.grafana.token = "${OBSERVME_GRAFANA_TOKEN}";
+  let fetchCalls = 0;
+
+  const health = await getGrafanaHealth(config, {
+    fetch: async () => {
+      fetchCalls += 1;
+      throw new Error("fetch should not run when query auth is unresolved");
+    },
+  });
+
+  assert.equal(fetchCalls, 0);
+  assert.deepEqual(
+    health.checks.map(check => check.status),
+    ["failed", "failed", "failed", "failed"],
+  );
+  for (const check of health.checks) {
+    assert.match(check.detail, /Grafana query configuration is not ready/u);
+    assert.match(check.detail, /query\.grafana\.token is unresolved/u);
+    assert.doesNotMatch(check.detail, /\$\{OBSERVME_GRAFANA_TOKEN\}/u);
+  }
+});
+
+test("Grafana health reports configured auth failures as 401 diagnostics", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "bad-token";
 
   const health = await getGrafanaHealth(config, {
     fetch: async () => new Response("{}", { status: 401, statusText: "Unauthorized" }),
@@ -181,8 +206,8 @@ test("Grafana health reports unresolved or missing auth as actionable 401 diagno
   );
   for (const check of health.checks) {
     assert.match(check.detail, /HTTP 401 Unauthorized/u);
-    assert.match(check.detail, /query\.grafana\.token is unresolved/u);
-    assert.doesNotMatch(check.detail, /\$\{OBSERVME_GRAFANA_TOKEN\}/u);
+    assert.match(check.detail, /Grafana authentication failed/u);
+    assert.doesNotMatch(check.detail, /bad-token/u);
   }
 });
 
@@ -198,6 +223,7 @@ test("Grafana health applies query.timeoutMs as an aborting fetch timeout", asyn
   const config = cloneDefaultConfig();
   config.query.timeoutMs = 1;
   config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
   const signals = [];
 
   const health = await getGrafanaHealth(config, { fetch: createNeverResolvingFetch(signals) });

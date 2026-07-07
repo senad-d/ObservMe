@@ -6,6 +6,7 @@ import {
   formatGrafanaHttpFailure,
   resolveGrafanaFetch,
 } from "./grafana-transport.ts";
+import { assertGrafanaQueryReady } from "./grafana-readiness.ts";
 import {
   AGENT_RUN_ATTRIBUTES,
   AGENT_SPAWN_ATTRIBUTES,
@@ -138,8 +139,9 @@ export async function searchTempo(
   range: TimeRange,
   options: TempoQueryClientOptions = {},
 ): Promise<TraceSummary[]> {
-  if (isTempoSearchUnavailable(config)) return [];
+  if (!config.query.enabled) return [];
 
+  assertGrafanaQueryReady(config, "tempo");
   const searchAttrs = normalizeTempoSearchAttributes(attrs);
   const timeRange = normalizeTimeRange(range);
   const maxTraces = resolveMaxTraces(config);
@@ -372,11 +374,6 @@ function isTraceSummary(value: TraceSummary | undefined): value is TraceSummary 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-function isTempoSearchUnavailable(config: ObservMeConfig): boolean {
-  return !config.query.enabled || !config.query.grafana.url.trim() || !config.query.grafana.datasourceUids.tempo.trim();
-}
-
 
 function resolveQueryTimeoutMs(config: ObservMeConfig): number {
   const timeoutMs = config.query.timeoutMs;

@@ -106,6 +106,7 @@ test("searchTempo accepts hashed fields and caps results by query.maxTraces", as
   const config = cloneDefaultConfig();
   config.query.maxTraces = 1;
   config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
 
   const traces = await searchTempo(
     config,
@@ -125,6 +126,7 @@ test("searchTempo accepts hashed fields and caps results by query.maxTraces", as
 test("searchTempo rejects raw prompts, commands, paths, environment values, and non-correlation attributes", async () => {
   const config = cloneDefaultConfig();
   config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
   const fetcher = async () => {
     throw new Error("fetch should not be called for unsafe Tempo search inputs");
   };
@@ -155,6 +157,7 @@ test("searchTempo applies query.timeoutMs as an aborting fetch timeout", async (
   const config = cloneDefaultConfig();
   config.query.timeoutMs = 1;
   config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
   const signals = [];
 
   await assert.rejects(
@@ -162,6 +165,48 @@ test("searchTempo applies query.timeoutMs as an aborting fetch timeout", async (
     /Tempo search timed out/u,
   );
   assert.equal(signals.length, 1);
+});
+
+test("searchTempo rejects unresolved Grafana token before fetching", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "${OBSERVME_GRAFANA_TOKEN}";
+  let fetchCalls = 0;
+
+  await assert.rejects(
+    searchTempo(config, { "pi.session.id": "session-1" }, defaultRange, {
+      fetch: async () => {
+        fetchCalls += 1;
+        throw new Error("fetch should not run when query auth is unresolved");
+      },
+    }),
+    error => {
+      assert.match(error.message, /Grafana query configuration is not ready/u);
+      assert.match(error.message, /query\.grafana\.token is unresolved/u);
+      assert.doesNotMatch(error.message, /\$\{OBSERVME_GRAFANA_TOKEN\}/u);
+      return true;
+    },
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("searchTempo rejects missing Tempo datasource UID before fetching", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  config.query.grafana.datasourceUids.tempo = "";
+  let fetchCalls = 0;
+
+  await assert.rejects(
+    searchTempo(config, { "pi.session.id": "session-1" }, defaultRange, {
+      fetch: async () => {
+        fetchCalls += 1;
+        throw new Error("fetch should not run when the Tempo datasource UID is missing");
+      },
+    }),
+    /query\.grafana\.datasourceUids\.tempo is not configured/u,
+  );
+  assert.equal(fetchCalls, 0);
 });
 
 test("searchTempo is optional and skips network calls when query integration is disabled", async () => {

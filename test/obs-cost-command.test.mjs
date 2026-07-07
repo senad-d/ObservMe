@@ -142,6 +142,29 @@ test("/obs cost rejects session-scoped Prometheus cost queries by default before
   ]);
 });
 
+test("/obs cost fails fast when Grafana token is unresolved without exposing placeholder values", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "${OBSERVME_GRAFANA_TOKEN}";
+  let fetchCalls = 0;
+  const notifications = [];
+
+  await handleObsCostCommand("cost", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: async () => {
+      fetchCalls += 1;
+      throw new Error("fetch should not run when query auth is unresolved");
+    },
+  });
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].type, "error");
+  assert.match(notifications[0].message, /ObservMe cost unavailable: Grafana query configuration is not ready/u);
+  assert.match(notifications[0].message, /query\.grafana\.token is unresolved/u);
+  assert.doesNotMatch(notifications[0].message, /\$\{OBSERVME_GRAFANA_TOKEN\}/u);
+});
+
 test("root obs command dispatches cost subcommand", async () => {
   const pi = createFakeCommandPi();
   registerObsCommand(pi, {

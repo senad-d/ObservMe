@@ -178,7 +178,7 @@ When optional content capture is enabled, the redaction pipeline applies size gu
 
 Metadata such as token counts, duration, status, model/provider, tool name, and agent role/depth is captured by default. High-cardinality identifiers (session IDs, workflow IDs, agent IDs, trace/span IDs, entry IDs) are allowed on spans/logs for drill-down but are blocked from Prometheus metric labels.
 
-Grafana-backed query commands prefer `query.grafana.token` bearer/service-account auth. For the bundled local stack, you can use `query.grafana.username` plus `query.grafana.password`, `query.grafana.tls.insecureSkipVerify: true`, and `query.grafana.transport.preferIPv4: true` for `https://observability.local`; `/obs health` reports `401`/`403`, TLS, DNS, and timeout failures without printing secrets.
+Grafana-backed query commands prefer `query.grafana.token` bearer/service-account auth. For the bundled local stack, you can use `query.grafana.username` plus `query.grafana.password`, `query.grafana.tls.insecureSkipVerify: true`, and `query.grafana.transport.preferIPv4: true` for `https://observability.local`; query commands and `/obs health` fail fast on unresolved tokens, missing auth, invalid Grafana URLs, or missing datasource UIDs, and report `401`/`403`, TLS, DNS, and timeout failures without printing secrets.
 
 Full configuration schema: `ObservMe-Production-Docs/12-configuration-reference.md`. Full redaction/privacy design: `ObservMe-Production-Docs/06-security-privacy-redaction.md`.
 
