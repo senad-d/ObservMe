@@ -143,7 +143,7 @@ test("safeHandler catches throwing handlers and records observme_handler_errors_
     () => {
       throw new Error("boom");
     },
-    name => metrics.handlerErrors.add(1, { handler: name }),
+    name => metrics.handlerErrors.add(1, { operation: name }),
   );
 
   await assert.doesNotReject(() => handler({}, {}));
@@ -153,7 +153,7 @@ test("safeHandler catches throwing handlers and records observme_handler_errors_
       type: "counter",
       name: OBSERVME_COUNTER_METRIC_NAMES.HANDLER_ERRORS_TOTAL,
       value: 1,
-      attributes: { handler: "throwing.handler" },
+      attributes: { operation: "throwing.handler" },
     },
   ]);
 });

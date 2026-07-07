@@ -1,0 +1,21 @@
+{
+  "wait": {
+    "id": "fixture-wait-1",
+    "spawnId": "fixture-spawn-1",
+    "childAgentId": "fixture-child-agent",
+    "childStatus": "completed",
+    "joinStatus": "waiting",
+    "reason": "child_completion",
+    "durationMs": 42
+  },
+  "join": {
+    "id": "fixture-join-1",
+    "spawnId": "fixture-spawn-1",
+    "childAgentId": "fixture-child-agent",
+    "childStatus": "completed",
+    "joinStatus": "completed",
+    "reason": "child_result",
+    "failurePropagated": false,
+    "durationMs": 55
+  }
+}

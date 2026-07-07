@@ -2,6 +2,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
 import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
+import type { GrafanaFetch } from "../query/grafana-transport.ts";
+import {
+  createGrafanaHeaders,
+  formatGrafanaFetchFailure,
+  formatGrafanaHttpFailure,
+  resolveGrafanaFetch,
+} from "../query/grafana-transport.ts";
 
 export interface ObsHealthCommandContext {
   readonly cwd?: string;
@@ -13,7 +20,7 @@ export interface ObsHealthCommandContext {
 
 export type ObsHealthCheckKind = "service" | "datasource";
 export type ObsHealthCheckStatus = "ok" | "failed" | "skipped";
-export type ObsHealthFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
+export type ObsHealthFetch = GrafanaFetch;
 export type ObsHealthConfigLoader = (options: LoadSessionConfigOptions) => Promise<ObservMeConfig>;
 export type ObsHealthProvider = (ctx: ObsHealthCommandContext) => Promise<ObsHealthSnapshot> | ObsHealthSnapshot;
 
@@ -47,20 +54,23 @@ interface HttpHealthTarget {
   readonly url: string;
   readonly headers?: Record<string, string>;
   readonly successMode: "ok" | "reachable";
+  readonly grafanaConfig?: ObservMeConfig;
+  readonly fallbackUrl?: string;
 }
 
 interface DatasourceDefinition {
   readonly label: string;
   readonly uid: string;
+  readonly fallbackHealthPath?: string;
 }
 
 const OBS_COMMAND_NAME = "obs";
 const OBS_HEALTH_SUBCOMMAND = "health";
 const minimumTimeoutMs = 1;
 const datasourceDefinitions = [
-  { label: "Tempo datasource", key: "tempo" },
-  { label: "Loki datasource", key: "loki" },
-  { label: "Metrics datasource", key: "prometheus" },
+  { label: "Tempo datasource", key: "tempo", fallbackHealthPath: "/ready" },
+  { label: "Loki datasource", key: "loki", fallbackHealthPath: undefined },
+  { label: "Metrics datasource", key: "prometheus", fallbackHealthPath: undefined },
 ] as const;
 
 export function registerObsHealthCommand(pi: ExtensionAPI, options: RegisterObsHealthCommandOptions = {}): void {
@@ -103,11 +113,12 @@ export async function getObsHealthSnapshot(
 ): Promise<ObsHealthSnapshot> {
   const config = await loadObsHealthConfig(ctx, options);
   const timeoutMs = resolveObsHealthTimeout(config, options);
-  const fetcher = resolveObsHealthFetch(options.fetch);
+  const collectorFetcher = resolveCollectorHealthFetch(options.fetch);
+  const grafanaFetcher = resolveObsHealthFetch(config, options.fetch);
   const checks = await Promise.all([
-    checkCollectorReachability(config, fetcher, timeoutMs),
-    checkGrafanaReachability(config, fetcher, timeoutMs),
-    ...createDatasourceDefinitions(config).map(datasource => checkDatasourceReachability(config, datasource, fetcher, timeoutMs)),
+    checkCollectorReachability(config, collectorFetcher, timeoutMs),
+    checkGrafanaReachability(config, grafanaFetcher, timeoutMs),
+    ...createDatasourceDefinitions(config).map(datasource => checkDatasourceReachability(config, datasource, grafanaFetcher, timeoutMs)),
   ]);
 
   return { timeoutMs, checks };
@@ -149,6 +160,7 @@ function createDatasourceDefinitions(config: ObservMeConfig): DatasourceDefiniti
   return datasourceDefinitions.map(definition => ({
     label: definition.label,
     uid: config.query.grafana.datasourceUids[definition.key],
+    fallbackHealthPath: definition.fallbackHealthPath,
   }));
 }
 
@@ -208,7 +220,8 @@ async function checkHttpHealthTarget(
 ): Promise<ObsHealthCheckResult> {
   try {
     const response = await fetchWithTimeout(target, fetcher, timeoutMs);
-    return responseToHealthResult(target, response);
+    if (!shouldFetchFallbackTarget(target, response)) return responseToHealthResult(target, response);
+    return responseToHealthResult(target, await fetchFallbackTarget(target, fetcher, timeoutMs));
   } catch (error) {
     return failedHealthResult(target.label, target.kind, error);
   }
@@ -236,6 +249,7 @@ function createGrafanaHealthTarget(config: ObservMeConfig): HttpHealthTarget {
     url: buildGrafanaApiUrl(config.query.grafana.url, "/api/health"),
     headers: createGrafanaHeaders(config),
     successMode: "ok",
+    grafanaConfig: config,
   };
 }
 
@@ -246,7 +260,18 @@ function createDatasourceHealthTarget(config: ObservMeConfig, datasource: Dataso
     url: buildGrafanaApiUrl(config.query.grafana.url, `/api/datasources/uid/${encodeURIComponent(datasource.uid)}/health`),
     headers: createGrafanaHeaders(config),
     successMode: "ok",
+    grafanaConfig: config,
+    fallbackUrl: createDatasourceFallbackHealthUrl(config, datasource),
   };
+}
+
+function createDatasourceFallbackHealthUrl(config: ObservMeConfig, datasource: DatasourceDefinition): string | undefined {
+  if (!datasource.fallbackHealthPath) return undefined;
+
+  return buildGrafanaApiUrl(
+    config.query.grafana.url,
+    `/api/datasources/proxy/uid/${encodeURIComponent(datasource.uid)}${datasource.fallbackHealthPath}`,
+  );
 }
 
 function buildGrafanaApiUrl(baseUrl: string, apiPath: string): string {
@@ -255,14 +280,6 @@ function buildGrafanaApiUrl(baseUrl: string, apiPath: string): string {
   const path = apiPath.replace(/^\/+/, "");
   url.pathname = `${basePath}/${path}`;
   return url.toString();
-}
-
-function createGrafanaHeaders(config: ObservMeConfig): Record<string, string> {
-  const token = normalizeConfiguredToken(config.query.grafana.token);
-  const headers: Record<string, string> = { Accept: "application/json" };
-
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return headers;
 }
 
 function filterConfiguredHeaders(headers: Record<string, string>): Record<string, string> | undefined {
@@ -274,12 +291,6 @@ function filterConfiguredHeaders(headers: Record<string, string>): Record<string
   }
 
   return Object.keys(filtered).length > 0 ? filtered : undefined;
-}
-
-function normalizeConfiguredToken(token: string): string | undefined {
-  const trimmed = token.trim();
-  if (!trimmed || hasUnresolvedEnvironmentPlaceholder(trimmed)) return undefined;
-  return trimmed;
 }
 
 function hasUnresolvedEnvironmentPlaceholder(value: string): boolean {
@@ -303,7 +314,7 @@ function responseToHealthResult(target: HttpHealthTarget, response: Response): O
     label: target.label,
     kind: target.kind,
     status: "failed",
-    detail: formatHttpStatus(response),
+    detail: formatHttpFailure(target, response),
   };
 }
 
@@ -312,12 +323,26 @@ function responseMatchesSuccessMode(target: HttpHealthTarget, response: Response
   return response.ok;
 }
 
+function shouldFetchFallbackTarget(target: HttpHealthTarget, response: Response): boolean {
+  return target.kind === "datasource" && response.status === 404 && target.fallbackUrl !== undefined;
+}
+
+async function fetchFallbackTarget(
+  target: HttpHealthTarget,
+  fetcher: ObsHealthFetch,
+  timeoutMs: number,
+): Promise<Response> {
+  const fallbackUrl = target.fallbackUrl;
+  if (!fallbackUrl) throw new Error("Grafana datasource fallback health URL is not configured.");
+  return fetchWithTimeout({ ...target, url: fallbackUrl, fallbackUrl: undefined }, fetcher, timeoutMs);
+}
+
 function failedHealthResult(label: string, kind: ObsHealthCheckKind, error: unknown): ObsHealthCheckResult {
   return {
     label,
     kind,
     status: "failed",
-    detail: formatHealthFailure(error),
+    detail: formatHealthFailure(label, error),
   };
 }
 
@@ -350,8 +375,12 @@ function normalizeTimeoutMs(value: number): number {
   return Math.trunc(value);
 }
 
-function resolveObsHealthFetch(fetcher: ObsHealthFetch | undefined): ObsHealthFetch {
+function resolveCollectorHealthFetch(fetcher: ObsHealthFetch | undefined): ObsHealthFetch {
   return fetcher ?? globalThis.fetch.bind(globalThis);
+}
+
+function resolveObsHealthFetch(config: ObservMeConfig, fetcher: ObsHealthFetch | undefined): ObsHealthFetch {
+  return resolveGrafanaFetch(config, fetcher);
 }
 
 function isObsHealthRequest(args: string): boolean {
@@ -367,12 +396,18 @@ async function notifyHealth(
   await ctx.ui.notify(message, type);
 }
 
+function formatHttpFailure(target: HttpHealthTarget, response: Response): string {
+  if (target.grafanaConfig) return formatGrafanaHttpFailure(response, target.grafanaConfig);
+  return formatHttpStatus(response);
+}
+
 function formatHttpStatus(response: Response): string {
   const statusText = response.statusText.trim();
   return statusText ? `HTTP ${response.status} ${statusText}` : `HTTP ${response.status}`;
 }
 
-function formatHealthFailure(error: unknown): string {
+function formatHealthFailure(label: string, error: unknown): string {
+  if (label !== "Collector") return formatGrafanaFetchFailure(error);
   if (isAbortError(error)) return "timed out";
   return formatError(error);
 }

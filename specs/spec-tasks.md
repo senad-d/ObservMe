@@ -1141,7 +1141,7 @@ Run the `observability-stack/` Compose services, emit representative telemetry, 
 
 ### 50. Add chaos/failure tests
 
-- [ ] Add tests for the failure scenarios in `10-testing-release-operations.md` §7: Collector down, Collector slow, subagent without propagated context, orphan agent, runaway fan-out/depth, queue full, redaction exception.
+- [x] Add tests for the failure scenarios in `10-testing-release-operations.md` §7: Collector down, Collector slow, subagent without propagated context, orphan agent, runaway fan-out/depth, queue full, redaction exception.
 
 #### Why
 
@@ -1162,7 +1162,7 @@ Implement each documented scenario, assert Pi continues running, and assert the 
 
 ### 51. Add performance test
 
-- [ ] Add a performance test using the synthetic workload from `10-testing-release-operations.md` §8 (100 sessions, 1,000 turns/session, 5 tool calls/turn, 2 LLM calls/turn, 1 subagent spawn every 20 turns).
+- [x] Add a performance test using the synthetic workload from `10-testing-release-operations.md` §8 (100 sessions, 1,000 turns/session, 5 tool calls/turn, 2 LLM calls/turn, 1 subagent spawn every 20 turns).
 
 #### Why
 
@@ -1184,7 +1184,7 @@ Generate the documented workload, measure handler latency percentiles, memory gr
 
 ### 52. Add redaction unit tests
 
-- [ ] Create `test/redaction.test.ts` covering the redaction pipeline (tasks 8–10) per `10-testing-release-operations.md` §4.
+- [x] Create `test/redaction.test.ts` covering the redaction pipeline (tasks 8–10) per `10-testing-release-operations.md` §4.
 
 #### Why
 
@@ -1206,7 +1206,7 @@ Build test cases for every documented secret/PII/path/content category, exercise
 
 ### 53. Add event-mapping contract tests
 
-- [ ] Create `test/event-mapping.test.ts` with JSON fixtures under `test/fixtures/` (session entries) and `test/fixtures/events/` (extension event payloads) per `10-testing-release-operations.md` §3, asserting correct span names/attributes/parenting for every handler from tasks 17–26, including subagent spawn, wait/join, and orphan-agent fixtures.
+- [x] Create `test/event-mapping.test.ts` with JSON fixtures under `test/fixtures/` (session entries) and `test/fixtures/events/` (extension event payloads) per `10-testing-release-operations.md` §3, asserting correct span names/attributes/parenting for every handler from tasks 17–26, including subagent spawn, wait/join, and orphan-agent fixtures.
 
 #### Why
 
@@ -1229,7 +1229,7 @@ Add the documented fixture files, run every handler path from tasks 17–26, and
 
 ### 54. Add metrics unit tests
 
-- [ ] Create `test/metrics.test.ts` asserting every counter/histogram/gauge from `04-telemetry-semantic-conventions.md` §12 updates correctly for its corresponding handler.
+- [x] Create `test/metrics.test.ts` asserting every counter/histogram/gauge from `04-telemetry-semantic-conventions.md` §12 updates correctly for its corresponding handler.
 
 #### Why
 
@@ -1251,7 +1251,7 @@ Enumerate the constants from task 7, exercise the corresponding handler or metri
 
 ### 55. Add exporter-failure unit tests
 
-- [ ] Create `test/exporter-failure.test.ts` covering the "Collector Down"/"Collector Slow"/"Queue Full" scenarios from `10-testing-release-operations.md` §7 at the unit level (mocked exporter), independent of the chaos integration tests in task 50.
+- [x] Create `test/exporter-failure.test.ts` covering the "Collector Down"/"Collector Slow"/"Queue Full" scenarios from `10-testing-release-operations.md` §7 at the unit level (mocked exporter), independent of the chaos integration tests in task 50.
 
 #### Why
 
@@ -1273,7 +1273,7 @@ Mock exporters for down/slow/full-queue behavior, run telemetry emission paths, 
 
 ### 56. Add workflow and agent-lineage unit tests
 
-- [ ] Create `test/agent-lineage.test.ts` covering workflow ID generation, agent ID generation, propagation, fan-out/depth tracking, wait/join tracking, orphan classification, and the "Subagent Without Propagated Context" scenario from `10-testing-release-operations.md` §7, exercising task 12 and task 23 directly (unit level, not integration).
+- [x] Create `test/agent-lineage.test.ts` covering workflow ID generation, agent ID generation, propagation, fan-out/depth tracking, wait/join tracking, orphan classification, and the "Subagent Without Propagated Context" scenario from `10-testing-release-operations.md` §7, exercising task 12 and task 23 directly (unit level, not integration).
 
 #### Why
 
@@ -1297,7 +1297,7 @@ Exercise lineage and tree-tracker modules directly, simulate propagated/missing/
 
 ### 57. Add cardinality unit tests
 
-- [ ] Create `test/cardinality.test.ts` asserting no forbidden high-cardinality field (workflow id, session id, agent id, parent/child agent id, agent run id, spawn id, spawn tool-call id, trace id, span id, entry id, raw path/command/prompt/error) ever appears in a metric label, per `10-testing-release-operations.md` §9.
+- [x] Create `test/cardinality.test.ts` asserting no forbidden high-cardinality field (workflow id, session id, agent id, parent/child agent id, agent run id, spawn id, spawn tool-call id, trace id, span id, entry id, raw path/command/prompt/error) ever appears in a metric label, per `10-testing-release-operations.md` §9.
 
 #### Why
 
@@ -1318,7 +1318,7 @@ Enumerate every emitted metric and label set, compare labels against the allowed
 
 ### 58. Finalize README/CHANGELOG/SECURITY documentation
 
-- [ ] Update `README.md`, `CHANGELOG.md`, and `SECURITY.md` to describe the now-implemented behavior (replacing any remaining "planned" labels and template placeholders) once tasks 1–57 are complete.
+- [x] Update `README.md`, `CHANGELOG.md`, and `SECURITY.md` to describe the now-implemented behavior (replacing any remaining "planned" labels and template placeholders) once tasks 1–57 are complete.
 
 #### Why
 

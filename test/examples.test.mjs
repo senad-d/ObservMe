@@ -72,6 +72,7 @@ async function observmeExampleLoadsAsValidSafeConfig() {
   assert.equal(config.otlp.signalEndpoints?.traces, "http://localhost:4318/v1/traces");
   assert.equal(config.otlp.signalEndpoints?.metrics, "http://localhost:4318/v1/metrics");
   assert.equal(config.otlp.signalEndpoints?.logs, "http://localhost:4318/v1/logs");
+  assert.equal(config.resource.attributes["service.name"], "observme-pi-extension");
   assert.equal(config.resource.attributes["observme.tenant.id"], "local-dev");
   assert.equal(config.resource.attributes["deployment.environment.name"], "development");
   assert.equal(config.workflow.enabled, true);

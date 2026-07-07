@@ -24,6 +24,7 @@ observme:
 
   resource:
     attributes:
+      service.name: observme-pi-extension
       observme.tenant.id: platform
       pi.project.name: my-project
       deployment.environment.name: production
@@ -118,10 +119,16 @@ observme:
     grafana:
       url: https://grafana.example.com
       token: ${OBSERVME_GRAFANA_TOKEN}
+      username: ""
+      password: ""
       datasourceUids:
         tempo: tempo
         loki: loki
         prometheus: mimir
+      tls:
+        insecureSkipVerify: false
+      transport:
+        preferIPv4: false
 
   shutdown:
     flushTimeoutMs: 3000
@@ -156,6 +163,10 @@ OBSERVME_PROPAGATE_TO_SUBAGENTS
 OBSERVME_WRITE_CORRELATION_ENTRY
 OBSERVME_GRAFANA_URL
 OBSERVME_GRAFANA_TOKEN
+OBSERVME_GRAFANA_USERNAME
+OBSERVME_GRAFANA_PASSWORD
+OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY
+OBSERVME_GRAFANA_PREFER_IPV4
 OBSERVME_HASH_SALT
 OBSERVME_CAPTURE_PROMPTS
 OBSERVME_CAPTURE_RESPONSES
@@ -229,7 +240,37 @@ capture:
   responses: false
 ```
 
-## 7. Unsafe Debug Mode
+## 7. Local Grafana Query Development
+
+For the bundled `observability-stack/` behind `https://observability.local`, use a supported local-only query configuration such as:
+
+```yaml
+query:
+  enabled: true
+  grafana:
+    url: https://observability.local
+    token: ${OBSERVME_GRAFANA_TOKEN}      # preferred for service-account/bearer auth when set
+    username: admin                       # optional local Basic auth fallback
+    password: ${OBSERVME_GRAFANA_PASSWORD}
+    datasourceUids:
+      tempo: tempo
+      loki: loki
+      prometheus: prometheus
+    tls:
+      insecureSkipVerify: true            # local self-signed cert only
+    transport:
+      preferIPv4: true                    # avoids localhost/observability.local IPv6 stalls
+```
+
+Rules:
+
+- A resolved `query.grafana.token` is sent as `Authorization: Bearer ...` and takes precedence.
+- When the token is blank or an unresolved placeholder, a resolved `query.grafana.username` and `query.grafana.password` are sent as Basic auth for local development.
+- `/obs health` must report Grafana `401`/`403` responses as authentication failures and must not print token or password values.
+- `tls.insecureSkipVerify=true` is only for local self-signed certificates; production should trust the CA instead.
+- `transport.preferIPv4=true` uses Node's local HTTP(S) transport with IPv4 DNS lookup for Grafana calls.
+
+## 8. Unsafe Debug Mode
 
 Unsafe mode must require explicit opt-in:
 
@@ -245,7 +286,7 @@ capture:
 
 ObservMe must display a warning when unsafe capture is active. Unsafe mode must still pass all configured redactors unless redaction is explicitly disabled with a separately validated exception.
 
-## 8. Validation Rules
+## 9. Validation Rules
 
 Reject config when:
 
@@ -257,7 +298,7 @@ Reject config when:
 - Propagated workflow or agent lineage values are malformed, too long, or contain unsafe characters.
 - Queue sizes exceed configured memory guardrails.
 
-## 9. Minimal Config
+## 10. Minimal Config
 
 ```yaml
 observme:

@@ -1,0 +1,27 @@
+{
+  "type": "assistant_message",
+  "id": "entry-assistant-usage-1",
+  "parentId": "entry-user-1",
+  "role": "assistant",
+  "provider": "anthropic",
+  "model": "claude-fixture",
+  "responseModel": "claude-fixture-20260707",
+  "responseId": "msg_fixture_usage",
+  "stopReason": "stop",
+  "usage": {
+    "input": 21,
+    "output": 34,
+    "totalTokens": 55,
+    "cost": {
+      "input": 0.021,
+      "output": 0.034,
+      "total": 0.055
+    }
+  },
+  "content": [
+    {
+      "type": "text",
+      "text": "Fixture assistant response with password=hidden-response"
+    }
+  ]
+}

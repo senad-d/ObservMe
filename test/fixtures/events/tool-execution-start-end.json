@@ -1,0 +1,28 @@
+{
+  "start": {
+    "toolCallId": "fixture-tool-1",
+    "toolName": "read",
+    "toolCategory": "filesystem",
+    "arguments": "password=hidden-tool-argument /Users/alice/work/private-repo/README.md"
+  },
+  "call": {
+    "toolCallId": "fixture-tool-1",
+    "toolName": "read",
+    "toolCategory": "filesystem",
+    "arguments": "password=hidden-tool-argument /Users/alice/work/private-repo/README.md"
+  },
+  "result": {
+    "toolCallId": "fixture-tool-1",
+    "toolName": "read",
+    "toolCategory": "filesystem",
+    "result": "failed with api_key=hidden-tool-result"
+  },
+  "end": {
+    "toolCallId": "fixture-tool-1",
+    "toolName": "read",
+    "toolCategory": "filesystem",
+    "success": false,
+    "errorClass": "ToolError",
+    "result": "failed with api_key=hidden-tool-result"
+  }
+}

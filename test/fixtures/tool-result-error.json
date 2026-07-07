@@ -1,0 +1,12 @@
+{
+  "toolCallId": "fixture-tool-1",
+  "toolName": "read",
+  "toolCategory": "filesystem",
+  "success": false,
+  "errorClass": "ToolError",
+  "arguments": {
+    "path": "/Users/alice/work/private-repo/README.md",
+    "password": "hidden-tool-argument"
+  },
+  "result": "failed with api_key=hidden-tool-result"
+}

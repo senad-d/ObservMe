@@ -1,6 +1,13 @@
 import type { ObservMeConfig } from "../config/schema.ts";
+import type { GrafanaFetch } from "./grafana-transport.ts";
+import {
+  createGrafanaHeaders,
+  formatGrafanaFetchFailure,
+  formatGrafanaHttpFailure,
+  resolveGrafanaFetch,
+} from "./grafana-transport.ts";
 
-export type PrometheusFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
+export type PrometheusFetch = GrafanaFetch;
 export type PrometheusResultLimit = "metricSeries" | "agents";
 export type PrometheusResultType = "vector" | "matrix" | "scalar" | "string" | "unknown";
 
@@ -89,7 +96,7 @@ export class PrometheusQueryClient {
 
   constructor(config: ObservMeConfig, options: PrometheusQueryClientOptions = {}) {
     this.#config = config;
-    this.#fetcher = resolvePrometheusFetch(options.fetch);
+    this.#fetcher = resolveGrafanaFetch(config, options.fetch);
   }
 
   async queryPrometheus(
@@ -120,9 +127,9 @@ export async function queryPrometheus(
   const queryTime = normalizeQueryTime(time);
   const resultLimit = resolveResultLimit(config, options.resultLimit);
   const url = createPrometheusQueryUrl(config, normalizedQuery, queryTime, resultLimit);
-  const response = await fetchPrometheusQuery(url, config, resolvePrometheusFetch(options.fetch));
+  const response = await fetchPrometheusQuery(url, config, resolveGrafanaFetch(config, options.fetch));
 
-  return readPrometheusQueryResult(response, resultLimit);
+  return readPrometheusQueryResult(response, config, resultLimit);
 }
 
 export function findForbiddenPrometheusLabels(query: string): string[] {
@@ -220,11 +227,15 @@ async function fetchPrometheusQuery(url: string, config: ObservMeConfig, fetcher
 
 function normalizePrometheusFetchError(error: unknown): Error {
   if (isAbortError(error)) return new Error("Prometheus query timed out.");
-  return error instanceof Error ? error : new Error(String(error));
+  return new Error(formatGrafanaFetchFailure(error));
 }
 
-async function readPrometheusQueryResult(response: Response, resultLimit: number): Promise<QueryResult> {
-  if (!response.ok) throw new Error(`Prometheus query failed: ${formatHttpStatus(response)}`);
+async function readPrometheusQueryResult(
+  response: Response,
+  config: ObservMeConfig,
+  resultLimit: number,
+): Promise<QueryResult> {
+  if (!response.ok) throw new Error(`Prometheus query failed: ${formatGrafanaHttpFailure(response, config)}`);
 
   const payload = (await response.json()) as unknown;
   const apiError = readPrometheusApiError(payload);
@@ -354,20 +365,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function createGrafanaHeaders(config: ObservMeConfig): Record<string, string> {
-  const token = normalizeConfiguredToken(config.query.grafana.token);
-  const headers: Record<string, string> = { Accept: "application/json" };
-
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return headers;
-}
-
-function normalizeConfiguredToken(token: string): string | undefined {
-  const trimmed = token.trim();
-  if (!trimmed || unresolvedEnvironmentPlaceholderPattern.test(trimmed)) return undefined;
-  return trimmed;
-}
-
 function isPrometheusQueryUnavailable(config: ObservMeConfig): boolean {
   return !config.query.enabled || !config.query.grafana.url.trim() || !config.query.grafana.datasourceUids.prometheus.trim();
 }
@@ -376,13 +373,6 @@ function emptyPrometheusQueryResult(): QueryResult {
   return { resultType: "vector", series: [] };
 }
 
-function resolvePrometheusFetch(fetcher: PrometheusFetch | undefined): PrometheusFetch {
-  return fetcher ?? defaultPrometheusFetch;
-}
-
-async function defaultPrometheusFetch(input: string | URL, init?: RequestInit): Promise<Response> {
-  return globalThis.fetch(input, init);
-}
 
 function resolveResultLimit(config: ObservMeConfig, limit: PrometheusResultLimit | number | undefined): number {
   if (limit === "agents") return resolveMaxAgents(config);
@@ -426,11 +416,6 @@ function formatPrometheusDuration(milliseconds: number): string {
 
 function trimTrailingFractionZeros(value: string): string {
   return value.replace(/\.0+$/u, "").replace(/(\.\d*?)0+$/u, "$1");
-}
-
-function formatHttpStatus(response: Response): string {
-  const statusText = response.statusText.trim();
-  return statusText ? `HTTP ${response.status} ${statusText}` : `HTTP ${response.status}`;
 }
 
 function isAbortError(error: unknown): boolean {

@@ -136,6 +136,44 @@ test("PrometheusQueryClient queries metrics through the Grafana Prometheus datas
   assert.equal(result.series[0].value.value, "1.42");
 });
 
+test("Prometheus queries support local Grafana Basic auth when bearer token is unresolved", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "https://observability.local";
+  config.query.grafana.token = "${OBSERVME_GRAFANA_TOKEN}";
+  config.query.grafana.username = "admin";
+  config.query.grafana.password = "local-password";
+  config.query.grafana.datasourceUids.prometheus = "prometheus";
+
+  const calls = [];
+  const result = await queryPrometheus(config, "observme_sessions_started_total", undefined, {
+    fetch: async (_input, init) => {
+      calls.push(init);
+      return createPrometheusVectorResponse();
+    },
+  });
+
+  assert.equal(calls[0].headers.Authorization, `Basic ${Buffer.from("admin:local-password").toString("base64")}`);
+  assert.equal(result.series.length, 3);
+});
+
+test("Prometheus queries report missing Grafana auth on 401 without exposing placeholders", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "${OBSERVME_GRAFANA_TOKEN}";
+
+  await assert.rejects(
+    queryPrometheus(config, "observme_sessions_started_total", undefined, {
+      fetch: async () => new Response("{}", { status: 401, statusText: "Unauthorized" }),
+    }),
+    error => {
+      assert.match(error.message, /Prometheus query failed: HTTP 401 Unauthorized/u);
+      assert.match(error.message, /query\.grafana\.token is unresolved/u);
+      assert.doesNotMatch(error.message, /\$\{OBSERVME_GRAFANA_TOKEN\}/u);
+      return true;
+    },
+  );
+});
+
 test("queryPrometheus caps agent summaries by query.maxAgents when requested", async () => {
   const config = cloneDefaultConfig();
   config.query.maxMetricSeries = 20;

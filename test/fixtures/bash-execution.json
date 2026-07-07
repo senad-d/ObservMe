@@ -1,0 +1,10 @@
+{
+  "role": "bashExecution",
+  "command": "echo password=hidden-bash-command",
+  "output": "api_key=hidden-bash-output",
+  "exitCode": 1,
+  "cancelled": false,
+  "truncated": true,
+  "fullOutputPath": "/tmp/fixture-bash-output.txt",
+  "excludeFromContext": true
+}

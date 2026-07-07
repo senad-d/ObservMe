@@ -1,0 +1,15 @@
+{
+  "start": {
+    "agentRunId": "fixture-agent-run",
+    "turnIndex": 1,
+    "message": "Please inspect the fixture",
+    "modelProvider": "anthropic",
+    "modelId": "claude-fixture",
+    "imageCount": 1
+  },
+  "end": {
+    "agentRunId": "fixture-agent-run",
+    "turnIndex": 1,
+    "status": "ok"
+  }
+}

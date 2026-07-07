@@ -1,0 +1,11 @@
+{
+  "start": {
+    "agentRunId": "fixture-agent-run",
+    "source": "user",
+    "prompt": "summarize fixture"
+  },
+  "end": {
+    "agentRunId": "fixture-agent-run",
+    "status": "ok"
+  }
+}

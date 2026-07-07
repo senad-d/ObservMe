@@ -149,6 +149,9 @@ processors:
       - key: telemetry.source
         value: observme
         action: upsert
+      - key: service.name
+        value: observme-pi-extension
+        action: insert
       - key: service.namespace
         value: pi
         action: upsert

@@ -22,6 +22,7 @@ const expectedDocumentedDefaults = {
   },
   resource: {
     attributes: {
+      "service.name": "observme-pi-extension",
       "observme.tenant.id": "platform",
       "pi.project.name": "my-project",
       "deployment.environment.name": "production",
@@ -121,10 +122,18 @@ const expectedDocumentedDefaults = {
     grafana: {
       url: "https://grafana.example.com",
       token: "${OBSERVME_GRAFANA_TOKEN}",
+      username: "",
+      password: "",
       datasourceUids: {
         tempo: "tempo",
         loki: "loki",
         prometheus: "mimir",
+      },
+      tls: {
+        insecureSkipVerify: false,
+      },
+      transport: {
+        preferIPv4: false,
       },
     },
   },

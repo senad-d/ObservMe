@@ -1,0 +1,10 @@
+{
+  "sessionId": "fixture-session",
+  "sessionName": "Fixture Session",
+  "persisted": true,
+  "sessionFile": "/tmp/pi/fixture-session.jsonl",
+  "sessionVersion": "3",
+  "modelProvider": "anthropic",
+  "modelId": "claude-fixture",
+  "thinkingLevel": "medium"
+}

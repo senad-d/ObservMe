@@ -1,14 +1,4 @@
 {
-  "__inputs": [
-    {
-      "description": "Prometheus or Mimir datasource containing ObservMe metrics.",
-      "label": "Prometheus",
-      "name": "DS_PROMETHEUS",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus",
-      "type": "datasource"
-    }
-  ],
   "__requires": [
     {
       "id": "grafana",
@@ -54,7 +44,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Session-start rate from observme_sessions_started_total.",
       "fieldConfig": {
@@ -131,7 +121,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_sessions_started_total[5m]))",
@@ -146,7 +136,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Estimated active sessions from started minus shutdown counters.",
       "fieldConfig": {
@@ -227,7 +217,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "clamp_min(sum(observme_sessions_started_total) - sum(observme_sessions_shutdown_total), 0)",
@@ -242,7 +232,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Completed turns per minute.",
       "fieldConfig": {
@@ -319,7 +309,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "60 * sum(rate(observme_turns_completed_total[5m]))",
@@ -334,7 +324,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "LLM request volume per minute.",
       "fieldConfig": {
@@ -411,7 +401,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "60 * sum(rate(observme_llm_requests_total[5m]))",
@@ -426,7 +416,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Tool-call volume per minute.",
       "fieldConfig": {
@@ -503,7 +493,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "60 * sum(rate(observme_tool_calls_total[5m]))",
@@ -518,7 +508,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Subagent spawn rate grouped by low-cardinality agent role and depth labels.",
       "fieldConfig": {
@@ -595,7 +585,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "60 * sum(rate(observme_subagents_spawned_total[5m])) by (agent_role, subagent_depth)",
@@ -610,7 +600,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Current active agents grouped by role and depth.",
       "fieldConfig": {
@@ -687,7 +677,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(observme_active_agents) by (agent_role, subagent_depth)",
@@ -702,7 +692,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "p95 agent-tree depth and parent fan-out from documented ObservMe histograms.",
       "fieldConfig": {
@@ -779,7 +769,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_agent_tree_depth_bucket[5m])) by (le))",
@@ -790,7 +780,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket[5m])) by (subagent_depth, le))",
@@ -805,7 +795,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Rates for orphan-agent and trace-context propagation failure counters.",
       "fieldConfig": {
@@ -882,7 +872,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_orphan_agents_total[5m])) by (agent_role, subagent_depth)",
@@ -893,7 +883,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_trace_context_propagation_failures_total[5m])) by (agent_role, subagent_depth)",
@@ -908,7 +898,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Core ObservMe error and failure rates.",
       "fieldConfig": {
@@ -985,7 +975,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_workflow_errors_total[5m]))",
@@ -996,7 +986,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_agent_run_errors_total[5m]))",
@@ -1007,7 +997,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_llm_errors_total[5m]))",
@@ -1018,7 +1008,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_tool_failures_total[5m]))",
@@ -1029,7 +1019,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_handler_errors_total[5m]))",
@@ -1044,7 +1034,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Total LLM cost over the selected dashboard range.",
       "fieldConfig": {
@@ -1125,7 +1115,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_llm_cost_usd_total[$__range]))",
@@ -1140,7 +1130,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Input, output, and total LLM tokens over the selected dashboard range.",
       "fieldConfig": {
@@ -1223,7 +1213,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_llm_input_tokens_total[$__range]))",
@@ -1234,7 +1224,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_llm_output_tokens_total[$__range]))",
@@ -1245,7 +1235,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_llm_total_tokens_total[$__range]))",
@@ -1260,7 +1250,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "p95 turn duration in milliseconds.",
       "fieldConfig": {
@@ -1337,7 +1327,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_turn_duration_ms_bucket[5m])) by (le))",
@@ -1352,7 +1342,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "p95 LLM request duration in milliseconds.",
       "fieldConfig": {
@@ -1429,7 +1419,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[5m])) by (le))",
@@ -1444,7 +1434,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "p95 tool-call duration in milliseconds.",
       "fieldConfig": {
@@ -1521,7 +1511,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[5m])) by (le))",

@@ -481,8 +481,9 @@ function buildWaitJoinAttributes(session: SubagentTelemetrySession, options: Age
 function waitJoinMetricLabels(session: SubagentTelemetrySession, options: AgentWaitJoinOptions): Record<string, string> {
   return {
     agent_role: session.lineage.role,
-    child_status: normalizeMetricLabel(options.childStatus ?? "active", "active"),
-    join_status: normalizeMetricLabel(options.joinStatus ?? "waiting", "waiting"),
+    subagent_depth: subagentDepthLabel(session),
+    status: normalizeMetricLabel(options.joinStatus ?? options.childStatus ?? "waiting", "waiting"),
+    reason: normalizeMetricLabel(options.reason ?? defaultWaitReason, defaultWaitReason),
   };
 }
 
@@ -666,7 +667,8 @@ function recordTraceContextFallbackWhenMissing(
 function traceContextFailureMetricLabels(session: SubagentTelemetrySession): Record<string, string> {
   return {
     agent_role: session.lineage.role,
-    propagation: "fallback",
+    subagent_depth: subagentDepthLabel(session),
+    reason: "trace_context_fallback",
   };
 }
 
@@ -676,6 +678,7 @@ function subagentSpawnMetricLabels(
 ): Record<string, string> {
   return {
     agent_role: session.lineage.role,
+    subagent_depth: subagentDepthLabel(session),
     spawn_type: normalizeSpawnType(options.spawnType),
     spawn_reason: normalizeMetricLabel(options.spawnReason ?? "subagent", "subagent"),
   };
@@ -686,6 +689,10 @@ function subagentFailureMetricLabels(labels: Record<string, string>, attributes:
     spawn_type: labels.spawn_type ?? "unknown",
     error_class: String(attributes[LOG_ATTRIBUTES.ERROR_TYPE] ?? "subagent_spawn_error"),
   };
+}
+
+function subagentDepthLabel(session: SubagentTelemetrySession): string {
+  return String(Math.max(0, Math.min(session.lineage.depth + 1, session.config.workflow.maxDepthWarning)));
 }
 
 function normalizeSpawnType(value: string | undefined): SubagentSpawnType {

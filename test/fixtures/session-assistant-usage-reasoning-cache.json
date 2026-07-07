@@ -1,0 +1,37 @@
+{
+  "type": "assistant_message",
+  "id": "entry-assistant-usage-2",
+  "parentId": "entry-user-1",
+  "role": "assistant",
+  "provider": "anthropic",
+  "model": "claude-fixture",
+  "responseModel": "claude-fixture-20260707",
+  "responseId": "msg_fixture_reasoning_cache",
+  "stopReason": "stop",
+  "usage": {
+    "input": 10,
+    "output": 20,
+    "cacheRead": 3,
+    "cacheWrite": 4,
+    "cacheWrite1h": 5,
+    "reasoning": 6,
+    "totalTokens": 48,
+    "cost": {
+      "input": 0.01,
+      "output": 0.02,
+      "cacheRead": 0.003,
+      "cacheWrite": 0.004,
+      "total": 0.037
+    }
+  },
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "api_key=hidden-thinking"
+    },
+    {
+      "type": "text",
+      "text": "Done"
+    }
+  ]
+}

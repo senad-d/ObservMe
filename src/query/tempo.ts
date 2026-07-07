@@ -1,4 +1,11 @@
 import type { ObservMeConfig } from "../config/schema.ts";
+import type { GrafanaFetch } from "./grafana-transport.ts";
+import {
+  createGrafanaHeaders,
+  formatGrafanaFetchFailure,
+  formatGrafanaHttpFailure,
+  resolveGrafanaFetch,
+} from "./grafana-transport.ts";
 import {
   AGENT_RUN_ATTRIBUTES,
   AGENT_SPAWN_ATTRIBUTES,
@@ -11,7 +18,7 @@ import {
   TURN_ATTRIBUTES,
 } from "../semconv/attributes.ts";
 
-export type TempoFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
+export type TempoFetch = GrafanaFetch;
 
 export interface TimeRange {
   readonly from: Date;
@@ -110,7 +117,7 @@ export class TempoQueryClient {
 
   constructor(config: ObservMeConfig, options: TempoQueryClientOptions = {}) {
     this.#config = config;
-    this.#fetcher = resolveTempoFetch(options.fetch);
+    this.#fetcher = resolveGrafanaFetch(config, options.fetch);
   }
 
   async searchTempo(attrs: Record<string, string>, range: TimeRange): Promise<TraceSummary[]> {
@@ -137,9 +144,9 @@ export async function searchTempo(
   const timeRange = normalizeTimeRange(range);
   const maxTraces = resolveMaxTraces(config);
   const url = createTempoSearchUrl(config, searchAttrs, timeRange, maxTraces);
-  const response = await fetchTempoSearch(url, config, resolveTempoFetch(options.fetch));
+  const response = await fetchTempoSearch(url, config, resolveGrafanaFetch(config, options.fetch));
 
-  return readTempoTraceSummaries(response, maxTraces);
+  return readTempoTraceSummaries(response, config, maxTraces);
 }
 
 function normalizeTempoSearchAttributes(attrs: Record<string, string>): NormalizedTempoSearchAttribute[] {
@@ -295,11 +302,15 @@ async function fetchTempoSearch(url: string, config: ObservMeConfig, fetcher: Te
 
 function normalizeTempoFetchError(error: unknown): Error {
   if (isAbortError(error)) return new Error("Tempo search timed out.");
-  return error instanceof Error ? error : new Error(String(error));
+  return new Error(formatGrafanaFetchFailure(error));
 }
 
-async function readTempoTraceSummaries(response: Response, maxTraces: number): Promise<TraceSummary[]> {
-  if (!response.ok) throw new Error(`Tempo search failed: ${formatHttpStatus(response)}`);
+async function readTempoTraceSummaries(
+  response: Response,
+  config: ObservMeConfig,
+  maxTraces: number,
+): Promise<TraceSummary[]> {
+  if (!response.ok) throw new Error(`Tempo search failed: ${formatGrafanaHttpFailure(response, config)}`);
 
   const payload = (await response.json()) as unknown;
   const traces = extractTempoTraceItems(payload);
@@ -362,31 +373,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function createGrafanaHeaders(config: ObservMeConfig): Record<string, string> {
-  const token = normalizeConfiguredToken(config.query.grafana.token);
-  const headers: Record<string, string> = { Accept: "application/json" };
-
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return headers;
-}
-
-function normalizeConfiguredToken(token: string): string | undefined {
-  const trimmed = token.trim();
-  if (!trimmed || unresolvedEnvironmentPlaceholderPattern.test(trimmed)) return undefined;
-  return trimmed;
-}
-
 function isTempoSearchUnavailable(config: ObservMeConfig): boolean {
   return !config.query.enabled || !config.query.grafana.url.trim() || !config.query.grafana.datasourceUids.tempo.trim();
 }
 
-function resolveTempoFetch(fetcher: TempoFetch | undefined): TempoFetch {
-  return fetcher ?? defaultTempoFetch;
-}
-
-async function defaultTempoFetch(input: string | URL, init?: RequestInit): Promise<Response> {
-  return globalThis.fetch(input, init);
-}
 
 function resolveQueryTimeoutMs(config: ObservMeConfig): number {
   const timeoutMs = config.query.timeoutMs;
@@ -398,11 +388,6 @@ function resolveMaxTraces(config: ObservMeConfig): number {
   const maxTraces = config.query.maxTraces;
   if (!Number.isFinite(maxTraces) || maxTraces < minimumMaxTraces) return minimumMaxTraces;
   return Math.trunc(maxTraces);
-}
-
-function formatHttpStatus(response: Response): string {
-  const statusText = response.statusText.trim();
-  return statusText ? `HTTP ${response.status} ${statusText}` : `HTTP ${response.status}`;
 }
 
 function isAbortError(error: unknown): boolean {

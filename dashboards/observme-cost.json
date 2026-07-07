@@ -1,14 +1,4 @@
 {
-  "__inputs": [
-    {
-      "description": "Prometheus or Mimir datasource containing ObservMe metrics.",
-      "label": "Prometheus",
-      "name": "DS_PROMETHEUS",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus",
-      "type": "datasource"
-    }
-  ],
   "__requires": [
     {
       "id": "grafana",
@@ -54,7 +44,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Selected-range LLM cost grouped by provider.",
       "fieldConfig": {
@@ -137,7 +127,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_llm_cost_usd_total[$__range])) by (provider)",
@@ -152,7 +142,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Selected-range LLM cost grouped by model.",
       "fieldConfig": {
@@ -235,7 +225,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_llm_cost_usd_total[$__range])) by (model)",
@@ -250,7 +240,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Selected-range LLM cost grouped by environment.",
       "fieldConfig": {
@@ -333,7 +323,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_llm_cost_usd_total[$__range])) by (environment)",
@@ -348,7 +338,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "LLM cost in each Grafana interval grouped by provider and model.",
       "fieldConfig": {
@@ -425,7 +415,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_llm_cost_usd_total[$__interval])) by (provider, model)",
@@ -440,7 +430,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Input and output token totals over the selected dashboard range.",
       "fieldConfig": {
@@ -523,7 +513,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_llm_input_tokens_total[$__range])) by (provider, model)",
@@ -534,7 +524,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_llm_output_tokens_total[$__range])) by (provider, model)",
@@ -549,7 +539,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Cache read, cache write, and Anthropic one-hour cache-write token totals.",
       "fieldConfig": {
@@ -632,7 +622,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_llm_cache_read_tokens_total[$__range])) by (provider, model)",
@@ -643,7 +633,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_llm_cache_write_tokens_total[$__range])) by (provider, model)",
@@ -654,7 +644,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_llm_cache_write_1h_tokens_total[$__range])) by (provider, model)",

@@ -19,6 +19,7 @@ observme:
 
   resource:
     attributes:
+      service.name: observme-pi-extension
       observme.tenant.id: local-dev
       pi.project.name: local-project
       deployment.environment.name: development
@@ -109,10 +110,16 @@ observme:
     grafana:
       url: http://localhost:3000
       token: ${OBSERVME_GRAFANA_TOKEN}
+      username: "admin"
+      password: "admin"
       datasourceUids:
         tempo: tempo
         loki: loki
         prometheus: prometheus
+      tls:
+        insecureSkipVerify: false
+      transport:
+        preferIPv4: false
 
   shutdown:
     flushTimeoutMs: 3000

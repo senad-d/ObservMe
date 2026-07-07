@@ -196,7 +196,7 @@ test("agent tree metric labels exclude lineage identifiers", () => {
   const tracker = new AgentTreeTracker({ maxAgents: 2 });
   const labels = tracker.metricLabels("active", false);
 
-  assert.deepEqual(labels, { agent_status: "active", orphan_state: "attached" });
+  assert.deepEqual(labels, { status: "active", reason: "attached" });
   assert.doesNotThrow(() => assertNoHighCardinalityMetricLabels(labels));
   assert.throws(() => assertNoHighCardinalityMetricLabels({ "pi.workflow.id": "workflow-1" }), /High-cardinality/u);
 });

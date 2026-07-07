@@ -165,7 +165,7 @@ test("queryLoki applies query.timeoutMs as an aborting fetch timeout", async () 
   const signals = [];
 
   await assert.rejects(
-    queryLoki(config, '{service_name="observme-pi-extension"} | event_category="error"', defaultRange, {
+    queryLoki(config, '{service_name="observme-pi-extension", event_name=~".*[.]failed"}', defaultRange, {
       fetch: createNeverResolvingFetch(signals),
     }),
     /Loki query timed out/u,
@@ -182,7 +182,7 @@ test("queryLoki is optional and skips network calls when query integration is di
 
   const logs = await queryLoki(
     config,
-    '{service_name="observme-pi-extension"} | pi_session_id="session-1"',
+    '{service_name="observme-pi-extension", pi_session_id="session-1"}',
     defaultRange,
     { fetch: fetcher },
   );

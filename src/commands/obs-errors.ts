@@ -42,7 +42,8 @@ export interface RegisterObsErrorsCommandOptions extends ObsErrorsSnapshotOption
   readonly getErrors?: ObsErrorsProvider;
 }
 
-export const OBS_ERRORS_LOGQL = '{service_name="observme-pi-extension"} | event_category="error"';
+export const OBS_ERROR_EVENT_NAME_PATTERN = ".*[.]failed|.*[.]dropped|agent[.]orphaned";
+export const OBS_ERRORS_LOGQL = `{service_name="observme-pi-extension", event_name=~"${OBS_ERROR_EVENT_NAME_PATTERN}"}`;
 
 const OBS_COMMAND_NAME = "obs";
 const OBS_ERRORS_SUBCOMMAND = "errors";

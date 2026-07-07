@@ -99,6 +99,31 @@ test("/obs health checks Collector, Grafana, and configured datasources with the
   assert.equal(calls[1].init.headers.Authorization, "Bearer grafana-token");
 });
 
+test("/obs health distinguishes Grafana auth failures from generic timeouts", async () => {
+  const config = cloneDefaultConfig();
+  config.otlp.endpoint = "http://collector.local:4318";
+  config.query.grafana.url = "http://grafana.local:3000";
+  config.query.grafana.token = "${OBSERVME_GRAFANA_TOKEN}";
+  const notifications = [];
+
+  const fetcher = async input => {
+    if (String(input) === "http://collector.local:4318") return createHealthyResponse();
+    return new Response("{}", { status: 401, statusText: "Unauthorized" });
+  };
+
+  await handleObsHealthCommand("health", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: fetcher,
+    timeoutMs: 25,
+  });
+
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].type, "warning");
+  assert.match(notifications[0].message, /Collector: reachable/u);
+  assert.match(notifications[0].message, /Grafana: unreachable \(HTTP 401 Unauthorized; .*query\.grafana\.token is unresolved/u);
+  assert.doesNotMatch(notifications[0].message, /\$\{OBSERVME_GRAFANA_TOKEN\}/u);
+});
+
 test("/obs health reports an unreachable Collector without throwing", async () => {
   const config = cloneDefaultConfig();
   config.otlp.endpoint = "http://collector.local:4318";

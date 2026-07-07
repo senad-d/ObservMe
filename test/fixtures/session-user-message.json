@@ -1,0 +1,8 @@
+{
+  "type": "user_message",
+  "id": "entry-user-1",
+  "parentId": "entry-root",
+  "role": "user",
+  "content": "Please inspect src/pi/handlers.ts",
+  "imageCount": 1
+}

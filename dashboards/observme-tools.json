@@ -1,22 +1,4 @@
 {
-  "__inputs": [
-    {
-      "description": "Prometheus or Mimir datasource containing ObservMe metrics.",
-      "label": "Prometheus",
-      "name": "DS_PROMETHEUS",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus",
-      "type": "datasource"
-    },
-    {
-      "description": "Loki datasource containing ObservMe structured logs for drill-down panels.",
-      "label": "Loki",
-      "name": "DS_LOKI",
-      "pluginId": "loki",
-      "pluginName": "Loki",
-      "type": "datasource"
-    }
-  ],
   "__requires": [
     {
       "id": "grafana",
@@ -74,7 +56,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Tool-call rate grouped by the low-cardinality tool_name label.",
       "fieldConfig": {
@@ -119,7 +101,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_tool_calls_total[5m])) by (tool_name)",
@@ -134,7 +116,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Tool failures divided by tool calls for each tool_name.",
       "fieldConfig": {
@@ -179,7 +161,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_tool_failures_total[5m])) by (tool_name) / clamp_min(sum(rate(observme_tool_calls_total[5m])) by (tool_name), 1e-9)",
@@ -194,7 +176,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "p95 tool-call duration grouped by tool_name.",
       "fieldConfig": {
@@ -239,7 +221,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[5m])) by (tool_name, le))",
@@ -254,9 +236,9 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
-      "description": "Bash exit-code distribution from structured logs with normalized pi_bash_exit_code attributes.",
+      "description": "Bash exit-code distribution from provisioned Loki labels on bash completion logs.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -305,10 +287,10 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (pi_bash_exit_code) (count_over_time({event_name=\"bash.completed\"} | json | pi_bash_exit_code != \"\" [$__interval]))",
+          "expr": "sum by (pi_bash_exit_code) (count_over_time({service_name=\"observme-pi-extension\", event_name=\"bash.completed\", pi_bash_exit_code!=\"\"}[$__interval]))",
           "range": true,
           "refId": "A",
           "legendFormat": "exit {{pi_bash_exit_code}}"
@@ -320,7 +302,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "p95 captured tool-result size grouped by tool_name.",
       "fieldConfig": {
@@ -365,7 +347,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_tool_result_size_chars_bucket[5m])) by (tool_name, le))",

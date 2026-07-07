@@ -132,10 +132,22 @@ export interface GrafanaDatasourceUidsConfig {
   prometheus: string;
 }
 
+export interface GrafanaTlsConfig {
+  insecureSkipVerify: boolean;
+}
+
+export interface GrafanaTransportConfig {
+  preferIPv4: boolean;
+}
+
 export interface GrafanaConfig {
   url: string;
   token: string;
+  username: string;
+  password: string;
   datasourceUids: GrafanaDatasourceUidsConfig;
+  tls: GrafanaTlsConfig;
+  transport: GrafanaTransportConfig;
 }
 
 export interface QueryConfig {
@@ -355,11 +367,25 @@ export const observMeConfigSchema = Type.Object(
           {
             url: Type.String(),
             token: Type.String(),
+            username: Type.String(),
+            password: Type.String(),
             datasourceUids: Type.Object(
               {
                 tempo: Type.String({ minLength: 1 }),
                 loki: Type.String({ minLength: 1 }),
                 prometheus: Type.String({ minLength: 1 }),
+              },
+              { additionalProperties: false },
+            ),
+            tls: Type.Object(
+              {
+                insecureSkipVerify: Type.Boolean(),
+              },
+              { additionalProperties: false },
+            ),
+            transport: Type.Object(
+              {
+                preferIPv4: Type.Boolean(),
               },
               { additionalProperties: false },
             ),

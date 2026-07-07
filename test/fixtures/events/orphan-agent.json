@@ -1,0 +1,8 @@
+{
+  "env": {
+    "OBSERVME_WORKFLOW_ID": "workflow-fixture",
+    "OBSERVME_PARENT_AGENT_ID": "missing-parent",
+    "OBSERVME_ROOT_AGENT_ID": "agent-root",
+    "OBSERVME_AGENT_DEPTH": "0"
+  }
+}

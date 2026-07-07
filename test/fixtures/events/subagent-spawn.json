@@ -1,0 +1,12 @@
+{
+  "spawnId": "fixture-spawn-1",
+  "command": "pi --prompt hidden-subagent-command",
+  "args": ["--task", "hidden-subagent-arg"],
+  "spawnType": "command",
+  "spawnReason": "delegate",
+  "childAgentId": "fixture-child-agent",
+  "env": {
+    "PATH": "/usr/bin",
+    "SECRET_TOKEN": "hidden-inherited-env"
+  }
+}

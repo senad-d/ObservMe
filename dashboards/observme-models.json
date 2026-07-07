@@ -1,22 +1,4 @@
 {
-  "__inputs": [
-    {
-      "description": "Prometheus or Mimir datasource containing ObservMe metrics.",
-      "label": "Prometheus",
-      "name": "DS_PROMETHEUS",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus",
-      "type": "datasource"
-    },
-    {
-      "description": "Loki datasource containing ObservMe structured logs for drill-down panels.",
-      "label": "Loki",
-      "name": "DS_LOKI",
-      "pluginId": "loki",
-      "pluginName": "Loki",
-      "type": "datasource"
-    }
-  ],
   "__requires": [
     {
       "id": "grafana",
@@ -74,7 +56,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "LLM request rate grouped by provider and model.",
       "fieldConfig": {
@@ -119,7 +101,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_llm_requests_total[5m])) by (provider, model)",
@@ -134,7 +116,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "LLM error ratio grouped by provider and model.",
       "fieldConfig": {
@@ -179,7 +161,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_llm_errors_total[5m])) by (provider, model) / clamp_min(sum(rate(observme_llm_requests_total[5m])) by (provider, model), 1e-9)",
@@ -194,7 +176,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "p95 LLM request duration grouped by provider and model.",
       "fieldConfig": {
@@ -239,7 +221,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[5m])) by (provider, model, le))",
@@ -254,9 +236,9 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
-      "description": "Stop-reason distribution from structured logs with normalized pi_llm_stop_reason attributes.",
+      "description": "Stop-reason distribution from provisioned Loki labels on completed LLM request logs.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -305,10 +287,10 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (pi_llm_stop_reason) (count_over_time({event_name=\"llm.request.completed\"} | json | pi_llm_stop_reason != \"\" [$__interval]))",
+          "expr": "sum by (pi_llm_stop_reason) (count_over_time({service_name=\"observme-pi-extension\", event_name=\"llm.request.completed\", pi_llm_stop_reason!=\"\"}[$__interval]))",
           "range": true,
           "refId": "A",
           "legendFormat": "{{pi_llm_stop_reason}}"
@@ -320,7 +302,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Rolling LLM cost normalized by completed turns and grouped by provider/model.",
       "fieldConfig": {
@@ -365,7 +347,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "1000 * sum(rate(observme_llm_cost_usd_total[5m])) by (provider, model) / clamp_min(sum(rate(observme_turns_completed_total[5m])), 1e-9)",

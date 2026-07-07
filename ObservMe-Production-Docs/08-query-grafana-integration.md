@@ -27,13 +27,26 @@ query:
   grafana:
     url: https://grafana.example.com
     token: ${OBSERVME_GRAFANA_TOKEN}
+    username: ""
+    password: ""
     datasourceUids:
       tempo: tempo
       loki: loki
       prometheus: mimir
+    tls:
+      insecureSkipVerify: false
+    transport:
+      preferIPv4: false
   links:
     traceUrlTemplate: "https://grafana.example.com/explore?left=..."
 ```
+
+Authentication and local transport behavior:
+
+- Prefer `query.grafana.token` for Grafana service-account or bearer tokens.
+- If the token is blank or an unresolved environment placeholder, ObservMe may use `query.grafana.username` plus `query.grafana.password` as a local-development Basic auth fallback.
+- `401` and `403` responses are surfaced as Grafana authentication failures without printing token or password values.
+- For the bundled `observability-stack/` behind `https://observability.local`, set `query.grafana.tls.insecureSkipVerify=true` only for the local self-signed certificate and `query.grafana.transport.preferIPv4=true` when DNS resolution stalls on IPv6.
 
 ## 4. Commands
 
@@ -161,17 +174,17 @@ sum(rate(observme_tool_failures_total[1h])) by (tool_name, error_class)
 Loki LogQL:
 
 ```logql
-{service_name="observme-pi-extension"} | event_category="error"
+{service_name="observme-pi-extension", event_name=~".*[.]failed|.*[.]dropped|agent[.]orphaned"}
 ```
 
-With Loki OTLP ingestion, OTel attribute dots are normalized to underscores (`event.name` -> `event_name`, `pi.session.id` -> `pi_session_id`). Use `| json` only when the log body itself is JSON; default ObservMe event fields should be OTEL log attributes/structured metadata.
+With Loki OTLP ingestion, OTel attribute dots are normalized to underscores (`event.name` -> `event_name`, `pi.session.id` -> `pi_session_id`). `event.category` remains a semantic category such as `lifecycle`, `agent-tree`, or `compaction`; use `event_name` for failure/error selectors. Use `| json` only when the log body itself is JSON; default ObservMe event fields should be OTEL log attributes/structured metadata.
 
 ### `/obs logs`
 
 Loki LogQL for current session:
 
 ```logql
-{service_name="observme-pi-extension"} | pi_session_id="$session"
+{service_name="observme-pi-extension", pi_session_id="$session"}
 ```
 
 Only available if Loki receives `pi.session.id` as structured metadata or label.

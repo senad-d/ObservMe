@@ -1,22 +1,4 @@
 {
-  "__inputs": [
-    {
-      "description": "Prometheus or Mimir datasource containing ObservMe metrics.",
-      "label": "Prometheus",
-      "name": "DS_PROMETHEUS",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus",
-      "type": "datasource"
-    },
-    {
-      "description": "Loki datasource containing ObservMe structured logs.",
-      "label": "Loki",
-      "name": "DS_LOKI",
-      "pluginId": "loki",
-      "pluginName": "Loki",
-      "type": "datasource"
-    }
-  ],
   "__requires": [
     {
       "id": "grafana",
@@ -68,7 +50,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Combined runtime and signal error rate across ObservMe counters.",
       "fieldConfig": {
@@ -113,7 +95,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_handler_errors_total[5m])) + sum(rate(observme_workflow_errors_total[5m])) + sum(rate(observme_agent_run_errors_total[5m])) + sum(rate(observme_llm_errors_total[5m])) + sum(rate(observme_tool_failures_total[5m])) + sum(rate(observme_bash_failures_total[5m])) + sum(rate(observme_export_errors_total[5m]))",
@@ -127,7 +109,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Handler failures grouped by bounded operation and error class labels.",
       "fieldConfig": {
@@ -168,7 +150,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_handler_errors_total[5m])) by (operation, error_class)",
@@ -183,7 +165,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "LLM error ratio grouped by provider and model.",
       "fieldConfig": {
@@ -224,7 +206,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_llm_errors_total[5m])) by (provider, model) / clamp_min(sum(rate(observme_llm_requests_total[5m])) by (provider, model), 1e-9)",
@@ -239,7 +221,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Tool failures divided by tool calls for each low-cardinality tool_name.",
       "fieldConfig": {
@@ -280,7 +262,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_tool_failures_total[5m])) by (tool_name) / clamp_min(sum(rate(observme_tool_calls_total[5m])) by (tool_name), 1e-9)",
@@ -295,9 +277,9 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
-      "description": "Structured error logs using normalized Loki OTLP attribute names.",
+      "description": "Failure, dropped-telemetry, and orphan-agent logs using the provisioned event_name Loki label.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -316,9 +298,9 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\"} | event_category=\"error\"",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=~\".*[.]failed|.*[.]dropped|agent[.]orphaned\"}",
           "queryType": "range",
           "refId": "A"
         }
@@ -329,7 +311,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "description": "Tool failure log events using event_name, not the dotted event.name attribute.",
       "fieldConfig": {
@@ -350,9 +332,9 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\"} | event_name=\"tool.call.failed\"",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"tool.call.failed\"}",
           "queryType": "range",
           "refId": "A"
         }
@@ -363,7 +345,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "description": "LLM request failure log events using normalized Loki attributes.",
       "fieldConfig": {
@@ -384,9 +366,9 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\"} | event_name=\"llm.request.failed\"",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"llm.request.failed\"}",
           "queryType": "range",
           "refId": "A"
         }
@@ -397,7 +379,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "description": "Export failure log events for backend diagnosis.",
       "fieldConfig": {
@@ -418,9 +400,9 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\"} | event_name=\"export.failed\"",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"export.failed\"}",
           "queryType": "range",
           "refId": "A"
         }

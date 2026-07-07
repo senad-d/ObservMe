@@ -1,6 +1,6 @@
 # Security Policy
 
-ObservMe is a Pi extension that instruments Pi agent sessions and exports OpenTelemetry traces, metrics, and logs to an external observability stack (OTel Collector, Grafana Tempo/Loki/Prometheus). This policy describes ObservMe's trust model at the current preparation stage; see `ObservMe-Production-Docs/06-security-privacy-redaction.md` for the full production security/privacy/redaction specification.
+ObservMe is a Pi extension that instruments Pi agent sessions and exports OpenTelemetry traces, metrics, and logs to an external observability stack such as an OpenTelemetry Collector, Grafana Tempo, Loki, Prometheus, Mimir, or Grafana Cloud. This policy summarizes the implemented trust model; see `ObservMe-Production-Docs/06-security-privacy-redaction.md` for the full security, privacy, and redaction specification.
 
 ## Trust model
 
@@ -11,14 +11,17 @@ pi install npm:@senad-d/observme@<version>
 pi install git:senad-d/ObservMe@<tag>
 ```
 
-When implemented, ObservMe is designed to:
+ObservMe is implemented to:
 
-- Never execute shell commands itself (it only observes tool/bash execution events).
-- Read Pi session/event data only through documented Pi extension APIs; no continuous file tailing.
-- Send telemetry only to configured OTLP endpoints (OTel Collector by default, direct backend only in development).
+- Never execute shell commands itself; it only observes tool/bash execution events emitted by Pi.
+- Read Pi session/event data through Pi extension APIs, with no continuous full-session-file tailing.
+- Start OTEL exporters only from `session_start` and stop them from `session_shutdown` with bounded flush/shutdown timeouts.
+- Send telemetry only to configured OTLP endpoints, with an OpenTelemetry Collector recommended for production.
 - Disable prompt, response, thinking, tool-argument, tool-result, bash-command, bash-output, and file-path capture by default.
-- Redact secrets, PII, and paths before any optional content export.
-- Fail open: Pi must keep running even if the observability backend is unreachable.
+- Redact secrets, optional PII, paths, URL credentials, custom configured patterns, and oversized content before optional content export.
+- Keep session IDs, workflow IDs, agent IDs, trace/span IDs, raw paths, raw commands, raw prompts, and raw errors out of Prometheus metric labels.
+- Fail open: Pi keeps running if the Collector, Grafana, Tempo, Loki, or Prometheus backend is unreachable.
+- Require explicit user confirmation for `/obs backfill` historical replay and mark replayed telemetry with `observme.replayed=true`.
 
 ## Reporting vulnerabilities
 
@@ -34,7 +37,8 @@ Do not open public issues for security-sensitive reports that include exploit de
 
 - Do not commit secrets, tokens, local `.pi/` state, or generated artifacts.
 - Document any file, shell, network, or credential access added by the extension.
-- Avoid starting background resources (OTEL SDK, exporters, timers) in the extension factory; start them from `session_start` and stop them from `session_shutdown`.
+- Avoid starting background resources in the extension factory; start them from `session_start` and stop them from `session_shutdown`.
 - Keep package contents minimal with `npm run check:pack`.
 - Use isolated smoke tests with `pi --no-extensions -e .`.
 - Keep default telemetry capture settings privacy-preserving; changing any default capture flag to `true` requires explicit review.
+- Run `npm run validate` before release and after security-sensitive changes.

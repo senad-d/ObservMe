@@ -21,6 +21,9 @@ processors:
       - key: telemetry.source
         value: observme
         action: upsert
+      - key: service.name
+        value: observme-pi-extension
+        action: insert
       - key: service.namespace
         value: pi
         action: upsert
@@ -65,7 +68,7 @@ processors:
   attributes/loki_query_hints:
     actions:
       - key: loki.attribute.labels
-        value: event.name,pi.session.id,pi.agent.id,pi.agent.parent_id
+        value: event.name,event.category,pi.session.id,pi.agent.id,pi.agent.parent_id,pi.llm.stop_reason,pi.bash.exit_code
         action: insert
   resource/loki_query_hints:
     attributes:

@@ -573,7 +573,7 @@ async function waitForTempoLineageSearch(stack, traceId, ids, range) {
 }
 
 async function waitForLokiSessionLogs(stack, ids, range) {
-  const query = `{service_name="${serviceName}"} | pi_session_id="${ids.sessionId}"`;
+  const query = `{service_name="${serviceName}", pi_session_id="${ids.sessionId}"}`;
 
   return waitForResult(
     "Loki session log query",

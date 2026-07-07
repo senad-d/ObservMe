@@ -1,0 +1,17 @@
+{
+  "reason": "token_limit",
+  "willRetry": true,
+  "compactionEntry": {
+    "type": "compaction",
+    "id": "compaction-entry-1",
+    "parentId": "turn-entry-9",
+    "summary": "User discussed a long implementation plan.",
+    "firstKeptEntryId": "entry-kept-123",
+    "tokensBefore": 50000,
+    "fromHook": true,
+    "details": {
+      "readFiles": ["src/pi/handlers.ts"],
+      "modifiedFiles": ["test/event-mapping.test.ts"]
+    }
+  }
+}

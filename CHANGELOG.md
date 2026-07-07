@@ -1,10 +1,13 @@
 # Changelog
 
-## 0.1.0 - Unreleased
+## 0.1.0 - 2026-07-07
 
+- Added resilient Grafana query transport/auth handling for `/obs` commands: bearer tokens, local Basic auth fallback, local self-signed TLS and IPv4 transport options, and secret-safe 401/403/TLS/DNS/timeout diagnostics.
+- Aligned Loki label provisioning, `/obs errors` and `/obs logs` LogQL, and Loki-backed dashboard selectors with the local Collector output, including `service.name`, `event_name`, `event_category`, and session labels.
+- Completed the ObservMe MVP scope from `ObservMe-Production-Docs/00-README.md`: extension load and health checks, session/workflow/agent/turn/LLM/tool/bash/subagent/compaction/branch/model telemetry, OTLP trace/metric/log exporters, privacy-preserving redaction and capture controls, bounded queues/timeouts, Grafana dashboards, Collector configs, tests, and the required `/obs` commands.
 - Bootstrapped the ObservMe Pi extension repository from the pi-extension-template.
 - Applied ObservMe project identity: package `@senad-d/observme`, repository `senad-d/ObservMe`, MIT license.
-- Added preparation specs under `specs/`: project definition brief, architecture spec, guidelines spec, and task spec (all unimplemented, checkboxes unchecked).
+- Added preparation specs under `specs/`: project definition brief, architecture spec, guidelines spec, and task spec.
 - Audited `specs/spec-tasks.md` against every file in `ObservMe-Production-Docs/` and closed gaps: added tasks for the missing `npm run validate` scripts, alert rules/SLO definitions, compatibility matrix, Collector/Grafana-stack integration and chaos/performance tests, and startup-recovery/replay semantics; added the missing `observme.tenant.id` resource attribute and the unsafe-capture warning requirement; flagged an unresolved doc conflict between the template's source-shipping convention and the production blueprint's `dist/observme.js` build-artifact expectation for the implementation session to resolve.
 - Restructured `specs/spec-tasks.md` from 18 coarse tasks into 58 session-sized tasks (one file, or one tightly coupled file pair, per task), so each task fits a single focused implementation session instead of bundling multiple unrelated files or Pi event families into one checkbox.
 - Normalized `specs/spec-tasks.md` to the project task format: each task now has a `### <number>. <task_name>` heading, an unchecked checkbox, and explicit `Why`, `How`, `Where`, and `Acceptance criteria` sections.
@@ -54,10 +57,19 @@
 - Added the initial Grafana dashboard pack for ObservMe overview, cost, and latency views with PromQL validation against documented semantic-convention metric names.
 - Added Grafana dashboards for tool reliability, agent/subagent lineage health, and model usage with documented PromQL/LogQL plus safe agent metric labels.
 - Added Grafana dashboards for errors, branch/compaction behavior, and export health with documented PromQL/LogQL and normalized Loki attribute names.
+- Fixed provisioned Grafana dashboards to use the reference stack datasource UIDs (`prometheus` and `loki`) instead of unresolved import-time `${DS_*}` placeholders, removed stale datasource inputs, and added validation coverage for those UIDs.
 - Added Prometheus-compatible ObservMe alert rules for the documented LLM, tool, subagent, export, cost, redaction, agent-tree, orphan, trace-context, and active-agent failure modes.
 - Added ObservMe SLO definitions for export health, agent lineage, workflow completion, instrumentation overhead, and CI/test-time redaction coverage.
 - Added example ObservMe and production Collector YAML configs, including high-cardinality metric-attribute drops and content-attribute drops for the Grafana stack.
 - Added the ObservMe compatibility matrix documenting tested Pi, Node.js, and OpenTelemetry package versions plus the pinned Grafana-stack component versions awaiting integration validation.
 - Added Collector debug-exporter integration tests with a local Docker Collector config, asserting ObservMe traces, metrics, logs, required attributes, and default-disabled content capture behavior.
 - Added Grafana-stack integration tests using `observability-stack/`, including Tempo trace/lineage queries, Loki session-log queries, Prometheus token-total queries, and Grafana dashboard provisioning validation.
-- Complete ObservMe command behavior and full event coverage are not implemented yet; see `specs/spec-tasks.md` for the planned implementation sequence.
+- Added chaos/failure coverage for Collector down/slow exports, missing subagent trace context, orphan agents, runaway fan-out/depth, queue-full eviction, and redaction exceptions.
+- Added a synthetic ObservMe performance test for 100 sessions, 100,000 turns, 500,000 tool calls, 200,000 LLM calls, and 5,000 subagent spawns, reporting handler latency percentiles, memory growth, CPU overhead, dropped telemetry, and export batch sizes against the documented p95/p99 targets.
+- Added dedicated redaction unit tests for documented secret categories, environment variable dumps, filesystem paths, explicit PII detection, and oversized content truncation, and included `.test.ts` files in local test and coverage discovery.
+- Added fixture-driven event-mapping contract tests for session, agent, turn, LLM, tool, bash, model/thinking, compaction, branch, subagent spawn, wait/join, orphan, and propagation-failure telemetry.
+- Added metrics unit coverage that exercises every documented ObservMe and optional official GenAI metric constant through the metric helper, including all counters, histograms, and active-state gauges.
+- Added fast exporter-failure unit coverage for mocked Collector-down, Collector-slow, and queue-full scenarios, asserting safe Pi continuation plus export-error/drop counters.
+- Added workflow and agent-lineage unit coverage for generated private IDs, propagation fallback, root/orphan classification, fan-out/depth, wait/join status, and low-cardinality metrics.
+- Added cardinality unit coverage for every metric label set and aligned emitted labels to the documented low-cardinality allowlist.
+- Finalized README and security documentation for the implemented ObservMe MVP behavior, command surface, validation flow, and privacy posture.

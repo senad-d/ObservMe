@@ -1,0 +1,17 @@
+{
+  "leafId": "leaf-next",
+  "fromId": "leaf-prev",
+  "toId": "leaf-next",
+  "commonAncestorId": "leaf-root",
+  "branchPath": "/Users/alice/work/private-repo/session-tree.json",
+  "summaryEntry": {
+    "type": "summary",
+    "id": "summary-entry-1",
+    "parentId": "leaf-prev",
+    "summary": "Branch summary text",
+    "leafId": "leaf-next",
+    "fromId": "leaf-prev",
+    "toId": "leaf-next",
+    "commonAncestorId": "leaf-root"
+  }
+}

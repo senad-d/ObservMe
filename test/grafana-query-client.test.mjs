@@ -8,6 +8,7 @@ import {
   getGrafanaHealth,
   getGrafanaTraceLink,
 } from "../src/query/grafana.ts";
+import { formatGrafanaFetchFailure, requiresCustomGrafanaTransport } from "../src/query/grafana-transport.ts";
 
 const sampleTraceId = "4bf92f3577b34da6a3ce929d0e0e4736";
 const telemetrySourceRoots = ["src/events", "src/otel", "src/pi"];
@@ -100,6 +101,97 @@ test("GrafanaQueryClient checks Grafana and datasource health with the configure
     ],
   );
   assert.equal(calls[0].init.headers.Authorization, "Bearer grafana-token");
+});
+
+test("Grafana health supports local Basic auth when the bearer token placeholder is unresolved", async () => {
+  const config = cloneDefaultConfig();
+  config.query.timeoutMs = 1234;
+  config.query.grafana.url = "https://observability.local/";
+  config.query.grafana.token = "${OBSERVME_GRAFANA_TOKEN}";
+  config.query.grafana.username = "admin";
+  config.query.grafana.password = "local-password";
+  config.query.grafana.tls.insecureSkipVerify = true;
+  config.query.grafana.transport.preferIPv4 = true;
+
+  const calls = [];
+  const fetcher = async (input, init) => {
+    calls.push({ input: String(input), init });
+    assert.equal(init.headers.Authorization, `Basic ${Buffer.from("admin:local-password").toString("base64")}`);
+    return createHealthyResponse();
+  };
+
+  const health = await getGrafanaHealth(config, { fetch: fetcher });
+
+  assert.equal(requiresCustomGrafanaTransport(config), true);
+  assert.equal(health.timeoutMs, 1234);
+  assert.deepEqual(
+    health.checks.map(check => check.status),
+    ["ok", "ok", "ok", "ok"],
+  );
+  assert.deepEqual(
+    calls.map(call => call.input),
+    [
+      "https://observability.local/api/health",
+      "https://observability.local/api/datasources/uid/tempo/health",
+      "https://observability.local/api/datasources/uid/loki/health",
+      "https://observability.local/api/datasources/uid/mimir/health",
+    ],
+  );
+});
+
+test("Grafana health falls back to Tempo proxy readiness when plugin health is unsupported", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  config.query.grafana.datasourceUids.tempo = "tempo";
+
+  const calls = [];
+  const health = await getGrafanaHealth(config, {
+    fetch: async input => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith("/api/datasources/uid/tempo/health")) {
+        return new Response("{}", { status: 404, statusText: "Not Found" });
+      }
+      return createHealthyResponse();
+    },
+  });
+
+  assert.deepEqual(
+    health.checks.map(check => `${check.label}:${check.status}`),
+    ["Grafana:ok", "Tempo datasource:ok", "Loki datasource:ok", "Metrics datasource:ok"],
+  );
+  assert.ok(calls.includes("http://grafana.local/api/health"));
+  assert.ok(calls.includes("http://grafana.local/api/datasources/uid/tempo/health"));
+  assert.ok(calls.includes("http://grafana.local/api/datasources/proxy/uid/tempo/ready"));
+});
+
+test("Grafana health reports unresolved or missing auth as actionable 401 diagnostics", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "${OBSERVME_GRAFANA_TOKEN}";
+
+  const health = await getGrafanaHealth(config, {
+    fetch: async () => new Response("{}", { status: 401, statusText: "Unauthorized" }),
+  });
+
+  assert.deepEqual(
+    health.checks.map(check => check.status),
+    ["failed", "failed", "failed", "failed"],
+  );
+  for (const check of health.checks) {
+    assert.match(check.detail, /HTTP 401 Unauthorized/u);
+    assert.match(check.detail, /query\.grafana\.token is unresolved/u);
+    assert.doesNotMatch(check.detail, /\$\{OBSERVME_GRAFANA_TOKEN\}/u);
+  }
+});
+
+test("Grafana transport failure formatting distinguishes TLS and DNS failures", () => {
+  const tlsError = Object.assign(new Error("self-signed certificate"), { code: "DEPTH_ZERO_SELF_SIGNED_CERT" });
+  const dnsError = Object.assign(new Error("not found"), { code: "ENOTFOUND" });
+
+  assert.match(formatGrafanaFetchFailure(tlsError), /TLS certificate verification failed/u);
+  assert.match(formatGrafanaFetchFailure(dnsError), /DNS lookup failed/u);
 });
 
 test("Grafana health applies query.timeoutMs as an aborting fetch timeout", async () => {

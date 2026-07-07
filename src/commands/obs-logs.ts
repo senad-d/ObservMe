@@ -49,7 +49,7 @@ export interface RegisterObsLogsCommandOptions extends ObsLogsSnapshotOptions {
   readonly getLogs?: ObsLogsProvider;
 }
 
-export const OBS_LOGS_LOGQL_PREFIX = '{service_name="observme-pi-extension"} | pi_session_id=';
+export const OBS_LOGS_LOGQL_PREFIX = '{service_name="observme-pi-extension", pi_session_id=';
 
 const OBS_COMMAND_NAME = "obs";
 const OBS_LOGS_SUBCOMMAND = "logs";
@@ -116,7 +116,7 @@ export async function getObsLogsSnapshot(
 }
 
 export function buildObsLogsLogQl(sessionId: string): string {
-  return `${OBS_LOGS_LOGQL_PREFIX}"${escapeLogQlString(normalizeObsLogsSessionId(sessionId))}"`;
+  return `${OBS_LOGS_LOGQL_PREFIX}"${escapeLogQlString(normalizeObsLogsSessionId(sessionId))}"}`;
 }
 
 export function renderObsLogs(snapshot: ObsLogsSnapshot): string {

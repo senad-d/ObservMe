@@ -122,8 +122,8 @@ export class AgentTreeTracker {
 
   metricLabels(status: AgentChildStatus, orphaned: boolean): Record<string, string> {
     const labels = {
-      agent_status: status,
-      orphan_state: orphaned ? "orphaned" : "attached",
+      status,
+      reason: orphaned ? "orphaned" : "attached",
     };
 
     assertNoHighCardinalityMetricLabels(labels);

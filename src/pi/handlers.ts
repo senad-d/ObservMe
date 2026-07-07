@@ -25,6 +25,7 @@ import { ObservMeLogSdk } from "../otel/logs.ts";
 import { ObservMeMetricSdk } from "../otel/metrics.ts";
 import type { ObservMeOtelSdkController } from "../otel/sdk.ts";
 import { startOtelSdk } from "../otel/sdk.ts";
+import type { BoundedOtelOperationResult } from "../otel/shutdown.ts";
 import { ObservMeTraceSdk } from "../otel/traces.ts";
 import {
   AGENT_RUN_ATTRIBUTES,
@@ -43,6 +44,7 @@ import {
   OBSERVME_GAUGE_METRIC_NAMES,
   OBSERVME_HISTOGRAM_METRIC_NAMES,
   OBSERVME_TOKEN_COST_COUNTER_METRIC_NAMES,
+  OFFICIAL_GENAI_METRIC_NAMES,
 } from "../semconv/metrics.ts";
 import { SPAN_NAMES } from "../semconv/spans.ts";
 import { redactValue } from "../privacy/redact.ts";
@@ -151,12 +153,14 @@ export interface ObservMeTelemetrySession {
 export interface ObservMeMetrics {
   readonly handlerErrors: Counter;
   readonly telemetryDropped: Counter;
+  readonly exportErrors: Counter;
   readonly sessionsStarted: Counter;
   readonly sessionsShutdown: Counter;
   readonly workflowsStarted: Counter;
   readonly workflowsCompleted: Counter;
   readonly workflowErrors: Counter;
   readonly agentRuns: Counter;
+  readonly agentRunErrors: Counter;
   readonly turnsStarted: Counter;
   readonly turnsCompleted: Counter;
   readonly llmRequests: Counter;
@@ -181,14 +185,32 @@ export interface ObservMeMetrics {
   readonly subagentSpawnFailures: Counter;
   readonly orphanAgents: Counter;
   readonly traceContextPropagationFailures: Counter;
+  readonly childAgentFailures: Counter;
+  readonly parentRecoveredFromChildFailure: Counter;
   readonly redactionFailures: Counter;
+  readonly eventsObserved: Counter;
+  readonly activeSpans: UpDownCounter;
   readonly activeAgents: UpDownCounter;
+  readonly workflowDurationMs: Histogram;
+  readonly agentRunDurationMs: Histogram;
+  readonly agentLifetimeDurationMs: Histogram;
+  readonly subagentSpawnDurationMs: Histogram;
   readonly agentFanoutCount: Histogram;
   readonly agentTreeDepth: Histogram;
   readonly agentTreeWidth: Histogram;
   readonly agentWaitDurationMs: Histogram;
   readonly agentJoinDurationMs: Histogram;
+  readonly turnDurationMs: Histogram;
+  readonly llmRequestDurationMs: Histogram;
+  readonly toolDurationMs: Histogram;
+  readonly bashDurationMs: Histogram;
   readonly compactionTokensBefore: Histogram;
+  readonly promptSizeChars: Histogram;
+  readonly responseSizeChars: Histogram;
+  readonly toolResultSizeChars: Histogram;
+  readonly handlerDurationMs: Histogram;
+  readonly genAiClientTokenUsage: Histogram;
+  readonly genAiClientOperationDuration: Histogram;
 }
 
 export interface SpanRegistry {
@@ -326,12 +348,14 @@ export function createObservMeMetrics(meter: Meter): ObservMeMetrics {
   return {
     handlerErrors: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.HANDLER_ERRORS_TOTAL),
     telemetryDropped: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.TELEMETRY_DROPPED_TOTAL),
+    exportErrors: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.EXPORT_ERRORS_TOTAL),
     sessionsStarted: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.SESSIONS_STARTED_TOTAL),
     sessionsShutdown: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.SESSIONS_SHUTDOWN_TOTAL),
     workflowsStarted: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.WORKFLOWS_STARTED_TOTAL),
     workflowsCompleted: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.WORKFLOWS_COMPLETED_TOTAL),
     workflowErrors: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.WORKFLOW_ERRORS_TOTAL),
     agentRuns: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.AGENT_RUNS_TOTAL),
+    agentRunErrors: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.AGENT_RUN_ERRORS_TOTAL),
     turnsStarted: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.TURNS_STARTED_TOTAL),
     turnsCompleted: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.TURNS_COMPLETED_TOTAL),
     llmRequests: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.LLM_REQUESTS_TOTAL),
@@ -356,14 +380,32 @@ export function createObservMeMetrics(meter: Meter): ObservMeMetrics {
     subagentSpawnFailures: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.SUBAGENT_SPAWN_FAILURES_TOTAL),
     orphanAgents: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.ORPHAN_AGENTS_TOTAL),
     traceContextPropagationFailures: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.TRACE_CONTEXT_PROPAGATION_FAILURES_TOTAL),
+    childAgentFailures: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.CHILD_AGENT_FAILURES_TOTAL),
+    parentRecoveredFromChildFailure: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.PARENT_RECOVERED_FROM_CHILD_FAILURE_TOTAL),
     redactionFailures: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.REDACTION_FAILURES_TOTAL),
+    eventsObserved: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.EVENTS_OBSERVED_TOTAL),
+    activeSpans: meter.createUpDownCounter(OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_SPANS),
     activeAgents: meter.createUpDownCounter(OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_AGENTS),
+    workflowDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.WORKFLOW_DURATION_MS),
+    agentRunDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_RUN_DURATION_MS),
+    agentLifetimeDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_LIFETIME_DURATION_MS),
+    subagentSpawnDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.SUBAGENT_SPAWN_DURATION_MS),
     agentFanoutCount: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_FANOUT_COUNT),
     agentTreeDepth: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_TREE_DEPTH),
     agentTreeWidth: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_TREE_WIDTH),
     agentWaitDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_WAIT_DURATION_MS),
     agentJoinDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_JOIN_DURATION_MS),
+    turnDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.TURN_DURATION_MS),
+    llmRequestDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.LLM_REQUEST_DURATION_MS),
+    toolDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.TOOL_DURATION_MS),
+    bashDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.BASH_DURATION_MS),
     compactionTokensBefore: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.COMPACTION_TOKENS_BEFORE),
+    promptSizeChars: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.PROMPT_SIZE_CHARS),
+    responseSizeChars: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.RESPONSE_SIZE_CHARS),
+    toolResultSizeChars: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.TOOL_RESULT_SIZE_CHARS),
+    handlerDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.HANDLER_DURATION_MS),
+    genAiClientTokenUsage: createHistogram(meter, OFFICIAL_GENAI_METRIC_NAMES.CLIENT_TOKEN_USAGE),
+    genAiClientOperationDuration: createHistogram(meter, OFFICIAL_GENAI_METRIC_NAMES.CLIENT_OPERATION_DURATION),
   };
 }
 
@@ -705,8 +747,10 @@ function createSessionShutdownHandler(
     await _ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, undefined);
     const flushResult = await session.controller.flush(session.config.shutdown.flushTimeoutMs);
     recordObsStatusExportResult(flushResult);
+    recordExportOperationResult(session, flushResult);
     const shutdownResult = await session.controller.shutdown(session.config.shutdown.flushTimeoutMs);
     recordObsStatusExportResult(shutdownResult);
+    recordExportOperationResult(session, shutdownResult);
     clearObsSessionRuntimeState();
     clearObsAgentsRuntimeState();
     setSession(undefined);
@@ -1076,6 +1120,41 @@ function recordWorkflowShutdownTelemetry(
   emitLifecycleLog(session.logger, LOG_EVENT_NAMES.WORKFLOW_COMPLETED, attributes);
 }
 
+function recordExportOperationResult(session: ObservMeTelemetrySession, result: BoundedOtelOperationResult): void {
+  if (result.completed && !result.timedOut && !result.error) return;
+
+  const attributes = exportFailureAttributes(result);
+  session.metrics.exportErrors.add(1, exportFailureMetricLabels(result));
+  emitLifecycleLog(session.logger, LOG_EVENT_NAMES.EXPORT_FAILED, attributes, "ERROR");
+}
+
+function exportFailureAttributes(result: BoundedOtelOperationResult): AttributeMap {
+  return {
+    operation: result.operation,
+    reason: exportFailureReason(result),
+    status: result.timedOut ? "timeout" : "error",
+    [LOG_ATTRIBUTES.ERROR_TYPE]: exportFailureErrorClass(result),
+  };
+}
+
+function exportFailureMetricLabels(result: BoundedOtelOperationResult): Record<string, string> {
+  return {
+    operation: result.operation,
+    reason: exportFailureReason(result),
+    error_class: exportFailureErrorClass(result),
+  };
+}
+
+function exportFailureReason(result: BoundedOtelOperationResult): "export_error" | "export_timeout" {
+  return result.timedOut ? "export_timeout" : "export_error";
+}
+
+function exportFailureErrorClass(result: BoundedOtelOperationResult): string {
+  if (result.timedOut) return "timeout";
+  if (!result.error) return "unknown";
+  return normalizeMetricValue(errorClass(result.error), "error");
+}
+
 function buildShutdownAttributes(event: unknown, session: ObservMeTelemetrySession): AttributeMap {
   return withoutUndefinedAttributes({
     [LOG_ATTRIBUTES.PI_SESSION_ID]: readString(session.sessionAttributes, sessionAttributeKeys.SESSION_ID),
@@ -1094,7 +1173,7 @@ function createStatefulHandlerErrorRecorder(
 ): HandlerErrorRecorder {
   return (name, error) => {
     const session = getSession();
-    session?.metrics.handlerErrors.add(1, { handler: name });
+    session?.metrics.handlerErrors.add(1, { operation: normalizeMetricValue(name, "handler") });
     if (session) emitLifecycleLog(session.logger, LOG_EVENT_NAMES.HANDLER_FAILED, handlerErrorAttributes(name, error), "ERROR");
     if (!session) fallback?.(name, error);
   };
@@ -2623,4 +2702,10 @@ function isMissingFileError(error: unknown): boolean {
 
 function errorClass(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
+}
+
+function normalizeMetricValue(value: string, fallback: string): string {
+  const normalizedValue = value.trim().toLowerCase().replaceAll(/[^a-z0-9_.:-]/gu, "_");
+  if (/^[a-z][a-z0-9_.:-]{0,63}$/u.test(normalizedValue)) return normalizedValue;
+  return fallback;
 }

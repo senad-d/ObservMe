@@ -1,0 +1,66 @@
+{
+  "beforeProviderRequest": {
+    "llmRequestId": "fixture-llm-1",
+    "payload": {
+      "api": "messages",
+      "messages": [
+        {
+          "role": "user",
+          "content": "password=hidden-prompt"
+        }
+      ],
+      "tools": [
+        {
+          "name": "read"
+        }
+      ],
+      "temperature": 0.1,
+      "maxTokens": 1024
+    }
+  },
+  "afterProviderResponse": {
+    "llmRequestId": "fixture-llm-1",
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    }
+  },
+  "messageEnd": {
+    "llmRequestId": "fixture-llm-1",
+    "message": {
+      "role": "assistant",
+      "api": "messages",
+      "provider": "anthropic",
+      "model": "claude-fixture",
+      "responseModel": "claude-fixture-20260707",
+      "responseId": "msg_fixture_usage",
+      "stopReason": "stop",
+      "usage": {
+        "input": 21,
+        "output": 34,
+        "cacheRead": 3,
+        "cacheWrite": 4,
+        "cacheWrite1h": 5,
+        "reasoning": 6,
+        "totalTokens": 69,
+        "cost": {
+          "input": 0.021,
+          "output": 0.034,
+          "cacheRead": 0.003,
+          "cacheWrite": 0.004,
+          "total": 0.062
+        }
+      },
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "api_key=hidden-thinking"
+        },
+        {
+          "type": "text",
+          "text": "Fixture assistant response with password=hidden-response"
+        }
+      ]
+    }
+  }
+}

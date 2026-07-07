@@ -1,22 +1,4 @@
 {
-  "__inputs": [
-    {
-      "description": "Prometheus or Mimir datasource containing ObservMe metrics.",
-      "label": "Prometheus",
-      "name": "DS_PROMETHEUS",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus",
-      "type": "datasource"
-    },
-    {
-      "description": "Loki datasource containing ObservMe structured logs for drill-down panels.",
-      "label": "Loki",
-      "name": "DS_LOKI",
-      "pluginId": "loki",
-      "pluginName": "Loki",
-      "type": "datasource"
-    }
-  ],
   "__requires": [
     {
       "id": "grafana",
@@ -74,7 +56,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Agent-run rate grouped only by the low-cardinality agent_role label.",
       "fieldConfig": {
@@ -119,7 +101,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_agent_runs_total[5m])) by (agent_role)",
@@ -134,7 +116,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Subagent spawn rate grouped by low-cardinality depth, type, and reason labels.",
       "fieldConfig": {
@@ -179,7 +161,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_subagents_spawned_total[5m])) by (subagent_depth, spawn_type, spawn_reason)",
@@ -194,7 +176,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Subagent spawn-failure rate grouped by bounded spawn metadata and error class.",
       "fieldConfig": {
@@ -239,7 +221,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_subagent_spawn_failures_total[5m])) by (subagent_depth, spawn_type, spawn_reason, error_class)",
@@ -254,7 +236,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "p95 agent-run duration grouped by agent_role only.",
       "fieldConfig": {
@@ -299,7 +281,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_agent_run_duration_ms_bucket[5m])) by (agent_role, le))",
@@ -314,7 +296,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "p95 subagent-spawn duration grouped by bounded spawn labels.",
       "fieldConfig": {
@@ -359,7 +341,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_subagent_spawn_duration_ms_bucket[5m])) by (agent_role, spawn_type, spawn_reason, le))",
@@ -374,9 +356,9 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
-      "description": "Loki drill-down table for per-agent lineage using backend-normalized high-cardinality attributes outside metric labels.",
+      "description": "Loki drill-down table for agent-tree events using provisioned service_name and event_category labels; lineage IDs are kept out of Prometheus metric labels.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -419,10 +401,10 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (pi_workflow_id, pi_agent_id, pi_agent_parent_id, pi_agent_root_id, pi_agent_spawn_id) (count_over_time({event_category=\"agent-tree\"} | json [$__range]))",
+          "expr": "{service_name=\"observme-pi-extension\", event_category=\"agent-tree\"}",
           "range": true,
           "refId": "A",
           "legendFormat": "{{pi_agent_parent_id}} -> {{pi_agent_id}}"
@@ -434,7 +416,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Active agents grouped by bounded role and depth labels.",
       "fieldConfig": {
@@ -479,7 +461,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(observme_active_agents) by (agent_role, subagent_depth)",
@@ -494,7 +476,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "p95 tree depth and width without workflow or agent IDs in metric labels.",
       "fieldConfig": {
@@ -539,7 +521,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_agent_tree_depth_bucket[5m])) by (subagent_depth, le))",
@@ -550,7 +532,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_agent_tree_width_bucket[5m])) by (subagent_depth, le))",
@@ -565,7 +547,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "p95 child fan-out grouped only by subagent depth.",
       "fieldConfig": {
@@ -610,7 +592,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket[5m])) by (subagent_depth, le))",
@@ -625,7 +607,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Orphan-agent rate grouped by safe role and depth labels.",
       "fieldConfig": {
@@ -670,7 +652,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_orphan_agents_total[5m])) by (agent_role, subagent_depth)",
@@ -685,7 +667,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Trace-context propagation-failure rate grouped by safe role and depth labels.",
       "fieldConfig": {
@@ -730,7 +712,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_trace_context_propagation_failures_total[5m])) by (agent_role, subagent_depth)",
@@ -745,7 +727,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "p95 parent wait and join latency grouped by agent_role only.",
       "fieldConfig": {
@@ -790,7 +772,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_agent_wait_duration_ms_bucket[5m])) by (agent_role, le))",
@@ -801,7 +783,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_agent_join_duration_ms_bucket[5m])) by (agent_role, le))",
@@ -816,7 +798,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Child-agent failure and parent-recovery rates grouped by safe role and depth labels.",
       "fieldConfig": {
@@ -861,7 +843,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_child_agent_failures_total[5m])) by (agent_role, subagent_depth)",
@@ -872,7 +854,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_parent_recovered_from_child_failure_total[5m])) by (agent_role, subagent_depth)",

@@ -1,22 +1,4 @@
 {
-  "__inputs": [
-    {
-      "description": "Prometheus or Mimir datasource containing ObservMe metrics.",
-      "label": "Prometheus",
-      "name": "DS_PROMETHEUS",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus",
-      "type": "datasource"
-    },
-    {
-      "description": "Loki datasource containing ObservMe structured logs.",
-      "label": "Loki",
-      "name": "DS_LOKI",
-      "pluginId": "loki",
-      "pluginName": "Loki",
-      "type": "datasource"
-    }
-  ],
   "__requires": [
     {
       "id": "grafana",
@@ -68,7 +50,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Telemetry drops grouped by bounded drop reason.",
       "fieldConfig": {
@@ -113,7 +95,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_telemetry_dropped_total[5m])) by (reason)",
@@ -128,7 +110,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Redaction failure rate; investigate immediately when content capture is enabled.",
       "fieldConfig": {
@@ -173,7 +155,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_redaction_failures_total[5m]))",
@@ -188,7 +170,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Exporter/backend failures grouped by bounded reason.",
       "fieldConfig": {
@@ -233,7 +215,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_export_errors_total[5m])) by (reason)",
@@ -248,7 +230,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Active spans by operation as a bounded SDK pressure signal when exposed.",
       "fieldConfig": {
@@ -289,7 +271,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(observme_active_spans) by (operation)",
@@ -304,7 +286,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Short-window export success indicator based on observed events minus local drops.",
       "fieldConfig": {
@@ -354,7 +336,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "1 - (sum(rate(observme_telemetry_dropped_total[5m])) / clamp_min(sum(rate(observme_events_observed_total[5m])), 1e-9))",
@@ -369,7 +351,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Handler errors grouped by operation and error class.",
       "fieldConfig": {
@@ -414,7 +396,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_handler_errors_total[5m])) by (operation, error_class)",
@@ -429,7 +411,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "description": "Redaction failure logs using normalized event_name.",
       "fieldConfig": {
@@ -450,9 +432,9 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\"} | event_name=\"redaction.failed\"",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"redaction.failed\"}",
           "queryType": "range",
           "refId": "A"
         }
@@ -463,7 +445,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "description": "Telemetry drop logs using normalized event_name.",
       "fieldConfig": {
@@ -484,9 +466,9 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\"} | event_name=\"telemetry.dropped\"",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"telemetry.dropped\"}",
           "queryType": "range",
           "refId": "A"
         }
@@ -497,7 +479,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "description": "Trace-context propagation failures from the documented Loki query examples.",
       "fieldConfig": {
@@ -518,9 +500,9 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\"} | event_name=\"trace_context.propagation_failed\"",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"trace_context.propagation_failed\"}",
           "queryType": "range",
           "refId": "A"
         }

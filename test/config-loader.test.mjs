@@ -102,6 +102,28 @@ test("project config overrides global config when no env/runtime layer overrides
   assert.equal(config.agent.capabilityEnv, "PROJECT_AGENT_CAPABILITY");
 });
 
+test("session loader maps Grafana auth and local transport environment variables", async () => {
+  const config = await loadSessionConfig({
+    globalConfigPath: "missing-global.yaml",
+    projectConfigPath: "missing-project.yaml",
+    isProjectTrusted: true,
+    readText: createReader({}),
+    env: {
+      OBSERVME_GRAFANA_URL: "https://observability.local",
+      OBSERVME_GRAFANA_USERNAME: "admin",
+      OBSERVME_GRAFANA_PASSWORD: "local-password",
+      OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY: "true",
+      OBSERVME_GRAFANA_PREFER_IPV4: "true",
+    },
+  });
+
+  assert.equal(config.query.grafana.url, "https://observability.local");
+  assert.equal(config.query.grafana.username, "admin");
+  assert.equal(config.query.grafana.password, "local-password");
+  assert.equal(config.query.grafana.tls.insecureSkipVerify, true);
+  assert.equal(config.query.grafana.transport.preferIPv4, true);
+});
+
 test("factory-safe loader excludes project config and still applies global/env/runtime layers", async () => {
   const calls = [];
   const config = await loadFactoryConfig({

@@ -1,22 +1,4 @@
 {
-  "__inputs": [
-    {
-      "description": "Prometheus or Mimir datasource containing ObservMe metrics.",
-      "label": "Prometheus",
-      "name": "DS_PROMETHEUS",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus",
-      "type": "datasource"
-    },
-    {
-      "description": "Loki datasource containing ObservMe structured logs.",
-      "label": "Loki",
-      "name": "DS_LOKI",
-      "pluginId": "loki",
-      "pluginName": "Loki",
-      "type": "datasource"
-    }
-  ],
   "__requires": [
     {
       "id": "grafana",
@@ -68,7 +50,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Branch events divided by session starts to estimate branching per session.",
       "fieldConfig": {
@@ -109,7 +91,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_branches_total[1h])) / clamp_min(sum(rate(observme_sessions_started_total[1h])), 1e-9)",
@@ -124,7 +106,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Compaction rate by deployment environment.",
       "fieldConfig": {
@@ -165,7 +147,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_compactions_total[1h])) by (environment)",
@@ -180,7 +162,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "p95 tokens before compaction from the documented histogram.",
       "fieldConfig": {
@@ -221,7 +203,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(observme_compaction_tokens_before_bucket[1h])) by (le))",
@@ -236,7 +218,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "description": "Branch creation logs; Loki query uses normalized event_name.",
       "fieldConfig": {
@@ -257,9 +239,9 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\"} | event_name=\"branch.created\"",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"branch.created\"}",
           "queryType": "range",
           "refId": "A"
         }
@@ -270,7 +252,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus"
       },
       "description": "Model and thinking-level changes that explain later cost or behavior shifts.",
       "fieldConfig": {
@@ -311,7 +293,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_model_changes_total[1h])) by (provider, model)",
@@ -322,7 +304,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus"
           },
           "editorMode": "code",
           "expr": "sum(rate(observme_thinking_level_changes_total[1h])) by (environment)",
@@ -337,7 +319,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "description": "Compaction structured logs from the documented Loki query examples.",
       "fieldConfig": {
@@ -358,9 +340,9 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\"} | event_name=\"compaction.created\"",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"compaction.created\"}",
           "queryType": "range",
           "refId": "A"
         }

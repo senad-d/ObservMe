@@ -105,6 +105,10 @@ export function envToConfig(env: NodeJS.ProcessEnv = process.env): DeepPartial<O
   setBoolean(config, ["agent", "writeCorrelationEntry"], env.OBSERVME_WRITE_CORRELATION_ENTRY);
   setString(config, ["query", "grafana", "url"], env.OBSERVME_GRAFANA_URL);
   setString(config, ["query", "grafana", "token"], env.OBSERVME_GRAFANA_TOKEN);
+  setString(config, ["query", "grafana", "username"], env.OBSERVME_GRAFANA_USERNAME);
+  setString(config, ["query", "grafana", "password"], env.OBSERVME_GRAFANA_PASSWORD);
+  setBoolean(config, ["query", "grafana", "tls", "insecureSkipVerify"], env.OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY);
+  setBoolean(config, ["query", "grafana", "transport", "preferIPv4"], env.OBSERVME_GRAFANA_PREFER_IPV4);
   setBoolean(config, ["capture", "prompts"], env.OBSERVME_CAPTURE_PROMPTS);
   setBoolean(config, ["capture", "responses"], env.OBSERVME_CAPTURE_RESPONSES);
   setBoolean(config, ["capture", "toolArguments"], env.OBSERVME_CAPTURE_TOOL_ARGUMENTS);

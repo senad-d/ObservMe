@@ -1,6 +1,13 @@
 import type { ObservMeConfig } from "../config/schema.ts";
+import type { GrafanaFetch } from "./grafana-transport.ts";
+import {
+  createGrafanaHeaders,
+  formatGrafanaFetchFailure,
+  formatGrafanaHttpFailure,
+  resolveGrafanaFetch,
+} from "./grafana-transport.ts";
 
-export type LokiFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
+export type LokiFetch = GrafanaFetch;
 
 export interface TimeRange {
   readonly from: Date;
@@ -33,7 +40,7 @@ const lokiIdentifierPartPattern = /^[A-Za-z0-9_.]$/u;
 const sensitiveQueryValuePatterns = [
   /(?:^|[\s"'`|=])(?:prompt|system prompt|user prompt|assistant response|thinking|raw content)\s*:/iu,
   /(?:^|[\s"'`])(?:sudo|rm|mv|cp|curl|wget|npm|pnpm|yarn|node|python3?|bash|sh|git)\s+\S+/iu,
-  /(?:^|[\s"'`=])(?:~|\.{1,2}\/|\/Users\/|\/home\/|\/tmp\/|[A-Za-z]:\\|\\\\)\S*/u,
+  /(?:^|[\s"'`])~\S*|(?:^|[\s"'`=])(?:\.{1,2}\/|\/Users\/|\/home\/|\/tmp\/|[A-Za-z]:\\|\\\\)\S*/u,
   /\b[A-Z][A-Z0-9_]{2,}=[^\s"'`]+/u,
   unresolvedEnvironmentPlaceholderPattern,
 ] as const;
@@ -44,7 +51,7 @@ export class LokiQueryClient {
 
   constructor(config: ObservMeConfig, options: LokiQueryClientOptions = {}) {
     this.#config = config;
-    this.#fetcher = resolveLokiFetch(options.fetch);
+    this.#fetcher = resolveGrafanaFetch(config, options.fetch);
   }
 
   async queryLoki(query: string, range: TimeRange): Promise<LogResult[]> {
@@ -71,9 +78,9 @@ export async function queryLoki(
   const timeRange = normalizeTimeRange(range);
   const maxLogs = resolveMaxLogs(config);
   const url = createLokiQueryRangeUrl(config, normalizedQuery, timeRange, maxLogs);
-  const response = await fetchLokiQuery(url, config, resolveLokiFetch(options.fetch));
+  const response = await fetchLokiQuery(url, config, resolveGrafanaFetch(config, options.fetch));
 
-  return readLokiLogResults(response, maxLogs);
+  return readLokiLogResults(response, config, maxLogs);
 }
 
 export function normalizeLokiAttributeName(attributeName: string): string {
@@ -237,11 +244,11 @@ async function fetchLokiQuery(url: string, config: ObservMeConfig, fetcher: Loki
 
 function normalizeLokiFetchError(error: unknown): Error {
   if (isAbortError(error)) return new Error("Loki query timed out.");
-  return error instanceof Error ? error : new Error(String(error));
+  return new Error(formatGrafanaFetchFailure(error));
 }
 
-async function readLokiLogResults(response: Response, maxLogs: number): Promise<LogResult[]> {
-  if (!response.ok) throw new Error(`Loki query failed: ${formatHttpStatus(response)}`);
+async function readLokiLogResults(response: Response, config: ObservMeConfig, maxLogs: number): Promise<LogResult[]> {
+  if (!response.ok) throw new Error(`Loki query failed: ${formatGrafanaHttpFailure(response, config)}`);
 
   const payload = (await response.json()) as unknown;
   const logs = extractLokiLogResults(payload);
@@ -309,31 +316,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function createGrafanaHeaders(config: ObservMeConfig): Record<string, string> {
-  const token = normalizeConfiguredToken(config.query.grafana.token);
-  const headers: Record<string, string> = { Accept: "application/json" };
-
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return headers;
-}
-
-function normalizeConfiguredToken(token: string): string | undefined {
-  const trimmed = token.trim();
-  if (!trimmed || unresolvedEnvironmentPlaceholderPattern.test(trimmed)) return undefined;
-  return trimmed;
-}
-
 function isLokiQueryUnavailable(config: ObservMeConfig): boolean {
   return !config.query.enabled || !config.query.grafana.url.trim() || !config.query.grafana.datasourceUids.loki.trim();
 }
 
-function resolveLokiFetch(fetcher: LokiFetch | undefined): LokiFetch {
-  return fetcher ?? defaultLokiFetch;
-}
-
-async function defaultLokiFetch(input: string | URL, init?: RequestInit): Promise<Response> {
-  return globalThis.fetch(input, init);
-}
 
 function resolveQueryTimeoutMs(config: ObservMeConfig): number {
   const timeoutMs = config.query.timeoutMs;
@@ -345,11 +331,6 @@ function resolveMaxLogs(config: ObservMeConfig): number {
   const maxLogs = config.query.maxLogs;
   if (!Number.isFinite(maxLogs) || maxLogs < minimumMaxLogs) return minimumMaxLogs;
   return Math.trunc(maxLogs);
-}
-
-function formatHttpStatus(response: Response): string {
-  const statusText = response.statusText.trim();
-  return statusText ? `HTTP ${response.status} ${statusText}` : `HTTP ${response.status}`;
 }
 
 function isAbortError(error: unknown): boolean {

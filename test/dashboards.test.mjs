@@ -14,11 +14,23 @@ const dashboardFiles = [
   "dashboards/observme-export-health.json",
 ];
 const agentDashboardFile = "dashboards/observme-agents.json";
+const localCollectorConfigFile = "observability-stack/config/otel/otel-collector.yaml";
+const datasourceInputVariablePattern = /\$\{DS_[A-Z_]+\}/u;
 const lokiAttributePattern = /\b(?:event\.name|event\.category|pi\.session\.id|pi\.workflow\.id|pi\.agent\.id)\b/u;
 const metricNamePattern = /\bobservme_[a-z0-9_]+(?:_(?:bucket|sum|count))?\b/gu;
 const forbiddenAgentMetricLabelPattern =
   /\b(?:session_id|workflow_id|workflow_root_agent_id|agent_id|parent_agent_id|child_agent_id|agent_run_id|spawn_id|spawn_tool_call_id|trace_id|span_id|pi_workflow_id|pi_workflow_root_agent_id|pi_agent_id|pi_agent_parent_id|pi_agent_root_id|pi_agent_spawn_id)\b/u;
 const histogramSuffixes = ["_bucket", "_sum", "_count"];
+const lokiSelectorPattern = /\{([^{}]*)\}/gu;
+const lokiLabelMatcherPattern = /\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:=~|!~|!=|=)/gu;
+const lokiJsonParserPattern = /\|\s*json\b/u;
+const incorrectErrorCategoryPattern = /event_category\s*=\s*"error"/u;
+const lokiLabelsHintPattern = /key: loki\.(?:attribute|resource)\.labels\s*\n\s*value: ([^\n]+)/gu;
+const localServiceNameInsertPattern = /key: service\.name\s*\n\s*value: observme-pi-extension\s*\n\s*action: insert/u;
+const provisionedDatasourceUidsByType = new Map([
+  ["loki", "loki"],
+  ["prometheus", "prometheus"],
+]);
 
 async function readJsonFile(path) {
   return JSON.parse(await readFile(path, "utf8"));
@@ -30,9 +42,50 @@ function assertDashboardShape(path, dashboard) {
   assert.equal(typeof dashboard.schemaVersion, "number", `${path}: schemaVersion is required`);
   assert.ok(Array.isArray(dashboard.panels), `${path}: panels must be an array`);
   assert.ok(dashboard.panels.length > 0, `${path}: at least one panel is required`);
-  assert.ok(Array.isArray(dashboard.__inputs), `${path}: datasource input is required`);
-
+  assert.equal(
+    dashboard.__inputs,
+    undefined,
+    `${path}: provisioned dashboard must not declare import-time datasource inputs`,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(dashboard),
+    datasourceInputVariablePattern,
+    `${path}: provisioned dashboard must not contain unresolved datasource input variables`,
+  );
   for (const panel of dashboard.panels) assertPanelShape(path, panel);
+
+  assertDashboardDatasourceReferences(path, dashboard);
+}
+
+function assertDashboardDatasourceReferences(path, dashboard) {
+  for (const panel of dashboard.panels) {
+    assertDatasourceReference(path, panel.title, "panel", panel.datasource);
+
+    for (const target of panel.targets) {
+      assertDatasourceReference(path, panel.title, `target ${target.refId}`, target.datasource);
+    }
+  }
+}
+
+function assertDatasourceReference(path, panelTitle, source, datasource) {
+  if (!datasource || typeof datasource !== "object") return;
+
+  if (typeof datasource.uid === "string") {
+    assert.doesNotMatch(
+      datasource.uid,
+      datasourceInputVariablePattern,
+      `${path}: ${panelTitle} ${source} has an unresolved datasource input variable`,
+    );
+  }
+
+  const expectedUid = provisionedDatasourceUidsByType.get(datasource.type);
+  if (!expectedUid) return;
+
+  assert.equal(
+    datasource.uid,
+    expectedUid,
+    `${path}: ${panelTitle} ${source} must use provisioned ${datasource.type} datasource UID`,
+  );
 }
 
 function assertPanelShape(path, panel) {
@@ -129,6 +182,44 @@ function normalizedMetricName(metricName, documentedNames) {
   return metricName;
 }
 
+function provisionedLokiLabels(collectorText) {
+  const labels = new Set();
+  const matches = collectorText.matchAll(lokiLabelsHintPattern);
+
+  for (const match of matches) addProvisionedLokiLabels(labels, match[1]);
+
+  return labels;
+}
+
+function addProvisionedLokiLabels(labels, value) {
+  for (const attributeName of value.split(",")) {
+    const label = normalizeLokiLabelName(attributeName);
+    if (label) labels.add(label);
+  }
+}
+
+function normalizeLokiLabelName(attributeName) {
+  return attributeName.trim().replaceAll(".", "_");
+}
+
+function lokiSelectorLabels(expression) {
+  const labels = [];
+  const selectors = expression.matchAll(lokiSelectorPattern);
+
+  for (const selector of selectors) labels.push(...lokiMatcherLabels(selector[1]));
+
+  return labels;
+}
+
+function lokiMatcherLabels(selector) {
+  const labels = [];
+  const matches = selector.matchAll(lokiLabelMatcherPattern);
+
+  for (const match of matches) labels.push(match[1]);
+
+  return labels;
+}
+
 async function dashboardFilesAreValidGrafanaDashboards() {
   for (const path of dashboardFiles) {
     const dashboard = await readJsonFile(path);
@@ -180,6 +271,27 @@ async function lokiDashboardTargetsUseNormalizedAttributeNames() {
   }
 }
 
+async function lokiDashboardTargetsUseProvisionedLabels() {
+  const collectorText = await readFile(localCollectorConfigFile, "utf8");
+  const labels = provisionedLokiLabels(collectorText);
+
+  assert.match(collectorText, localServiceNameInsertPattern, `${localCollectorConfigFile}: service.name fallback is required`);
+
+  for (const path of dashboardFiles) {
+    const dashboard = await readJsonFile(path);
+    const targets = lokiTargetsForDashboard(dashboard);
+
+    for (const { panel, target } of targets) {
+      assert.doesNotMatch(target.expr, lokiJsonParserPattern, `${path}: ${panel.title} must not parse non-JSON ObservMe log bodies`);
+      assert.doesNotMatch(target.expr, incorrectErrorCategoryPattern, `${path}: ${panel.title} must not treat event_category as error severity`);
+
+      for (const label of lokiSelectorLabels(target.expr)) {
+        assert.ok(labels.has(label), `${path}: ${panel.title} uses unprovisioned Loki label ${label}`);
+      }
+    }
+  }
+}
+
 test("dashboard JSON files are valid Grafana dashboard documents", dashboardFilesAreValidGrafanaDashboards);
 test("dashboard PromQL queries only use documented ObservMe metric names", dashboardPromqlQueriesUseDocumentedMetrics);
 test(
@@ -187,3 +299,4 @@ test(
   agentDashboardPrometheusTargetsAvoidHighCardinalityLabels,
 );
 test("dashboard Loki targets use normalized OTLP attribute names", lokiDashboardTargetsUseNormalizedAttributeNames);
+test("dashboard Loki targets use labels provisioned by the local Collector", lokiDashboardTargetsUseProvisionedLabels);

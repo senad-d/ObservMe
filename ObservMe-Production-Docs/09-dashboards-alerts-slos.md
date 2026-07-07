@@ -239,46 +239,46 @@ sum(rate(observme_redaction_failures_total[5m]))
 Errors:
 
 ```logql
-{service_name="observme-pi-extension"} | event_category="error"
+{service_name="observme-pi-extension", event_name=~".*[.]failed|.*[.]dropped|agent[.]orphaned"}
 ```
 
 Tool failures:
 
 ```logql
-{service_name="observme-pi-extension"} | event_name="tool.call.failed"
+{service_name="observme-pi-extension", event_name="tool.call.failed"}
 ```
 
 LLM failures:
 
 ```logql
-{service_name="observme-pi-extension"} | event_name="llm.request.failed"
+{service_name="observme-pi-extension", event_name="llm.request.failed"}
 ```
 
 Compactions:
 
 ```logql
-{service_name="observme-pi-extension"} | event_name="compaction.created"
+{service_name="observme-pi-extension", event_name="compaction.created"}
 ```
 
 Subagent spawns:
 
 ```logql
-{service_name="observme-pi-extension"} | event_name="agent.spawn.completed"
+{service_name="observme-pi-extension", event_name="agent.spawn.completed"}
 ```
 
 Orphan agents:
 
 ```logql
-{service_name="observme-pi-extension"} | event_name="agent.orphaned"
+{service_name="observme-pi-extension", event_name="agent.orphaned"}
 ```
 
 Trace-context propagation failures:
 
 ```logql
-{service_name="observme-pi-extension"} | event_name="trace_context.propagation_failed"
+{service_name="observme-pi-extension", event_name="trace_context.propagation_failed"}
 ```
 
-These examples assume Loki OTLP ingestion stores ObservMe OTEL attributes as labels or structured metadata. Dotted OTEL attribute names are queried in Loki with underscores, for example `event.name` as `event_name` and `pi.session.id` as `pi_session_id`.
+These examples assume Loki OTLP ingestion stores ObservMe OTEL attributes as labels or structured metadata. Dotted OTEL attribute names are queried in Loki with underscores, for example `event.name` as `event_name`, `event.category` as `event_category`, and `pi.session.id` as `pi_session_id`. `event.category` is the ObservMe semantic category, so failure dashboards select by `event_name` rather than `event_category="error"`.
 
 ## 10. Tempo / TraceQL Concepts
 

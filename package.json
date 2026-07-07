@@ -42,7 +42,7 @@
     "lint": "npm run typecheck && npm run lint:eslint && npm run format:check && npm run check",
     "lint:eslint": "eslint . --max-warnings=0",
     "format:check": "node scripts/check-format.mjs",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test test/*.test.mjs test/*.test.ts",
     "test:integration:collector": "node --test test/integration/collector-debug.test.mjs",
     "test:integration:grafana-stack": "node --test test/integration/grafana-stack.test.mjs",
     "test:coverage": "node scripts/test-coverage.mjs",

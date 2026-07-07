@@ -10,14 +10,12 @@
 
 <p align="center">
   OpenTelemetry observability for <a href="https://pi.dev">pi</a> agent sessions.
-  <br />Turns Pi session, turn, tool, LLM, branch, compaction, and agent-lineage events into OTLP traces, metrics, and logs for an external observability stack.
+  <br />Turns Pi session, turn, tool, LLM, bash, branch, compaction, model, thinking, and agent-lineage events into OTLP traces, metrics, and logs.
 </p>
 
 ---
 
-> **Status: preparation stage.** This repository has been bootstrapped from the Pi extension template and given ObservMe project identity, but the actual telemetry, redaction, and `/obs` command behavior described below is **planned, not yet implemented**. See `specs/spec-tasks.md` for the checkbox-driven implementation plan and `ObservMe-Production-Docs/` for the full production design. Do not install this package expecting working telemetry export yet.
-
-ObservMe is a Pi extension for **observability of Pi agent sessions**. It reads Pi session/turn/tool/LLM/branch/compaction lifecycle events through Pi's extension API, maps them to OpenTelemetry semantics (`pi.*`/`observme.*` namespaces plus official `gen_ai.*` attributes where they fit), exports them via OTLP to an OpenTelemetry Collector, and is **privacy-preserving by default**: prompts, responses, thinking content, tool arguments/results, bash commands/output, and file paths are never captured unless explicitly enabled and redacted.
+ObservMe is a Pi extension for **observability of Pi agent sessions**. It reads Pi extension lifecycle and session events, maps them to OpenTelemetry semantics (`pi.*`/`observme.*` namespaces plus official `gen_ai.*` attributes where they fit), exports them via OTLP to an OpenTelemetry Collector, and is **privacy-preserving by default**: prompts, responses, thinking content, tool arguments/results, bash commands/output, and file paths are not captured unless explicitly enabled and redacted.
 
 <table align="center">
   <tr>
@@ -32,21 +30,22 @@ ObservMe is a Pi extension for **observability of Pi agent sessions**. It reads 
 
 - **OTLP-first:** emits OpenTelemetry traces, metrics, and logs; no durable local telemetry database.
 - **Fail open:** if the Collector or backend is unreachable, Pi keeps running — telemetry is dropped, never blocking.
-- **Privacy by default:** all optional content capture (prompts, responses, tool args/results, bash, paths) starts disabled and passes through a redaction pipeline when enabled.
+- **Privacy by default:** optional content capture starts disabled and passes through the redaction pipeline when enabled.
 - **Agent lineage aware:** propagates parent/child/root agent identity and W3C trace context across subagent process boundaries without adding high-cardinality identifiers to metric labels.
-- **Pi-native:** designed to be used as a Pi package (global, project-local, git install, or source checkout).
+- **Pi-native:** usable as a Pi package, project-local install, git install, or local source checkout.
 
-> **Security:** pi packages run with your full system permissions. ObservMe reads Pi session/event data through Pi's extension API, does not execute shell commands itself, and sends telemetry only to configured OTLP endpoints (Collector by default). Read [`SECURITY.md`](SECURITY.md).
+> **Security:** Pi packages run with your full system permissions. ObservMe reads Pi session/event data through Pi's extension API, does not execute shell commands itself, and sends telemetry only to configured OTLP endpoints. Read [`SECURITY.md`](SECURITY.md).
 
 ## Table of Contents
 
-- [Current Status](#current-status)
-- [Planned Quick Start](#planned-quick-start)
+- [Implementation Status](#implementation-status)
+- [Quick Start](#quick-start)
 - [Installation](#installation)
-- [Planned Commands](#planned-commands)
+- [Commands](#commands)
 - [Architecture](#architecture)
 - [Configuration and Privacy](#configuration-and-privacy)
 - [Safety Model](#safety-model)
+- [Dashboards and Examples](#dashboards-and-examples)
 - [Documentation Set](#documentation-set)
 - [Development](#development)
 - [Publishing](#publishing)
@@ -54,23 +53,21 @@ ObservMe is a Pi extension for **observability of Pi agent sessions**. It reads 
 
 ---
 
-## Current Status
+## Implementation Status
 
-This repository is in the **preparation phase** of Pi extension development:
+This checkout implements the ObservMe MVP scope from `ObservMe-Production-Docs/00-README.md`:
 
-- ✅ Bootstrapped from the Pi extension template.
-- ✅ Project identity applied (`@senad-d/observme`, `senad-d/ObservMe`, MIT license).
-- ✅ Production design docs (`ObservMe-Production-Docs/`) and a reference Grafana/Tempo/Loki/Prometheus/Collector stack (`observability-stack/`) already present.
-- ✅ Three preparation specs written (`specs/project-definition-brief.md`, `specs/spec-architecture.md`, `specs/spec-guidelines.md`, `specs/spec-tasks.md`).
-- ⏳ **Not yet implemented:** OTEL SDK wiring, Pi event-to-span mapping, redaction pipeline, agent-lineage propagation, and all `/obs` commands.
+- Extension load checks and `/obs health` backend checks.
+- Session, workflow, agent-run, turn, LLM, tool, bash, subagent-spawn, wait/join, compaction, branch, model-change, and thinking-level telemetry.
+- Multi-agent tree metrics for active agents, depth, fan-out, orphan agents, trace-context propagation failures, child failures, and workflow duration.
+- Session-scoped OTLP trace, metric, and log exporters with bounded queues, timeouts, and shutdown flushing.
+- Configurable capture controls, redaction, path scrubbing, hashing, truncation, and high-cardinality metric-label guards.
+- Grafana dashboard JSON, alert rules, SLO definitions, Collector examples, and compatibility matrix artifacts.
+- Unit, contract, integration, chaos/failure, performance, package, and smoke-test coverage in the validation pipeline.
 
-A future implementation session will work through `specs/spec-tasks.md` one checkbox at a time. See that file for the exact, ordered task list.
+The repository version is currently `0.1.0`. Run the validation commands below before publishing or deploying a release build.
 
----
-
-## Planned Quick Start
-
-Once implemented, ObservMe is expected to work like this:
+## Quick Start
 
 ```bash
 pi install npm:@senad-d/observme
@@ -78,26 +75,15 @@ cd /path/to/your/project
 pi
 ```
 
+Inside Pi:
+
 ```text
 /obs status
 /obs health
+/obs session
 ```
 
-ObservMe will observe the current Pi session and export telemetry to the configured OTLP endpoint. It never blocks Pi execution when the backend is unavailable.
-
----
-
-## Installation
-
-| Scope | Command | Notes |
-| --- | --- | --- |
-| Global | `pi install npm:@senad-d/observme` | Loads in every trusted pi project. |
-| Project-local | `pi install npm:@senad-d/observme -l` | Writes to `.pi/settings.json` in the current project. |
-| One run | `pi -e npm:@senad-d/observme` | Try without changing settings. |
-| Git | `pi install git:senad-d/ObservMe` | Pin a tag or commit. |
-| Local checkout | `pi --no-extensions -e .` | Develop or test this repository. |
-
-Source checkout:
+Local source checkout:
 
 ```bash
 git clone https://github.com/senad-d/ObservMe.git
@@ -107,27 +93,37 @@ npm run validate
 pi --no-extensions -e .
 ```
 
----
+ObservMe observes the current Pi session and exports telemetry to the configured OTLP endpoint. It never blocks Pi execution when the backend is unavailable.
+
+## Installation
+
+| Scope | Command | Notes |
+| --- | --- | --- |
+| Global | `pi install npm:@senad-d/observme` | Loads in every trusted Pi project. |
+| Project-local | `pi install npm:@senad-d/observme -l` | Writes to `.pi/settings.json` in the current project. |
+| One run | `pi -e npm:@senad-d/observme` | Try without changing settings. |
+| Git | `pi install git:senad-d/ObservMe` | Pin a tag or commit. |
+| Local checkout | `pi --no-extensions -e .` | Develop or test this repository. |
 
 ## Commands
 
-| Command | Description | Status |
+All commands are registered under `/obs`.
+
+| Command | Description | Backend access |
 | --- | --- | --- |
-| `/obs status` | Show local ObservMe enablement, OTLP endpoint, capture flags, and queue-drop counters | Planned |
-| `/obs health` | Check Collector and Grafana/datasource reachability | Planned |
-| `/obs session` | Show current session's turn/LLM/tool-call counts and cost, with a trace link | Planned |
-| `/obs cost` | Query Prometheus/Mimir for token/cost aggregates | Planned |
-| `/obs trace` | Return a Grafana Tempo trace link for the current or a given session | Planned |
-| `/obs tools` | Query tool call/failure rates | Planned |
-| `/obs errors` | Query Loki for recent error events and render a capped structured summary | Implemented |
-| `/obs logs` | Query Loki for the current session's structured logs by `pi_session_id` and render a capped summary | Implemented |
-| `/obs agents` | Show current agent identity and recent parent/child subagent lineage | Planned |
-| `/obs link` | Direct Grafana link helper | Planned |
-| `/obs backfill` | Optional, disabled-by-default historical telemetry replay | Implemented, explicit confirmation required |
+| `/obs status` | Shows local ObservMe enablement, OTLP endpoint, signal enablement, capture flags, queue drops, and last export error. | Local state only |
+| `/obs health` | Checks Collector, Grafana, and configured datasource reachability with bounded timeouts. | Collector/Grafana |
+| `/obs session` | Shows current-session turn, LLM-call, tool-call, cost, and trace-link state from runtime counters. | Local state only |
+| `/obs cost` | Queries Prometheus/Mimir for safe model/provider token and cost aggregates. | Prometheus/Mimir via Grafana |
+| `/obs trace` | Returns a Grafana Tempo trace link for current, last-turn, or safe session-id scopes. | Grafana link construction |
+| `/obs link` | Direct Grafana trace-link helper using the configured URL template. | Grafana link construction |
+| `/obs tools` | Queries tool-call and tool-failure aggregates using only safe tool/error labels. | Prometheus/Mimir via Grafana |
+| `/obs errors` | Queries Loki for recent failed/dropped/orphan event names and renders a capped summary. | Loki via Grafana |
+| `/obs logs` | Queries Loki for the current session's normalized `pi_session_id` label and renders a capped summary. | Loki via Grafana |
+| `/obs agents` | Shows current workflow/agent identity, lineage, fan-out/depth, active children, orphan status, and wait/join hints. | Local state plus safe Tempo/Prometheus drill-downs |
+| `/obs backfill` | Optional historical replay for the current session with explicit confirmation, replay markers, redaction, and export rate limits. | OTLP export when confirmed |
 
-Full command semantics are specified in `ObservMe-Production-Docs/08-query-grafana-integration.md`.
-
----
+Query-backed commands enforce configured timeouts and result limits and reject raw prompt, command, path, or other sensitive query inputs.
 
 ## Architecture
 
@@ -144,13 +140,21 @@ Grafana
   └── Prometheus/Mimir datasource
 ```
 
-See `ObservMe-Production-Docs/02-reference-architecture.md` for the full architecture and `specs/spec-architecture.md` for the implementation-oriented module breakdown. A reference Docker Compose deployment of the Grafana/Tempo/Loki/Prometheus/Collector stack lives in `observability-stack/`.
+The extension factory in `src/extension.ts` only registers handlers and commands. OTEL SDK startup happens from `session_start`, and bounded flush/shutdown happens from `session_shutdown`, so importing or registering the extension does not open exporters, timers, or sockets.
 
----
+See `ObservMe-Production-Docs/02-reference-architecture.md` for the full architecture and `specs/spec-architecture.md` for the implementation-oriented module breakdown. A reference Docker Compose deployment of the Grafana/Tempo/Loki/Prometheus/Collector stack lives in `observability-stack/`.
 
 ## Configuration and Privacy
 
-ObservMe is designed to be privacy-preserving by default. Planned default capture policy:
+ObservMe supports layered configuration with this precedence:
+
+```text
+defaults → global ~/.pi/agent/observme.yaml → trusted project config → environment variables → runtime options
+```
+
+Factory-safe loading uses defaults/global/environment/runtime options only. Session-scoped loading can add trusted project config when Pi marks the project trusted.
+
+Default capture policy:
 
 ```yaml
 capture:
@@ -162,23 +166,42 @@ capture:
   bashCommands: false
   bashOutput: false
   filePaths: false
+privacy:
+  redactionEnabled: true
+  allowUnsafeCapture: false
+  allowInsecureTransport: false
+workflow:
+  enabled: true
 ```
 
-Metadata such as token counts, duration, status, model/provider, tool name, and agent role/depth is captured by default. High-cardinality identifiers (session IDs, agent IDs, trace/span IDs) are allowed on spans/logs for drill-down but must never become Prometheus metric labels. Full configuration schema: `ObservMe-Production-Docs/12-configuration-reference.md`. Full redaction/privacy design: `ObservMe-Production-Docs/06-security-privacy-redaction.md`.
+When optional content capture is enabled, the redaction pipeline applies size guards, secret detection, optional PII detection, path scrubbing (`hash`, `basename`, `full`, or `drop`), custom regex redactors, truncation metadata, and tenant-salted hashing before export. Hash salts are read from secure environment/runtime config, not hardcoded.
 
----
+Metadata such as token counts, duration, status, model/provider, tool name, and agent role/depth is captured by default. High-cardinality identifiers (session IDs, workflow IDs, agent IDs, trace/span IDs, entry IDs) are allowed on spans/logs for drill-down but are blocked from Prometheus metric labels.
+
+Grafana-backed query commands prefer `query.grafana.token` bearer/service-account auth. For the bundled local stack, you can use `query.grafana.username` plus `query.grafana.password`, `query.grafana.tls.insecureSkipVerify: true`, and `query.grafana.transport.preferIPv4: true` for `https://observability.local`; `/obs health` reports `401`/`403`, TLS, DNS, and timeout failures without printing secrets.
+
+Full configuration schema: `ObservMe-Production-Docs/12-configuration-reference.md`. Full redaction/privacy design: `ObservMe-Production-Docs/06-security-privacy-redaction.md`.
 
 ## Safety Model
 
-- ObservMe is designed to never execute shell commands itself; it only observes tool/bash execution events emitted by Pi.
-- ObservMe never blocks Pi agent execution when the observability backend is degraded or unreachable (fail-open).
-- ObservMe does not read the full Pi session file continuously; it uses Pi's real-time extension events, reading session state only on startup recovery, `/obs session`, or explicit `/obs backfill`.
-- Optional content capture is disabled by default and passes through a mandatory redaction pipeline (secret detection, PII detection, path scrubbing, truncation, hashing) before export when enabled.
-- `/obs` query commands are read-only and never a dependency of telemetry emission.
+- ObservMe does not execute shell commands itself; it only observes tool/bash execution events emitted by Pi.
+- ObservMe never blocks Pi agent execution when the observability backend is degraded or unreachable.
+- ObservMe starts exporters only for a trusted session and shuts them down with bounded timeouts.
+- ObservMe does not continuously tail the full Pi session file; startup recovery reads only minimal session/correlation state, and historical replay requires an explicit `/obs backfill` command.
+- Optional content capture is disabled by default and must pass through the redaction pipeline before export when enabled.
+- `/obs` query commands are read-only and are not imported by telemetry-emission code paths.
+- Invalid or unsafe configuration falls back to safe defaults with a logged rejection reason; intentionally unsafe capture emits a visible warning.
 
 See [`SECURITY.md`](SECURITY.md) and `ObservMe-Production-Docs/06-security-privacy-redaction.md` for details.
 
----
+## Dashboards and Examples
+
+- Grafana dashboards: `dashboards/observme-*.json`.
+- Alert rules: `dashboards/observme-alerts.yaml`.
+- SLO definitions: `dashboards/observme-slos.yaml`.
+- Minimal ObservMe config: `examples/observme.yaml`.
+- Production Collector config with high-cardinality and content-drop processors: `examples/collector.yaml`.
+- Compatibility matrix: `docs/compatibility-matrix.md`.
 
 ## Documentation Set
 
@@ -200,9 +223,7 @@ The full production design lives in `ObservMe-Production-Docs/`:
 | `12-configuration-reference.md` | Full configuration schema |
 | `13-source-notes.md` | External documentation cross-check notes |
 
-Preparation specs live in `specs/`: `project-definition-brief.md`, `spec-architecture.md`, `spec-guidelines.md`, `spec-tasks.md`.
-
----
+Implementation specs live in `specs/`: `project-definition-brief.md`, `spec-architecture.md`, `spec-guidelines.md`, `spec-tasks.md`.
 
 ## Development
 
@@ -215,19 +236,19 @@ Useful checks:
 
 ```bash
 npm run typecheck
-npm run lint        # ESLint for TypeScript and development scripts
+npm run lint        # TypeScript, ESLint, formatting, and script syntax checks
 npm run lint:fix    # optional auto-fix pass
 npm run format:check
 npm run test
+npm run test:integration:collector
+npm run test:integration:grafana-stack
 npm run check:pack
 pi --no-extensions -e .
 ```
 
----
-
 ## Publishing
 
-ObservMe will publish to npm as `@senad-d/observme`. Run from a clean working tree after updating `CHANGELOG.md`. Publishing is not expected until the MVP scope in `ObservMe-Production-Docs/00-README.md` is implemented.
+ObservMe publishes to npm as `@senad-d/observme`. Run from a clean working tree after validation and a `CHANGELOG.md` update.
 
 ```bash
 npm login
@@ -238,8 +259,6 @@ npm publish --access public
 ```
 
 Push the release commit and tag after the package is published.
-
----
 
 ## License
 
