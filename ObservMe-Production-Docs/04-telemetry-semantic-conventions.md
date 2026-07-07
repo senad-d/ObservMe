@@ -358,6 +358,7 @@ pi.bash.cancelled
 pi.bash.truncated
 pi.bash.output.size
 pi.bash.output.hash
+pi.bash.output.redacted           # optional
 pi.bash.full_output_path_present
 pi.bash.exclude_from_context
 ```

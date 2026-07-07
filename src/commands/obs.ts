@@ -1,0 +1,82 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ObsHealthCommandContext, RegisterObsHealthCommandOptions } from "./obs-health.ts";
+import { handleObsHealthCommand } from "./obs-health.ts";
+import type { ObsSessionCommandContext, RegisterObsSessionCommandOptions } from "./obs-session.ts";
+import { handleObsSessionCommand } from "./obs-session.ts";
+import type { ObsStatusCommandContext, RegisterObsStatusCommandOptions } from "./obs-status.ts";
+import { handleObsStatusCommand } from "./obs-status.ts";
+
+export interface ObsCommandContext extends ObsStatusCommandContext, ObsHealthCommandContext, ObsSessionCommandContext {}
+
+export interface RegisterObsCommandOptions {
+  readonly status?: RegisterObsStatusCommandOptions;
+  readonly health?: RegisterObsHealthCommandOptions;
+  readonly session?: RegisterObsSessionCommandOptions;
+}
+
+const OBS_COMMAND_NAME = "obs";
+const OBS_STATUS_SUBCOMMAND = "status";
+const OBS_HEALTH_SUBCOMMAND = "health";
+const OBS_SESSION_SUBCOMMAND = "session";
+const obsSubcommands = [OBS_STATUS_SUBCOMMAND, OBS_HEALTH_SUBCOMMAND, OBS_SESSION_SUBCOMMAND] as const;
+
+export function registerObsCommand(pi: ExtensionAPI, options: RegisterObsCommandOptions = {}): void {
+  const command = new ObsCommand(options);
+
+  pi.registerCommand(OBS_COMMAND_NAME, {
+    description: "Run ObservMe commands. Usage: /obs <status|health|session>",
+    getArgumentCompletions: getObsRootCommandArgumentCompletions,
+    handler: command.handle.bind(command),
+  });
+}
+
+export async function handleObsCommand(
+  args: string,
+  ctx: ObsCommandContext,
+  options: RegisterObsCommandOptions = {},
+): Promise<void> {
+  const subcommand = firstObsSubcommand(args);
+
+  if (!subcommand || subcommand === OBS_STATUS_SUBCOMMAND) {
+    await handleObsStatusCommand(OBS_STATUS_SUBCOMMAND, ctx, options.status);
+    return;
+  }
+
+  if (subcommand === OBS_HEALTH_SUBCOMMAND) {
+    await handleObsHealthCommand(OBS_HEALTH_SUBCOMMAND, ctx, options.health);
+    return;
+  }
+
+  if (subcommand === OBS_SESSION_SUBCOMMAND) {
+    await handleObsSessionCommand(OBS_SESSION_SUBCOMMAND, ctx, options.session);
+    return;
+  }
+
+  await ctx.ui.notify("Usage: /obs <status|health|session>", "warning");
+}
+
+export function getObsRootCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
+  const normalizedPrefix = prefix.trim().toLowerCase();
+  const completions = obsSubcommands
+    .filter(subcommand => subcommand.startsWith(normalizedPrefix))
+    .map(subcommand => ({ value: subcommand, label: subcommand }));
+
+  return completions.length > 0 ? completions : null;
+}
+
+class ObsCommand {
+  readonly #options: RegisterObsCommandOptions;
+
+  constructor(options: RegisterObsCommandOptions) {
+    this.#options = options;
+  }
+
+  async handle(args: string, ctx: ObsCommandContext): Promise<void> {
+    await handleObsCommand(args, ctx, this.#options);
+  }
+}
+
+function firstObsSubcommand(args: string): string | undefined {
+  const [subcommand] = args.trim().toLowerCase().split(/\s+/u);
+  return subcommand;
+}

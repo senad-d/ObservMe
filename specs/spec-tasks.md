@@ -27,7 +27,7 @@ IMPORTANT: Execute every task in order, top to bottom. Each task must remain `- 
 
 ### 1. Fix the missing validate-pipeline scripts
 
-- [ ] Resolve `package.json`'s `scripts.check`/`scripts.validate` chain, which currently references `scripts/test-coverage.mjs`, `scripts/smoke-observability.mjs`, `scripts/smoke-packaged-install.mjs`, `scripts/smoke-handler-execution.mjs`, and `scripts/smoke-pi-lifecycle.mjs` — none of which exist in the bootstrapped template. Either implement these scripts with real (even minimal but functional) coverage/smoke behavior, or update `package.json` to remove/replace the missing references, so `npm run validate` succeeds end to end.
+- [x] Resolve `package.json`'s `scripts.check`/`scripts.validate` chain, which currently references `scripts/test-coverage.mjs`, `scripts/smoke-observability.mjs`, `scripts/smoke-packaged-install.mjs`, `scripts/smoke-handler-execution.mjs`, and `scripts/smoke-pi-lifecycle.mjs` — none of which exist in the bootstrapped template. Either implement these scripts with real (even minimal but functional) coverage/smoke behavior, or update `package.json` to remove/replace the missing references, so `npm run validate` succeeds end to end.
 
 #### Why
 
@@ -50,7 +50,7 @@ Confirm with the user whether the implementation session should author the missi
 
 ### 2. Define config schema and safe defaults
 
-- [ ] Create `src/config/schema.ts` and `src/config/defaults.ts` implementing the full configuration shape and safe-by-default values from `ObservMe-Production-Docs/12-configuration-reference.md` §1 and §5 (privacy-preserving defaults: capture flags `false`, `redactionEnabled: true`, `allowUnsafeCapture: false`, `allowInsecureTransport: false`, `workflow.enabled: true`).
+- [x] Create `src/config/schema.ts` and `src/config/defaults.ts` implementing the full configuration shape and safe-by-default values from `ObservMe-Production-Docs/12-configuration-reference.md` §1 and §5 (privacy-preserving defaults: capture flags `false`, `redactionEnabled: true`, `allowUnsafeCapture: false`, `allowInsecureTransport: false`, `workflow.enabled: true`).
 
 #### Why
 
@@ -73,7 +73,7 @@ Translate the documented configuration fields and defaults into typed schema/def
 
 ### 3. Implement layered config loader and precedence
 
-- [ ] Create `src/config/load-config.ts` implementing the layered precedence order (defaults → global `~/.pi/agent/observme.yaml` → trusted project `<CONFIG_DIR_NAME>/observme.yaml` → env vars → runtime options) from `12-configuration-reference.md` §4. Split factory-safe loading (defaults/global/env only) from session-scoped loading (adds trusted project config) per `specs/spec-architecture.md` §Config, and include the `resource.attributes.observme.tenant.id`, `deployment.environment.name`, workflow (`OBSERVME_WORKFLOW_ID`), and agent capability (`OBSERVME_AGENT_CAPABILITY`) config keys from `12-configuration-reference.md` and `05-otel-pipeline-and-collector.md` §10.
+- [x] Create `src/config/load-config.ts` implementing the layered precedence order (defaults → global `~/.pi/agent/observme.yaml` → trusted project `<CONFIG_DIR_NAME>/observme.yaml` → env vars → runtime options) from `12-configuration-reference.md` §4. Split factory-safe loading (defaults/global/env only) from session-scoped loading (adds trusted project config) per `specs/spec-architecture.md` §Config, and include the `resource.attributes.observme.tenant.id`, `deployment.environment.name`, workflow (`OBSERVME_WORKFLOW_ID`), and agent capability (`OBSERVME_AGENT_CAPABILITY`) config keys from `12-configuration-reference.md` and `05-otel-pipeline-and-collector.md` §10.
 
 #### Why
 
@@ -96,7 +96,7 @@ Implement separate factory-safe and session-scoped loaders, read only trusted pr
 
 ### 4. Implement config validation rules and unsafe-capture warning
 
-- [ ] Extend `src/config/load-config.ts` (or add `src/config/validate.ts`) to reject invalid configuration per `12-configuration-reference.md` §8 (capture enabled without redaction unless `allowUnsafeCapture: true`, insecure transport in production, missing signal-specific OTLP paths, forbidden high-cardinality metric labels, untrusted project config, malformed lineage values, oversized queue sizes). When `allowUnsafeCapture: true` is active alongside any capture flag, surface a visible runtime warning (via `ctx.ui.notify` or equivalent) at session start per §7.
+- [x] Extend `src/config/load-config.ts` (or add `src/config/validate.ts`) to reject invalid configuration per `12-configuration-reference.md` §8 (capture enabled without redaction unless `allowUnsafeCapture: true`, insecure transport in production, missing signal-specific OTLP paths, forbidden high-cardinality metric labels, untrusted project config, malformed lineage values, oversized queue sizes). When `allowUnsafeCapture: true` is active alongside any capture flag, surface a visible runtime warning (via `ctx.ui.notify` or equivalent) at session start per §7.
 
 #### Why
 
@@ -119,7 +119,7 @@ Implement the documented rejection rules, make invalid config fall back to safe 
 
 ### 5. Define attribute name constants
 
-- [ ] Create `src/semconv/attributes.ts` exporting every resource, span, and log attribute key from `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §2–3, §5–11, §14 as typed constants, including `observme.tenant.id`, `pi.workflow.*`, `pi.agent.wait.*`, `pi.agent.join.*`, `pi.agent.children.*`, and operational attributes such as `observme.replayed`, `observme.evicted`, `observme.truncated`, and `observme.original_length`.
+- [x] Create `src/semconv/attributes.ts` exporting every resource, span, and log attribute key from `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §2–3, §5–11, §14 as typed constants, including `observme.tenant.id`, `pi.workflow.*`, `pi.agent.wait.*`, `pi.agent.join.*`, `pi.agent.children.*`, and operational attributes such as `observme.replayed`, `observme.evicted`, `observme.truncated`, and `observme.original_length`.
 
 #### Why
 
@@ -142,7 +142,7 @@ Enumerate every documented resource/span/log attribute as typed exports, group t
 
 ### 6. Define span name constants
 
-- [ ] Create `src/semconv/spans.ts` exporting every span name from `04-telemetry-semantic-conventions.md` §1 (`pi.session`, `pi.agent.run`, `pi.agent.spawn`, `pi.agent.wait`, `pi.agent.join`, `pi.turn`, `pi.llm.request`, `pi.tool.call`, `pi.bash.execution`, `pi.compaction`, `pi.branch`, `pi.model.change`, `pi.thinking.change`) as typed constants.
+- [x] Create `src/semconv/spans.ts` exporting every span name from `04-telemetry-semantic-conventions.md` §1 (`pi.session`, `pi.agent.run`, `pi.agent.spawn`, `pi.agent.wait`, `pi.agent.join`, `pi.turn`, `pi.llm.request`, `pi.tool.call`, `pi.bash.execution`, `pi.compaction`, `pi.branch`, `pi.model.change`, `pi.thinking.change`) as typed constants.
 
 #### Why
 
@@ -164,7 +164,7 @@ Export each documented span name exactly once, type the exports consistently wit
 
 ### 7. Define metric name constants
 
-- [ ] Create `src/semconv/metrics.ts` exporting every ObservMe-owned metric name from `04-telemetry-semantic-conventions.md` §12 (counters, token/cost counters, histograms, gauges, including workflow/agent-tree metrics) and the optional official GenAI metric names from §12.5, plus the log event names from §14.
+- [x] Create `src/semconv/metrics.ts` exporting every ObservMe-owned metric name from `04-telemetry-semantic-conventions.md` §12 (counters, token/cost counters, histograms, gauges, including workflow/agent-tree metrics) and the optional official GenAI metric names from §12.5, plus the log event names from §14.
 
 #### Why
 
@@ -186,7 +186,7 @@ Export every documented metric and event name, distinguish ObservMe-owned names 
 
 ### 8. Implement secret-detection patterns
 
-- [ ] Create `src/privacy/secret-patterns.ts` implementing every regex pattern from `ObservMe-Production-Docs/06-security-privacy-redaction.md` §5 (AWS access key, generic bearer token, GitHub token, OpenAI-like key, Anthropic-like key, Slack token, private key block, password assignment, API key assignment, URL credentials), each exported as a named, independently testable matcher.
+- [x] Create `src/privacy/secret-patterns.ts` implementing every regex pattern from `ObservMe-Production-Docs/06-security-privacy-redaction.md` §5 (AWS access key, generic bearer token, GitHub token, OpenAI-like key, Anthropic-like key, Slack token, private key block, password assignment, API key assignment, URL credentials), each exported as a named, independently testable matcher.
 
 #### Why
 
@@ -208,7 +208,7 @@ Implement one named matcher per documented pattern, return enough match metadata
 
 ### 9. Implement the redaction pipeline
 
-- [ ] Create `src/privacy/redact.ts` implementing the full pipeline from `06-security-privacy-redaction.md` §4 and §6 (size guard → secret detector from task 8 → PII detector if enabled → path scrubber → custom regex redactors → truncation → hashing → export), including the path-redaction modes (`pathMode: hash|basename|full|drop`) from §6.
+- [x] Create `src/privacy/redact.ts` implementing the full pipeline from `06-security-privacy-redaction.md` §4 and §6 (size guard → secret detector from task 8 → PII detector if enabled → path scrubber → custom regex redactors → truncation → hashing → export), including the path-redaction modes (`pathMode: hash|basename|full|drop`) from §6.
 
 #### Why
 
@@ -231,7 +231,7 @@ Compose the pipeline stages in documented order, reuse the task 8 matchers, appl
 
 ### 10. Implement hashing and truncation utilities
 
-- [ ] Create `src/privacy/hash.ts` implementing `sha256(tenant_salt + "\0" + value)` and `hmac_sha256(tenant_salt, value)` per `06-security-privacy-redaction.md` §7, with the salt read only from environment/secure runtime config; and `src/privacy/truncate.ts` implementing content-size limits from §9 (`maxPromptChars`, `maxResponseChars`, `maxToolArgumentChars`, `maxToolResultChars`, `maxBashOutputChars`, `maxLogBodyChars`), adding `observme.truncated=true` plus original-length attribute when content is truncated.
+- [x] Create `src/privacy/hash.ts` implementing `sha256(tenant_salt + "\0" + value)` and `hmac_sha256(tenant_salt, value)` per `06-security-privacy-redaction.md` §7, with the salt read only from environment/secure runtime config; and `src/privacy/truncate.ts` implementing content-size limits from §9 (`maxPromptChars`, `maxResponseChars`, `maxToolArgumentChars`, `maxToolResultChars`, `maxBashOutputChars`, `maxLogBodyChars`), adding `observme.truncated=true` plus original-length attribute when content is truncated.
 
 #### Why
 
@@ -253,7 +253,7 @@ Read tenant salt only from secure runtime inputs, implement the exact hash formu
 
 ### 11. Implement the bounded-map utility
 
-- [ ] Create `src/util/bounded-map.ts`: a generic, reusable bounded `Map` wrapper that evicts the oldest entry when a configured maximum size is exceeded, invoking a caller-supplied eviction callback (used later to end evicted spans and increment drop counters).
+- [x] Create `src/util/bounded-map.ts`: a generic, reusable bounded `Map` wrapper that evicts the oldest entry when a configured maximum size is exceeded, invoking a caller-supplied eviction callback (used later to end evicted spans and increment drop counters).
 
 #### Why
 
@@ -275,7 +275,7 @@ Implement a pure generic wrapper around `Map`, evict the oldest entry at capacit
 
 ### 12. Implement workflow and agent-lineage context
 
-- [ ] Create `src/pi/agent-lineage.ts` and `src/pi/agent-tree-tracker.ts` implementing the `pi.workflow.id/root_agent_id` and `pi.agent.id/parent_id/root_id/depth/role/capability` lineage model from `ObservMe-Production-Docs/07-extension-implementation-blueprint.md` §5 and `03-pi-event-and-session-model.md` §8, using `src/util/bounded-map.ts` (task 11) for any lineage-scoped registries it needs.
+- [x] Create `src/pi/agent-lineage.ts` and `src/pi/agent-tree-tracker.ts` implementing the `pi.workflow.id/root_agent_id` and `pi.agent.id/parent_id/root_id/depth/role/capability` lineage model from `ObservMe-Production-Docs/07-extension-implementation-blueprint.md` §5 and `03-pi-event-and-session-model.md` §8, using `src/util/bounded-map.ts` (task 11) for any lineage-scoped registries it needs.
 
 #### Why
 
@@ -300,7 +300,7 @@ Generate IDs safely, accept only trusted parent context, track root/parent/depth
 
 ### 13. Implement OTEL SDK bootstrap and shutdown
 
-- [ ] Create `src/otel/sdk.ts` and `src/otel/shutdown.ts` implementing OTEL SDK startup (only invoked from `session_start`, never from the extension factory) and bounded-timeout flush/shutdown (only invoked from `session_shutdown`), per `specs/spec-architecture.md` and `07-extension-implementation-blueprint.md` §1, §7.
+- [x] Create `src/otel/sdk.ts` and `src/otel/shutdown.ts` implementing OTEL SDK startup (only invoked from `session_start`, never from the extension factory) and bounded-timeout flush/shutdown (only invoked from `session_shutdown`), per `specs/spec-architecture.md` and `07-extension-implementation-blueprint.md` §1, §7.
 
 #### Why
 
@@ -322,7 +322,7 @@ Expose explicit start and shutdown functions, keep module imports side-effect fr
 
 ### 14. Implement trace exporter wiring
 
-- [ ] Create `src/otel/traces.ts` wiring the OTLP trace exporter and tracer provider using the SDK started in task 13, matching `05-otel-pipeline-and-collector.md` §3 defaults (`http/protobuf`, base endpoint + `/v1/traces`, batch settings).
+- [x] Create `src/otel/traces.ts` wiring the OTLP trace exporter and tracer provider using the SDK started in task 13, matching `05-otel-pipeline-and-collector.md` §3 defaults (`http/protobuf`, base endpoint + `/v1/traces`, batch settings).
 
 #### Why
 
@@ -345,7 +345,7 @@ Build the tracer provider/exporter from session config after SDK startup, apply 
 
 ### 15. Implement metrics exporter wiring
 
-- [ ] Create `src/otel/metrics.ts` wiring the OTLP metric exporter and meter provider, matching `05-otel-pipeline-and-collector.md` §3 defaults (`exportIntervalMillis: 15000`, `exportTimeoutMillis: 3000`, endpoint `/v1/metrics`).
+- [x] Create `src/otel/metrics.ts` wiring the OTLP metric exporter and meter provider, matching `05-otel-pipeline-and-collector.md` §3 defaults (`exportIntervalMillis: 15000`, `exportTimeoutMillis: 3000`, endpoint `/v1/metrics`).
 
 #### Why
 
@@ -368,7 +368,7 @@ Create the meter provider/exporter only during enabled session startup, apply do
 
 ### 16. Implement logs exporter wiring
 
-- [ ] Create `src/otel/logs.ts` wiring the OTLP log exporter and logger provider, matching `05-otel-pipeline-and-collector.md` §3 defaults (batch settings, endpoint `/v1/logs`).
+- [x] Create `src/otel/logs.ts` wiring the OTLP log exporter and logger provider, matching `05-otel-pipeline-and-collector.md` §3 defaults (batch settings, endpoint `/v1/logs`).
 
 #### Why
 
@@ -391,7 +391,7 @@ Create the logger provider/exporter only during enabled session startup, match d
 
 ### 17. Wire session_start/session_shutdown handlers and root span
 
-- [ ] Create `src/pi/handlers.ts` with `session_start` and `session_shutdown` handlers that start the OTEL SDK (tasks 13–16), create/close the root `pi.session` span with attributes from `04-telemetry-semantic-conventions.md` §4, emit `session.started`/`session.shutdown` and root-workflow `workflow.started`/`workflow.completed` or `workflow.failed` log events when applicable, and update active-agent/workflow metrics. Wrap every handler with the `safeHandler(name, fn)` pattern from `07-extension-implementation-blueprint.md` §10 so no handler can throw into Pi.
+- [x] Create `src/pi/handlers.ts` with `session_start` and `session_shutdown` handlers that start the OTEL SDK (tasks 13–16), create/close the root `pi.session` span with attributes from `04-telemetry-semantic-conventions.md` §4, emit `session.started`/`session.shutdown` and root-workflow `workflow.started`/`workflow.completed` or `workflow.failed` log events when applicable, and update active-agent/workflow metrics. Wrap every handler with the `safeHandler(name, fn)` pattern from `07-extension-implementation-blueprint.md` §10 so no handler can throw into Pi.
 
 #### Why
 
@@ -415,7 +415,7 @@ Register safe session handlers, start configured OTEL signals on `session_start`
 
 ### 18. Wire agent-run and turn handlers
 
-- [ ] Extend `src/pi/handlers.ts` with `agent_start`, `agent_end`, `turn_start`, `turn_end` handlers creating/closing `pi.agent.run` (child of `pi.session`) and `pi.turn` (child of `pi.agent.run`) spans per the event-to-span mapping table in `03-pi-event-and-session-model.md` §6, using the bounded span registry from task 12/11 patterns.
+- [x] Extend `src/pi/handlers.ts` with `agent_start`, `agent_end`, `turn_start`, `turn_end` handlers creating/closing `pi.agent.run` (child of `pi.session`) and `pi.turn` (child of `pi.agent.run`) spans per the event-to-span mapping table in `03-pi-event-and-session-model.md` §6, using the bounded span registry from task 12/11 patterns.
 
 #### Why
 
@@ -439,7 +439,7 @@ Add bounded registries for active agent and turn spans, derive turn IDs exactly 
 
 ### 19. Implement startup recovery and replay semantics
 
-- [ ] Extend the `session_start` handler from task 17 to implement the startup recovery rules from `03-pi-event-and-session-model.md` §10–11: on an existing (resumed) session, read the session header only (not the full entry log), set `pi.session.id`/`pi.workflow.id`/`pi.agent.id`/resource attributes, reconstruct workflow/agent lineage only from trusted environment variables or an explicit minimal `custom` correlation entry, never continuously tail the session file, and never replay historical telemetry unless `replayOnStart: true` is explicitly configured — in which case mark all replayed spans/logs `observme.replayed=true`.
+- [x] Extend the `session_start` handler from task 17 to implement the startup recovery rules from `03-pi-event-and-session-model.md` §10–11: on an existing (resumed) session, read the session header only (not the full entry log), set `pi.session.id`/`pi.workflow.id`/`pi.agent.id`/resource attributes, reconstruct workflow/agent lineage only from trusted environment variables or an explicit minimal `custom` correlation entry, never continuously tail the session file, and never replay historical telemetry unless `replayOnStart: true` is explicitly configured — in which case mark all replayed spans/logs `observme.replayed=true`.
 
 #### Why
 
@@ -463,7 +463,7 @@ Add resume detection to session start, read only the minimal session header/corr
 
 ### 20. Wire LLM request/response/usage handlers
 
-- [ ] Extend `src/pi/handlers.ts` (or add `src/pi/llm-tracker.ts`) to handle `before_provider_request`, `after_provider_response`, and assistant `message_end`, creating/finalizing `pi.llm.request` GenAI spans with usage/cost/stop-reason attributes per `04-telemetry-semantic-conventions.md` §7 and `07-extension-implementation-blueprint.md` §8.
+- [x] Extend `src/pi/handlers.ts` (or add `src/pi/llm-tracker.ts`) to handle `before_provider_request`, `after_provider_response`, and assistant `message_end`, creating/finalizing `pi.llm.request` GenAI spans with usage/cost/stop-reason attributes per `04-telemetry-semantic-conventions.md` §7 and `07-extension-implementation-blueprint.md` §8.
 
 #### Why
 
@@ -488,7 +488,7 @@ Track provider request lifecycle, finalize usage from assistant `message_end`, a
 
 ### 21. Wire tool-call handlers
 
-- [ ] Extend `src/pi/handlers.ts` to handle `tool_execution_start`, `tool_call`, `tool_result`, `tool_execution_end`, creating `pi.tool.call` spans per `04-telemetry-semantic-conventions.md` §8.
+- [x] Extend `src/pi/handlers.ts` to handle `tool_execution_start`, `tool_call`, `tool_result`, `tool_execution_end`, creating `pi.tool.call` spans per `04-telemetry-semantic-conventions.md` §8.
 
 #### Why
 
@@ -512,7 +512,7 @@ Track tool execution lifecycle, close spans with success/error status, attach lo
 
 ### 22. Wire bash-execution handler
 
-- [ ] Extend `src/pi/handlers.ts` to handle `user_bash`/`bashExecution`, creating `pi.bash.execution` spans per `04-telemetry-semantic-conventions.md` §9.
+- [x] Extend `src/pi/handlers.ts` to handle `user_bash`/`bashExecution`, creating `pi.bash.execution` spans per `04-telemetry-semantic-conventions.md` §9.
 
 #### Why
 
@@ -536,7 +536,7 @@ Map bash events to spans, attach exit/cancel/truncation status, update execution
 
 ### 23. Implement subagent-spawn workflow propagation and wait/join tracking
 
-- [ ] Implement the subagent-spawn wrapper pattern from `07-extension-implementation-blueprint.md` §7 (Subagent Spawn) and `05-otel-pipeline-and-collector.md` §4: create a `pi.agent.spawn` span around the launch point; propagate W3C `traceparent`/`tracestate` plus `OBSERVME_WORKFLOW_ID`/`OBSERVME_PARENT_AGENT_ID`/`OBSERVME_ROOT_AGENT_ID`/`OBSERVME_PARENT_SESSION_ID`/`OBSERVME_AGENT_DEPTH`/`OBSERVME_SPAWN_ID` to the child process environment; and create `pi.agent.wait` / `pi.agent.join` spans/events when the parent waits for child completion or receives child results.
+- [x] Implement the subagent-spawn wrapper pattern from `07-extension-implementation-blueprint.md` §7 (Subagent Spawn) and `05-otel-pipeline-and-collector.md` §4: create a `pi.agent.spawn` span around the launch point; propagate W3C `traceparent`/`tracestate` plus `OBSERVME_WORKFLOW_ID`/`OBSERVME_PARENT_AGENT_ID`/`OBSERVME_ROOT_AGENT_ID`/`OBSERVME_PARENT_SESSION_ID`/`OBSERVME_AGENT_DEPTH`/`OBSERVME_SPAWN_ID` to the child process environment; and create `pi.agent.wait` / `pi.agent.join` spans/events when the parent waits for child completion or receives child results.
 
 #### Why
 
@@ -562,7 +562,7 @@ Wrap spawn launch points, inject W3C and ObservMe lineage environment values, tr
 
 ### 24. Wire model-change and thinking-level-change handlers
 
-- [ ] Extend `src/pi/handlers.ts` to handle `model_select`/`model_change` and `thinking_level_select`/`thinking_level_change`, emitting `model.changed`/`thinking.changed` log events and metrics per `03-pi-event-and-session-model.md` §6 and `04-telemetry-semantic-conventions.md` §1, §12, and §14. If spans are emitted for these operations, use the documented `pi.model.change` and `pi.thinking.change` span names.
+- [x] Extend `src/pi/handlers.ts` to handle `model_select`/`model_change` and `thinking_level_select`/`thinking_level_change`, emitting `model.changed`/`thinking.changed` log events and metrics per `03-pi-event-and-session-model.md` §6 and `04-telemetry-semantic-conventions.md` §1, §12, and §14. If spans are emitted for these operations, use the documented `pi.model.change` and `pi.thinking.change` span names.
 
 #### Why
 
@@ -585,7 +585,7 @@ Map selection/change events to structured logs and counters, include provider/mo
 
 ### 25. Wire compaction handler
 
-- [ ] Extend `src/pi/handlers.ts` to handle `session_compact`, emitting `pi.compaction` span/log/metric from the `compactionEntry` per `04-telemetry-semantic-conventions.md` §11 and `03-pi-event-and-session-model.md` §5.
+- [x] Extend `src/pi/handlers.ts` to handle `session_compact`, emitting `pi.compaction` span/log/metric from the `compactionEntry` per `04-telemetry-semantic-conventions.md` §11 and `03-pi-event-and-session-model.md` §5.
 
 #### Why
 
@@ -607,7 +607,7 @@ Map `session_compact` and `compactionEntry` fields to the canonical span attribu
 
 ### 26. Wire branch handler
 
-- [ ] Extend `src/pi/handlers.ts` to handle `session_tree`, emitting `pi.branch` span/log/metric per `04-telemetry-semantic-conventions.md` §10 and `03-pi-event-and-session-model.md` §4 and §6, including `summaryEntry` fields when present.
+- [x] Extend `src/pi/handlers.ts` to handle `session_tree`, emitting `pi.branch` span/log/metric per `04-telemetry-semantic-conventions.md` §10 and `03-pi-event-and-session-model.md` §4 and §6, including `summaryEntry` fields when present.
 
 #### Why
 
@@ -629,7 +629,7 @@ Map `session_tree` event data to branch span/log/metric attributes, hash or norm
 
 ### 27. Implement `/obs status` command
 
-- [ ] Create `src/commands/obs-status.ts` implementing the read-only local-state command per `ObservMe-Production-Docs/08-query-grafana-integration.md` §4.
+- [x] Create `src/commands/obs-status.ts` implementing the read-only local-state command per `ObservMe-Production-Docs/08-query-grafana-integration.md` §4.
 
 #### Why
 
@@ -650,7 +650,7 @@ Read in-memory/local runtime state only, format a concise status report, and avo
 
 ### 28. Implement `/obs health` command
 
-- [ ] Create `src/commands/obs-health.ts` implementing the Collector/Grafana/datasource reachability check per `08-query-grafana-integration.md` §4.
+- [x] Create `src/commands/obs-health.ts` implementing the Collector/Grafana/datasource reachability check per `08-query-grafana-integration.md` §4.
 
 #### Why
 
@@ -672,7 +672,7 @@ Perform bounded-timeout reachability checks, summarize successes and failures, a
 
 ### 29. Implement `/obs session` command
 
-- [ ] Create `src/commands/obs-session.ts` implementing the current-session telemetry summary per `08-query-grafana-integration.md` §4.
+- [x] Create `src/commands/obs-session.ts` implementing the current-session telemetry summary per `08-query-grafana-integration.md` §4.
 
 #### Why
 
@@ -694,7 +694,7 @@ Read only in-memory runtime counters and trace-link state, render the session su
 
 ### 30. Implement Grafana query client
 
-- [ ] Create `src/query/grafana.ts` implementing the Grafana API client (health check, trace-link URL construction) per `08-query-grafana-integration.md` §3, §6.
+- [x] Create `src/query/grafana.ts` implementing the Grafana API client (health check, trace-link URL construction) per `08-query-grafana-integration.md` §3, §6.
 
 #### Why
 
@@ -716,7 +716,7 @@ Implement health checks and trace-link URL construction with configured timeout 
 
 ### 31. Implement Tempo query client
 
-- [ ] Create `src/query/tempo.ts` implementing trace search by attributes per `08-query-grafana-integration.md` §6 (`searchTempo`).
+- [x] Create `src/query/tempo.ts` implementing trace search by attributes per `08-query-grafana-integration.md` §6 (`searchTempo`).
 
 #### Why
 

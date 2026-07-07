@@ -11,4 +11,36 @@
 - Reconciled spec/docs drift found during review: aligned branch/compaction summary attribute names, added missing branch lineage attributes, added `observme.tenant.id` and replay/eviction/truncation operational attributes to semantic conventions, completed query config defaults, and corrected the model/thinking-change task references.
 - Added multi-agent workflow/agent-tree observability to the production docs and specs: `pi.workflow.*` correlation, `pi.agent.wait`/`pi.agent.join` spans, fan-out/depth/width/active-agent/orphan/trace-propagation metrics, workflow alerts/SLOs, `/obs agents` enhancements, config/env propagation, and implementation-task acceptance criteria.
 - Retained `ObservMe-Production-Docs/` (production design/reference doc set) and `observability-stack/` (reference Grafana/Tempo/Loki/Prometheus/Collector Docker Compose stack) as companion assets.
-- No ObservMe feature behavior (commands, OTEL export, redaction, agent lineage) is implemented yet; see `specs/spec-tasks.md` for the planned implementation sequence.
+- Added the missing validation-pipeline scripts for coverage, ObservMe discoverability, packaged install, handler execution, and Pi lifecycle smoke checks so `npm run validate` can run end to end from the bootstrapped template.
+- Added the initial ObservMe configuration schema and documented safe defaults, including capture-disabled privacy defaults and workflow/agent propagation settings.
+- Added layered ObservMe config loading with defaults/global/trusted-project/environment/runtime precedence and factory-safe vs session-scoped loading boundaries.
+- Added ObservMe config validation with safe-default fallback, rejection logging, and session-start unsafe-capture warnings.
+- Added semantic-convention attribute constants for documented resource, span, and log attribute keys.
+- Added semantic-convention span name constants for the canonical ObservMe trace shape.
+- Added semantic-convention metric and log-event constants for ObservMe-owned metrics, optional official GenAI metrics, and canonical log events.
+- Added built-in privacy secret-detection patterns with structured match metadata for redaction replacements.
+- Added the privacy redaction pipeline with ordered safety stages, path scrubbing modes, custom redactors, truncation, hashing, and safe failure drops.
+- Added salted hashing and content truncation utilities with documented truncation metadata.
+- Added a pure generic bounded-map utility for bounded registries with oldest-entry eviction callbacks.
+- Added workflow and agent-lineage context helpers plus bounded agent-tree tracking for generated/trusted lineage, child status, fan-out, depth, width, and orphan state.
+- Added session-scoped OTEL SDK lifecycle controllers and bounded flush/shutdown helpers that do not start exporters, timers, or sockets on import.
+- Added session-scoped OTLP trace exporter wiring with documented endpoint derivation, batch defaults, tracer-provider startup, and disabled-trace no-op behavior.
+- Added session-scoped OTLP metric exporter wiring with documented endpoint derivation, periodic reader defaults, meter-provider startup, and pre-start no-op instruments.
+- Added session-scoped OTLP log exporter wiring with documented endpoint derivation, batch defaults, logger-provider startup, and disabled-log no-op emission.
+- Wired ObservMe session lifecycle handlers for session-scoped OTEL startup/shutdown, the root `pi.session` span, lifecycle logs, active workflow/agent metrics, safe handler error capture, and bounded flush/shutdown.
+- Added agent-run and turn event handlers with bounded span registries, canonical `pi.agent.run` → `pi.turn` parenting, derived turn IDs, and low-cardinality counters.
+- Added startup recovery semantics for resumed sessions: header-only session reads, trusted minimal correlation recovery, default-disabled replay, and explicit `observme.replayed=true` startup replay markers.
+- Added LLM request/response/message-end handlers with `pi.llm.request` spans, finalized usage/cost counters, low-cardinality metric labels, and optional redacted content capture.
+- Added tool-call handlers for `pi.tool.call` spans, success/error status, low-cardinality tool counters, and optional redacted argument/result capture.
+- Added bash execution handlers for `pi.bash.execution` spans, exit/cancel/truncation attributes, bash counters, and optional redacted command/output capture.
+- Added subagent spawn propagation helpers with W3C trace context and ObservMe lineage environment injection, fallback/orphan telemetry, wait/join spans, and agent-tree metrics.
+- Wired model and thinking-level change handlers with structured change logs, current-state session attributes, and low-cardinality change counters.
+- Wired compaction telemetry for `session_compact` with `pi.compaction` spans, structured logs, compaction counters, and tokens-before histogram recording.
+- Wired branch telemetry for `session_tree` with `pi.branch` spans, structured logs, branch counters, hashed path attributes, and `summaryEntry` lineage fields.
+- Added the read-only `/obs status` command with local enablement, OTLP endpoint, signal, capture, queue-drop, and last-export-error reporting.
+- Added the `/obs health` command with bounded Collector, Grafana, and Grafana datasource reachability checks plus concise failure reporting.
+- Added the read-only `/obs session` command with in-memory current-session turn, LLM-call, tool-call, cost, and trace-link reporting.
+- Added a Grafana query client with bounded Grafana/datasource health checks, safe trace-link construction, and telemetry-to-query dependency-direction tests.
+- Added a Tempo query client with safe generated-ID/hash attribute search, Grafana datasource-proxy requests, timeout handling, and result capping.
+- Added a Loki query client with Grafana datasource-proxy LogQL execution, dotted-attribute normalization for Loki, timeout handling, and result capping.
+- Complete ObservMe command behavior and full event coverage are not implemented yet; see `specs/spec-tasks.md` for the planned implementation sequence.

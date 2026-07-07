@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerExampleCommand } from "./commands/example-command.ts";
-import { registerLifecycleEvents } from "./events/lifecycle.ts";
+import { registerObsCommand } from "./commands/obs.ts";
+import { registerHandlers } from "./pi/handlers.ts";
 import { registerExampleTool } from "./tools/example-tool.ts";
 
 /**
@@ -11,7 +12,8 @@ import { registerExampleTool } from "./tools/example-tool.ts";
  * and call their register* functions here.
  */
 export default function piExtensionTemplate(pi: ExtensionAPI) {
-  registerLifecycleEvents(pi);
+  registerHandlers(pi);
+  registerObsCommand(pi);
   registerExampleCommand(pi);
   registerExampleTool(pi);
 }
