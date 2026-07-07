@@ -18,7 +18,7 @@ ObservMe is implemented to:
 - Start OTEL exporters only from `session_start` and stop them from `session_shutdown` with bounded flush/shutdown timeouts.
 - Send telemetry only to configured OTLP endpoints, with an OpenTelemetry Collector recommended for production.
 - Disable prompt, response, thinking, tool-argument, tool-result, bash-command, bash-output, and file-path capture by default.
-- Redact secrets, optional PII, paths, URL credentials, custom configured patterns, and oversized content before optional content export.
+- Redact secrets, optional PII, paths, URL credentials, custom configured patterns, and oversized content before optional content export; custom regex redactors are bounded and reject unsupported risky constructs such as nested quantified groups, lookaround, named groups, and backreferences.
 - Keep session IDs, workflow IDs, agent IDs, trace/span IDs, raw paths, raw commands, raw prompts, and raw errors out of Prometheus metric labels.
 - Fail open: Pi keeps running if the Collector, Grafana, Tempo, Loki, or Prometheus backend is unreachable.
 - Require explicit user confirmation for `/obs backfill` historical replay and mark replayed telemetry with `observme.replayed=true`.

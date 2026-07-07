@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { getGrafanaHealth } from "../src/query/grafana.ts";
+import { MAX_GRAFANA_RESPONSE_BODY_BYTES } from "../src/query/grafana-transport.ts";
 import { queryLoki } from "../src/query/loki.ts";
 import { queryPrometheus } from "../src/query/prometheus.ts";
 import { searchTempo } from "../src/query/tempo.ts";
@@ -99,6 +101,40 @@ async function runTempoSearch(config, fetcher) {
   return searchTempo(config, { "pi.session.id": "session-1" }, defaultRange, { fetch: fetcher });
 }
 
+async function withLocalHttpServer(handler, callback) {
+  const server = createServer(handler);
+  await listenLocalServer(server);
+
+  try {
+    return await callback(localServerUrl(server));
+  } finally {
+    await closeLocalServer(server);
+  }
+}
+
+async function listenLocalServer(server) {
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+}
+
+async function closeLocalServer(server) {
+  await new Promise((resolve, reject) => {
+    server.close(error => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+function localServerUrl(server) {
+  const address = server.address();
+  assert.equal(typeof address, "object");
+  assert.ok(address);
+  return `http://127.0.0.1:${address.port}`;
+}
+
 test("shared Grafana transport builds URLs, auth headers, timeouts, and success responses for health and datasource queries", async () => {
   const config = cloneReadyConfig();
   const calls = [];
@@ -175,6 +211,28 @@ test("shared Grafana transport applies aborting timeouts to health and datasourc
   await assert.rejects(runPrometheusQuery(config, createNeverResolvingFetch([])), /Prometheus query timed out/u);
   await assert.rejects(runLokiQuery(config, createNeverResolvingFetch([])), /Loki query timed out/u);
   await assert.rejects(runTempoSearch(config, createNeverResolvingFetch([])), /Tempo search timed out/u);
+});
+
+test("custom Node Grafana transport rejects oversized response bodies without exposing body content", async () => {
+  const config = cloneReadyConfig();
+  config.query.grafana.transport.preferIPv4 = true;
+  const oversizedSecretBody = `oversized-secret-token-${"x".repeat(MAX_GRAFANA_RESPONSE_BODY_BYTES)}`;
+
+  await withLocalHttpServer(
+    (_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(oversizedSecretBody);
+    },
+    async baseUrl => {
+      config.query.grafana.url = baseUrl;
+      await assert.rejects(runPrometheusQuery(config), error => {
+        assert.match(error.message, /Grafana response body exceeded maximum size/u);
+        assert.match(error.message, /Narrow the query or lower query result limits/u);
+        assert.doesNotMatch(error.message, /oversized-secret-token/u);
+        return true;
+      });
+    },
+  );
 });
 
 test("shared Grafana readiness rejects invalid Grafana URLs before health and datasource query fetches", async () => {

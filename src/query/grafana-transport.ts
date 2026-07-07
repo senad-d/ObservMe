@@ -28,6 +28,12 @@ interface ErrorWithCode {
   readonly cause?: unknown;
 }
 
+interface GrafanaResponseBodyLimitError extends Error {
+  code: "GRAFANA_RESPONSE_BODY_TOO_LARGE";
+}
+
+export const MAX_GRAFANA_RESPONSE_BODY_BYTES = 5 * 1024 * 1024;
+
 const minimumTimeoutMs = 1;
 const unresolvedEnvironmentPlaceholderPattern = /\$\{[A-Z0-9_]+\}/u;
 const tlsErrorCodes = new Set<string>([
@@ -163,6 +169,7 @@ export function formatGrafanaFetchFailure(error: unknown): string {
   }
 
   if (code && connectionTimeoutErrorCodes.has(code)) return "Grafana connection timed out.";
+  if (code === "GRAFANA_RESPONSE_BODY_TOO_LARGE") return formatError(error);
   return formatError(error);
 }
 
@@ -352,20 +359,38 @@ function attachAbortSignal(request: ClientRequest, signal: AbortSignal | null | 
 }
 
 async function readNodeResponse(response: IncomingMessage): Promise<Response> {
-  const body = await readNodeResponseBody(response);
+  const body = await readNodeResponseBody(response, MAX_GRAFANA_RESPONSE_BODY_BYTES);
   const status = normalizeResponseStatus(response.statusCode);
   const statusText = response.statusMessage ?? "";
   return new Response(body.toString("utf8"), { status, statusText, headers: normalizeResponseHeaders(response.headers) });
 }
 
-async function readNodeResponseBody(response: IncomingMessage): Promise<Buffer> {
+async function readNodeResponseBody(response: IncomingMessage, maxBytes: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
 
   for await (const chunk of response) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.byteLength;
+    if (totalBytes > maxBytes) throw destroyOversizedNodeResponse(response, maxBytes);
+    chunks.push(buffer);
   }
 
-  return Buffer.concat(chunks);
+  return Buffer.concat(chunks, totalBytes);
+}
+
+function destroyOversizedNodeResponse(response: IncomingMessage, maxBytes: number): GrafanaResponseBodyLimitError {
+  const error = createGrafanaResponseBodyLimitError(maxBytes);
+  response.destroy(error);
+  return error;
+}
+
+function createGrafanaResponseBodyLimitError(maxBytes: number): GrafanaResponseBodyLimitError {
+  const error = new Error(
+    `Grafana response body exceeded maximum size of ${maxBytes} bytes. Narrow the query or lower query result limits.`,
+  ) as GrafanaResponseBodyLimitError;
+  error.code = "GRAFANA_RESPONSE_BODY_TOO_LARGE";
+  return error;
 }
 
 function normalizeResponseHeaders(headers: IncomingHttpHeaders): Headers {

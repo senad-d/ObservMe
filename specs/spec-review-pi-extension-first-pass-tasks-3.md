@@ -27,7 +27,7 @@ Findings summary by severity:
 
 ## Ordered tasks
 
-- [ ] Serialize duplicate session starts and shut down any previous telemetry session before replacement
+- [x] Serialize duplicate session starts and shut down any previous telemetry session before replacement
 
 #### Why
 
@@ -48,7 +48,7 @@ Findings summary by severity:
 - Relevant type checks, tests, and ESLint pass.
 - Any remaining Pi lifecycle ambiguity is documented with the exact event sequence that cannot be verified locally.
 
-- [ ] Bound and harden custom redaction regex execution
+- [x] Bound and harden custom redaction regex execution
 
 #### Why
 
@@ -69,7 +69,7 @@ Findings summary by severity:
 - Relevant tests, type checks, and lint checks pass.
 - Any remaining regex-risk tradeoff is documented in the validation behavior or security documentation task.
 
-- [ ] Cap Grafana custom-transport response body size
+- [x] Cap Grafana custom-transport response body size
 
 #### Why
 

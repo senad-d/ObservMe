@@ -1,0 +1,47 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Nazar amulet icon">
+  <defs>
+    <radialGradient id="outerBlue" cx="50%" cy="38%" r="65%">
+      <stop offset="0%" stop-color="#35B7FF"/>
+      <stop offset="55%" stop-color="#1592E6"/>
+      <stop offset="100%" stop-color="#0067B1"/>
+    </radialGradient>
+
+    <radialGradient id="innerBlue" cx="50%" cy="42%" r="62%">
+      <stop offset="0%" stop-color="#2AA7FF"/>
+      <stop offset="70%" stop-color="#0074D9"/>
+      <stop offset="100%" stop-color="#0059B3"/>
+    </radialGradient>
+
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="7" flood-color="#003B6D" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- Outer amulet -->
+  <circle cx="128" cy="128" r="112" fill="url(#outerBlue)" filter="url(#softShadow)"/>
+
+  <!-- Dark rim -->
+  <circle cx="128" cy="128" r="101" fill="none" stroke="#004F9E" stroke-width="13"/>
+
+  <!-- White ring -->
+  <circle cx="128" cy="128" r="73" fill="#F7FBFF"/>
+
+  <!-- Blue iris ring -->
+  <circle cx="128" cy="128" r="49" fill="url(#innerBlue)"/>
+
+  <!-- Dark pupil -->
+  <circle cx="128" cy="128" r="25" fill="#061A3D"/>
+
+  <!-- Small glossy reflection -->
+  <ellipse cx="95" cy="72" rx="27" ry="15" fill="#FFFFFF" opacity="0.35" transform="rotate(-25 95 72)"/>
+
+  <!-- Inner highlight -->
+  <circle cx="116" cy="116" r="8" fill="#FFFFFF" opacity="0.28"/>
+
+  <!-- Subtle bottom shading -->
+  <path
+    d="M39 151C52 205 89 232 128 232C177 232 216 198 226 151C205 182 168 201 128 201C88 201 51 182 39 151Z"
+    fill="#004D91"
+    opacity="0.18"
+  />
+</svg>

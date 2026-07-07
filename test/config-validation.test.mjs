@@ -80,6 +80,35 @@ test("validation rejects high-cardinality metric labels", () => {
   assertInvalid(cloneDefault({ metrics: { labels: ["provider", "pi.workflow.id"] } }), "high_cardinality_metric_label");
 });
 
+test("validation rejects unsafe custom redaction regex patterns", () => {
+  assertValid(cloneDefault({ privacy: { customRedactionPatterns: [{ name: "safe", pattern: "(?i)customercredential\\([a-z0-9-]+\\)" }] } }));
+  assertInvalid(
+    cloneDefault({ privacy: { customRedactionPatterns: [{ name: "nested", pattern: "(a+)+b" }] } }),
+    "custom_redaction_pattern_nested_quantifier",
+  );
+  assertInvalid(
+    cloneDefault({ privacy: { customRedactionPatterns: [{ name: "broken", pattern: "(" }] } }),
+    "invalid_custom_redaction_pattern",
+  );
+  assertInvalid(
+    cloneDefault({ privacy: { customRedactionPatterns: [{ name: "empty", pattern: "a*" }] } }),
+    "custom_redaction_pattern_empty_match",
+  );
+});
+
+test("validation bounds custom redaction regex pattern count and length", () => {
+  const tooManyPatterns = Array.from({ length: 17 }, (_value, index) => ({ name: `safe-${index}`, pattern: `token-${index}` }));
+
+  assertInvalid(
+    cloneDefault({ privacy: { customRedactionPatterns: tooManyPatterns } }),
+    "custom_redaction_pattern_limit",
+  );
+  assertInvalid(
+    cloneDefault({ privacy: { customRedactionPatterns: [{ name: "long", pattern: "a".repeat(257) }] } }),
+    "custom_redaction_pattern_too_long",
+  );
+});
+
 test("validation rejects reading project config across an untrusted project boundary", () => {
   assertValid(defaultObservMeConfig, { isProjectTrusted: false, projectConfigWasRead: false });
   assertInvalid(
@@ -162,4 +191,15 @@ test("ensureValidObservMeConfig never throws for invalid configuration", () => {
 
   assert.deepEqual(config, defaultObservMeConfig);
   assert.ok(warnings.some(message => message.includes("high_cardinality_metric_label")));
+});
+
+test("ensureValidObservMeConfig falls back to defaults for rejected custom redaction regex", () => {
+  const warnings = [];
+  const config = ensureValidObservMeConfig(
+    cloneDefault({ privacy: { customRedactionPatterns: [{ name: "nested", pattern: "(a+)+b" }] } }),
+    { logger: { warn: message => warnings.push(message) } },
+  );
+
+  assert.deepEqual(config, defaultObservMeConfig);
+  assert.ok(warnings.some(message => message.includes("custom_redaction_pattern_nested_quantifier")));
 });

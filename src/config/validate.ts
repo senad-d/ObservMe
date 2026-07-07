@@ -1,5 +1,6 @@
 import { defaultObservMeConfig } from "./defaults.ts";
 import type { ObservMeConfig } from "./schema.ts";
+import { validateCustomRedactionPatterns } from "../privacy/redact.ts";
 
 export interface ValidationIssue {
   code: string;
@@ -45,6 +46,7 @@ export function validateObservMeConfig(
     ...validateTransportSecurity(config),
     ...validateSignalEndpoints(config),
     ...validateMetricLabels(config),
+    ...validateCustomRedactionPatternConfig(config),
     ...validateProjectTrust(options),
     ...validateLineageEnvironment(config, options.env ?? process.env),
     ...validateQueueGuardrails(config),
@@ -141,6 +143,13 @@ function validateMetricLabels(config: ObservMeConfig): ValidationIssue[] {
   return labels.filter(isForbiddenMetricLabel).map(label => ({
     code: "high_cardinality_metric_label",
     message: `Metric label ${label} is a forbidden high-cardinality identifier.`,
+  }));
+}
+
+function validateCustomRedactionPatternConfig(config: ObservMeConfig): ValidationIssue[] {
+  return validateCustomRedactionPatterns(config.privacy.customRedactionPatterns).map(issue => ({
+    code: issue.code,
+    message: issue.message,
   }));
 }
 

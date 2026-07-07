@@ -16,7 +16,7 @@ import { clearObsStatusExportError, recordObsStatusExportResult, recordObsStatus
 import type { LoadSessionConfigOptions, SessionConfigDiagnostics } from "../config/load-config.ts";
 import { loadSessionConfig, loadSessionConfigWithDiagnostics } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
-import { EXTENSION_DISPLAY_NAME, EXTENSION_STATUS_KEY } from "../constants.ts";
+import { EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE } from "../constants.ts";
 import { emitUnsafeCaptureWarning } from "../config/validate.ts";
 import { ObservMeLogSdk } from "../otel/logs.ts";
 import { ObservMeMetricSdk } from "../otel/metrics.ts";
@@ -335,6 +335,8 @@ const sessionAttributeKeys = {
   THINKING_LEVEL_CURRENT: "pi.thinking.level.current",
 } as const;
 
+const duplicateSessionStartEventName = "session.duplicate_start";
+
 let defaultHandlerErrorRecorder: HandlerErrorRecorder = recordInternalErrorFallback;
 
 export function registerHandlers(pi: unknown, options: RegisterHandlersOptions = {}): void {
@@ -345,9 +347,16 @@ export function registerHandlers(pi: unknown, options: RegisterHandlersOptions =
   const errorRecorder = createStatefulHandlerErrorRecorder(() => session, options.onHandlerError);
 
   defaultHandlerErrorRecorder = errorRecorder;
-  api.on("session_start", safeHandler("session_start", createSessionStartHandler(loadConfigFn, startTelemetryFn, options, value => {
-    session = value;
-  }), errorRecorder));
+  api.on(
+    "session_start",
+    safeHandler(
+      "session_start",
+      createSerializedHandler(createSessionStartHandler(() => session, loadConfigFn, startTelemetryFn, options, value => {
+        session = value;
+      })),
+      errorRecorder,
+    ),
+  );
   api.on("agent_start", safeHandler("agent_start", createAgentStartHandler(() => session), errorRecorder));
   api.on("turn_start", safeHandler("turn_start", createTurnStartHandler(() => session), errorRecorder));
   api.on("before_provider_request", safeHandler("before_provider_request", createBeforeProviderRequestHandler(() => session), errorRecorder));
@@ -380,6 +389,16 @@ export function safeHandler(name: string, fn: Handler, recorder: HandlerErrorRec
     } catch (error) {
       recorder(name, error);
     }
+  };
+}
+
+function createSerializedHandler(fn: Handler): Handler {
+  let previous = Promise.resolve();
+
+  return async (event, ctx) => {
+    const current = previous.then(() => Promise.resolve(fn(event, ctx)));
+    previous = current.catch(() => undefined);
+    await current;
   };
 }
 
@@ -758,13 +777,102 @@ async function loadSessionConfigForHandler(
   return loadSessionConfigWithDiagnostics(loadOptions);
 }
 
+async function shutDownPreviousSessionBeforeDuplicateStart(
+  session: ObservMeTelemetrySession,
+  ctx: ObservMeHandlerContext,
+  setSession: (session: ObservMeTelemetrySession | undefined) => void,
+): Promise<void> {
+  emitLifecycleLog(session.logger, duplicateSessionStartEventName, buildDuplicateSessionStartAttributes(session));
+
+  try {
+    await shutDownTelemetrySession(session, duplicateSessionStartShutdownEvent(), ctx, setSession);
+  } catch (error) {
+    recordDuplicateSessionStartShutdownError(session, error);
+    clearObsSessionRuntimeState();
+    clearObsAgentsRuntimeState();
+    setSession(undefined);
+  }
+}
+
+function buildDuplicateSessionStartAttributes(session: ObservMeTelemetrySession): AttributeMap {
+  return withoutUndefinedAttributes({
+    [LOG_ATTRIBUTES.PI_SESSION_ID]: readString(session.sessionAttributes, sessionAttributeKeys.SESSION_ID),
+    [LOG_ATTRIBUTES.PI_WORKFLOW_ID]: session.lineage.workflowId,
+    [LOG_ATTRIBUTES.PI_WORKFLOW_ROOT_AGENT_ID]: session.lineage.workflowRootAgentId,
+    [LOG_ATTRIBUTES.PI_AGENT_ID]: session.lineage.agentId,
+    [LOG_ATTRIBUTES.PI_AGENT_ROOT_ID]: session.lineage.rootAgentId,
+    reason: "active_session_replaced_before_new_start",
+  });
+}
+
+function duplicateSessionStartShutdownEvent(): Record<string, unknown> {
+  return {
+    duplicateSessionStart: true,
+    status: "ok",
+  };
+}
+
+function recordDuplicateSessionStartShutdownError(session: ObservMeTelemetrySession, error: unknown): void {
+  session.metrics.handlerErrors.add(1, { operation: "session_start.duplicate_shutdown" });
+  emitLifecycleLog(session.logger, LOG_EVENT_NAMES.HANDLER_FAILED, handlerErrorAttributes("session_start.duplicate_shutdown", error), "ERROR");
+}
+
+async function shutDownTelemetrySession(
+  session: ObservMeTelemetrySession,
+  event: unknown,
+  ctx: ObservMeHandlerContext,
+  setSession: (session: ObservMeTelemetrySession | undefined) => void,
+): Promise<void> {
+  const labels = metricLabels(session.config, session.lineage);
+  const shutdownAttributes = buildShutdownAttributes(event, session);
+  const failed = workflowFailed(event);
+
+  session.metrics.sessionsShutdown.add(1, labels);
+  if (session.activeAgentRecorded) session.metrics.activeAgents.add(-1, labels);
+  recordWorkflowShutdownTelemetry(session, shutdownAttributes, failed, labels);
+  endAllActiveSpans(session);
+  session.sessionSpan?.addEvent(LOG_EVENT_NAMES.SESSION_SHUTDOWN, shutdownAttributes);
+  if (failed) session.sessionSpan?.setStatus({ code: SpanStatusCode.ERROR });
+  session.sessionSpan?.end();
+  await ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, undefined);
+  await recordControllerOperationResult(session, "flush");
+  await recordControllerOperationResult(session, "shutdown");
+  clearObsSessionRuntimeState();
+  clearObsAgentsRuntimeState();
+  setSession(undefined);
+}
+
+async function recordControllerOperationResult(
+  session: ObservMeTelemetrySession,
+  operation: BoundedOtelOperationResult["operation"],
+): Promise<void> {
+  const result = await runControllerOperation(session, operation);
+  recordObsStatusExportResult(result);
+  recordExportOperationResult(session, result);
+}
+
+async function runControllerOperation(
+  session: ObservMeTelemetrySession,
+  operation: BoundedOtelOperationResult["operation"],
+): Promise<BoundedOtelOperationResult> {
+  try {
+    return await session.controller[operation](session.config.shutdown.flushTimeoutMs);
+  } catch (error) {
+    return { operation, completed: false, timedOut: false, error };
+  }
+}
+
 function createSessionStartHandler(
+  getSession: () => ObservMeTelemetrySession | undefined,
   loadConfigFn: LoadSessionConfig,
   startTelemetryFn: StartSessionTelemetry,
   options: RegisterHandlersOptions,
-  setSession: (session: ObservMeTelemetrySession) => void,
+  setSession: (session: ObservMeTelemetrySession | undefined) => void,
 ): Handler {
   return async (event, ctx) => {
+    const previousSession = getSession();
+    if (previousSession) await shutDownPreviousSessionBeforeDuplicateStart(previousSession, ctx, setSession);
+
     const loadedConfig = await loadSessionConfigForHandler(loadConfigFn, options, ctx);
     const config = loadedConfig.config;
     await emitUnsafeCaptureWarning(config, ctx);
@@ -808,7 +916,7 @@ function createSessionStartHandler(
       emitLifecycleLog(session.logger, LOG_EVENT_NAMES.WORKFLOW_STARTED, attributes);
     }
 
-    await ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, `${EXTENSION_DISPLAY_NAME} loaded`);
+    await ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE);
     setSession(session);
   };
 }
@@ -817,31 +925,11 @@ function createSessionShutdownHandler(
   getSession: () => ObservMeTelemetrySession | undefined,
   setSession: (session: ObservMeTelemetrySession | undefined) => void,
 ): Handler {
-  return async (event, _ctx) => {
+  return async (event, ctx) => {
     const session = getSession();
     if (!session) return;
 
-    const labels = metricLabels(session.config, session.lineage);
-    const shutdownAttributes = buildShutdownAttributes(event, session);
-    const failed = workflowFailed(event);
-
-    session.metrics.sessionsShutdown.add(1, labels);
-    if (session.activeAgentRecorded) session.metrics.activeAgents.add(-1, labels);
-    recordWorkflowShutdownTelemetry(session, shutdownAttributes, failed, labels);
-    endAllActiveSpans(session);
-    session.sessionSpan?.addEvent(LOG_EVENT_NAMES.SESSION_SHUTDOWN, shutdownAttributes);
-    if (failed) session.sessionSpan?.setStatus({ code: SpanStatusCode.ERROR });
-    session.sessionSpan?.end();
-    await _ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, undefined);
-    const flushResult = await session.controller.flush(session.config.shutdown.flushTimeoutMs);
-    recordObsStatusExportResult(flushResult);
-    recordExportOperationResult(session, flushResult);
-    const shutdownResult = await session.controller.shutdown(session.config.shutdown.flushTimeoutMs);
-    recordObsStatusExportResult(shutdownResult);
-    recordExportOperationResult(session, shutdownResult);
-    clearObsSessionRuntimeState();
-    clearObsAgentsRuntimeState();
-    setSession(undefined);
+    await shutDownTelemetrySession(session, event, ctx, setSession);
   };
 }
 

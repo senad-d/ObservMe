@@ -106,6 +106,34 @@ test("custom regex redactors from config are applied in addition to built-in pat
   assert.match(result.value, /\[REDACTED:internal_token:[a-f0-9]{12}\]/u);
 });
 
+test("unsafe custom regex redactors fail closed without exporting raw content", () => {
+  const result = redactValue(
+    "secret value aaaab must not export",
+    defaultOptions({
+      customRedactionPatterns: [{ name: "unsafe", pattern: "(a+)+b" }],
+    }),
+  );
+
+  assert.equal(result.dropped, true);
+  assert.equal(result.value, undefined);
+  assert.equal(result.failureMetrics.redactionFailures, 1);
+  assert.match(result.errors[0], /must not repeat a group/u);
+});
+
+test("invalid custom regex redactors fail closed without exporting raw content", () => {
+  const result = redactValue(
+    "secret value must not export",
+    defaultOptions({
+      customRedactionPatterns: [{ name: "broken", pattern: "(" }],
+    }),
+  );
+
+  assert.equal(result.dropped, true);
+  assert.equal(result.value, undefined);
+  assert.equal(result.failureMetrics.redactionFailures, 1);
+  assert.match(result.errors[0], /not a valid regular expression/u);
+});
+
 test("truncation happens before hashing and records original length", () => {
   const result = redactValue("abcdef", defaultOptions({ maxOutputChars: 3 }));
 

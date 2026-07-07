@@ -182,7 +182,7 @@ class PiRpcClient {
   }
 
   async waitForStatusLoaded() {
-    return this.waitForRecord(isObservMeLoadedStatus, "ObservMe loaded status");
+    return this.waitForRecord(isObservMeLoadedStatus, "ObservMe status indicator");
   }
 
   waitForRecord(predicate, label) {
@@ -446,7 +446,7 @@ function isNotifyMessageWithPrefix(record, prefix) {
 }
 
 function isObservMeLoadedStatus(record) {
-  return record?.type === "extension_ui_request" && record.method === "setStatus" && record.statusKey === "observme" && record.statusText === "ObservMe loaded";
+  return record?.type === "extension_ui_request" && record.method === "setStatus" && record.statusKey === "observme" && record.statusText === "🧿";
 }
 
 function writeJsonResponse(response, statusCode, body) {

@@ -7,6 +7,7 @@ import { trace } from "@opentelemetry/api";
 import { handleObsSessionCommand, clearObsSessionRuntimeState } from "../src/commands/obs-session.ts";
 import { handleObsStatusCommand, resetObsStatusRuntimeState } from "../src/commands/obs-status.ts";
 import { handleObsTraceCommand } from "../src/commands/obs-trace.ts";
+import { EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE } from "../src/constants.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import {
   LOG_EVENT_NAMES,
@@ -178,6 +179,7 @@ test("safeHandler catches throwing handlers and records observme_handler_errors_
 
 test("session_start creates a root pi.session span with documented session and workflow attributes", async () => {
   const pi = createFakePi();
+  const statuses = [];
   let telemetry;
   registerHandlers(pi, {
     loadConfig,
@@ -198,7 +200,12 @@ test("session_start creates a root pi.session span with documented session and w
       modelId: "claude-test",
       thinkingLevel: "medium",
     },
-    { cwd: "/workspace/demo" },
+    {
+      cwd: "/workspace/demo",
+      ui: {
+        setStatus: (key, value) => statuses.push({ key, value }),
+      },
+    },
   );
 
   const span = telemetry.tracer.spans[0];
@@ -220,6 +227,7 @@ test("session_start creates a root pi.session span with documented session and w
   assert.equal(span.attributes["observme.capture.tool_arguments"], false);
   assert.equal(span.attributes["observme.redaction.enabled"], true);
   assert.ok(span.events.some(event => event.name === LOG_EVENT_NAMES.SESSION_STARTED));
+  assert.deepEqual(statuses, [{ key: EXTENSION_STATUS_KEY, value: EXTENSION_STATUS_VALUE }]);
   assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.WORKFLOW_STARTED));
 });
 
@@ -327,6 +335,53 @@ test("session_shutdown ends root span, updates active workflow metrics, emits li
       record => record.name === OBSERVME_COUNTER_METRIC_NAMES.WORKFLOWS_COMPLETED_TOTAL && record.value === 1,
     ),
   );
+});
+
+test("duplicate session_start flushes and shuts down the previous telemetry session before replacement", async () => {
+  const pi = createFakePi();
+  const sessions = [];
+  let resolveFirstStartEntered;
+  let unblockFirstStart;
+  const firstStartEntered = new Promise(resolve => {
+    resolveFirstStartEntered = resolve;
+  });
+  const firstStartBlocked = new Promise(resolve => {
+    unblockFirstStart = resolve;
+  });
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      const telemetry = createFakeTelemetry(lineage);
+      sessions.push(telemetry);
+      if (sessions.length === 1) {
+        resolveFirstStartEntered();
+        await firstStartBlocked;
+      }
+      return telemetry;
+    },
+  });
+
+  const firstStart = pi.handlers.get("session_start")({ sessionId: "session-first" }, { cwd: "/workspace/demo" });
+  await firstStartEntered;
+  const secondStart = pi.handlers.get("session_start")({ sessionId: "session-second" }, { cwd: "/workspace/demo" });
+  await Promise.resolve();
+  assert.equal(sessions.length, 1);
+  unblockFirstStart();
+  await Promise.all([firstStart, secondStart]);
+
+  const [firstSession, secondSession] = sessions;
+  assert.equal(firstSession.tracer.spans[0].ended, true);
+  assert.deepEqual(firstSession.controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.deepEqual(firstSession.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.ok(firstSession.logger.records.some(record => record.body === "session.duplicate_start"));
+  assert.ok(firstSession.logger.records.some(record => record.body === LOG_EVENT_NAMES.SESSION_SHUTDOWN));
+  assert.deepEqual(secondSession.controller.flushCalls, []);
+  assert.deepEqual(secondSession.controller.shutdownCalls, []);
+
+  await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
+
+  assert.deepEqual(secondSession.controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.deepEqual(secondSession.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
 });
 
 test("active traces can contain ended child spans before the pi.session root is exported", async () => {

@@ -2,6 +2,10 @@
 
 ## 0.1.0 - 2026-07-07
 
+- Changed the Pi TUI ObservMe status text from `ObservMe loaded` to the compact `🧿` indicator.
+- Capped custom Node Grafana transport response bodies and return sanitized actionable diagnostics when a backend response is oversized.
+- Hardened custom redaction regex handling with count/length bounds, unsafe-pattern rejection, fail-closed redaction behavior, and validation coverage.
+- Fixed duplicate Pi `session_start` handling so an active telemetry session is flushed and shut down before replacement, with lifecycle regression coverage.
 - Added a dedicated ObservMe LLM Conversations dashboard with a redacted opt-in chat timeline, separate prompt/response/thinking log panels, and Agent ID / Agent run ID filters.
 - Added opt-in Grafana visibility for redacted LLM prompt, response, and thinking content in Tempo spans and Loki log bodies when the existing capture/redaction/unsafe-capture flags are enabled.
 - Isolated Grafana-stack integration test Docker networks so live local stacks do not steal Tempo/Loki/Collector service discovery from test stacks.

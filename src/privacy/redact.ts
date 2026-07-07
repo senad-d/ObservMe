@@ -59,6 +59,24 @@ const HASH_PREFIX_LENGTH = 12;
 const ABSOLUTE_HOME_PATH_PATTERN = /\/(?:home|Users)\/[^\s'"`]+/gu;
 const REDACTED_PATH_PLACEHOLDER = "[REDACTED:path]";
 
+export const MAX_CUSTOM_REDACTION_PATTERNS = 16;
+export const MAX_CUSTOM_REDACTION_PATTERN_CHARS = 256;
+
+export interface CustomRedactionPatternSafetyIssue {
+  readonly code:
+    | "custom_redaction_pattern_limit"
+    | "custom_redaction_pattern_too_long"
+    | "custom_redaction_pattern_unsupported_construct"
+    | "custom_redaction_pattern_nested_quantifier"
+    | "custom_redaction_pattern_empty_match"
+    | "invalid_custom_redaction_pattern";
+  readonly message: string;
+}
+
+interface RegexGroupScanState {
+  hasQuantifier: boolean;
+}
+
 export function redactValue(rawValue: string, options: RedactionOptions): RedactionResult {
   const stages: RedactionStage[] = [];
   try {
@@ -124,6 +142,8 @@ export function runPathScrubber(value: string, options: RedactionOptions, stages
 export function runCustomRegexRedactors(value: string, options: RedactionOptions, stages: RedactionStage[]): string {
   recordStage("custom_regex_redactors", options, stages);
   const patterns = options.customRedactionPatterns ?? [];
+  const issues = validateCustomRedactionPatterns(patterns);
+  if (issues.length > 0) throw new Error(issues[0].message);
   return patterns.reduce(applyCustomRedactionPattern, value);
 }
 
@@ -233,8 +253,201 @@ export function applyCustomRedactionPattern(value: string, pattern: CustomRedact
 }
 
 export function compileCustomRedactionPattern(pattern: string): RegExp {
+  const issues = validateCustomRedactionPattern(pattern);
+  if (issues.length > 0) throw new Error(issues[0].message);
   if (pattern.startsWith("(?i)")) return new RegExp(pattern.slice(4), "giu");
   return new RegExp(pattern, "gu");
+}
+
+export function validateCustomRedactionPatterns(
+  patterns: readonly CustomRedactionPatternConfig[],
+): CustomRedactionPatternSafetyIssue[] {
+  const issues: CustomRedactionPatternSafetyIssue[] = [];
+  if (patterns.length > MAX_CUSTOM_REDACTION_PATTERNS) issues.push(createCustomRedactionPatternLimitIssue());
+
+  for (const [index, pattern] of patterns.entries()) {
+    issues.push(...validateCustomRedactionPattern(pattern.pattern).map(issue => addCustomRedactionPatternIndex(issue, index)));
+  }
+
+  return issues;
+}
+
+export function validateCustomRedactionPattern(pattern: string): CustomRedactionPatternSafetyIssue[] {
+  if (pattern.length > MAX_CUSTOM_REDACTION_PATTERN_CHARS) return [createCustomRedactionPatternTooLongIssue()];
+
+  const source = normalizeCustomRedactionPatternSource(pattern);
+  const unsafeIssue = detectUnsafeCustomRedactionPattern(source);
+  if (unsafeIssue) return [unsafeIssue];
+
+  return validateCustomRedactionPatternSyntax(source);
+}
+
+export function normalizeCustomRedactionPatternSource(pattern: string): string {
+  if (pattern.startsWith("(?i)")) return pattern.slice(4);
+  return pattern;
+}
+
+export function detectUnsafeCustomRedactionPattern(source: string): CustomRedactionPatternSafetyIssue | undefined {
+  if (hasUnsupportedCustomRedactionConstruct(source)) return createCustomRedactionPatternUnsupportedConstructIssue();
+  if (hasNestedQuantifiedGroup(source)) return createCustomRedactionPatternNestedQuantifierIssue();
+  return undefined;
+}
+
+export function hasUnsupportedCustomRedactionConstruct(source: string): boolean {
+  let escaped = false;
+  let inCharacterClass = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (escaped) {
+      if (isBackreferenceEscape(source, index)) return true;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "[") inCharacterClass = true;
+    if (char === "]") inCharacterClass = false;
+    if (!inCharacterClass && char === "(" && source[index + 1] === "?" && source[index + 2] !== ":") return true;
+  }
+
+  return false;
+}
+
+export function hasNestedQuantifiedGroup(source: string): boolean {
+  const groupStack: RegexGroupScanState[] = [];
+  let escaped = false;
+  let inCharacterClass = false;
+  let lastClosedGroupHadQuantifier = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (escaped) {
+      escaped = false;
+      lastClosedGroupHadQuantifier = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      lastClosedGroupHadQuantifier = false;
+      continue;
+    }
+    if (char === "[" && !inCharacterClass) {
+      inCharacterClass = true;
+      lastClosedGroupHadQuantifier = false;
+      continue;
+    }
+    if (char === "]" && inCharacterClass) {
+      inCharacterClass = false;
+      continue;
+    }
+    if (inCharacterClass) continue;
+    if (char === "(") {
+      groupStack.push({ hasQuantifier: false });
+      lastClosedGroupHadQuantifier = false;
+      continue;
+    }
+    if (char === ")") {
+      lastClosedGroupHadQuantifier = groupStack.pop()?.hasQuantifier === true;
+      continue;
+    }
+    if (isRegexQuantifierStart(source, index)) {
+      if (lastClosedGroupHadQuantifier) return true;
+      markCurrentRegexGroupQuantified(groupStack);
+      lastClosedGroupHadQuantifier = false;
+      continue;
+    }
+    lastClosedGroupHadQuantifier = false;
+  }
+
+  return false;
+}
+
+export function validateCustomRedactionPatternSyntax(source: string): CustomRedactionPatternSafetyIssue[] {
+  try {
+    const expression = new RegExp(source, "u");
+    if (expression.test("")) return [createCustomRedactionPatternEmptyMatchIssue()];
+    return [];
+  } catch (_error) {
+    return [createInvalidCustomRedactionPatternIssue()];
+  }
+}
+
+export function isBackreferenceEscape(source: string, index: number): boolean {
+  const char = source[index];
+  return /[1-9]/u.test(char) || (char === "k" && source[index + 1] === "<");
+}
+
+export function isRegexQuantifierStart(source: string, index: number): boolean {
+  const char = source[index];
+  if (char === "?" && source[index - 1] === "(") return false;
+  return char === "*" || char === "+" || char === "?" || isBraceQuantifierStart(source, index);
+}
+
+export function isBraceQuantifierStart(source: string, index: number): boolean {
+  if (source[index] !== "{") return false;
+  const closeIndex = source.indexOf("}", index + 1);
+  if (closeIndex === -1) return false;
+  return /^[0-9]+(?:,[0-9]*)?$/u.test(source.slice(index + 1, closeIndex));
+}
+
+export function markCurrentRegexGroupQuantified(groupStack: RegexGroupScanState[]): void {
+  const currentGroup = groupStack.at(-1);
+  if (currentGroup) currentGroup.hasQuantifier = true;
+}
+
+export function addCustomRedactionPatternIndex(
+  issue: CustomRedactionPatternSafetyIssue,
+  index: number,
+): CustomRedactionPatternSafetyIssue {
+  return {
+    code: issue.code,
+    message: `Custom redaction pattern at index ${index} was rejected: ${issue.message}`,
+  };
+}
+
+export function createCustomRedactionPatternLimitIssue(): CustomRedactionPatternSafetyIssue {
+  return {
+    code: "custom_redaction_pattern_limit",
+    message: `Custom redaction patterns are limited to ${MAX_CUSTOM_REDACTION_PATTERNS} entries.`,
+  };
+}
+
+export function createCustomRedactionPatternTooLongIssue(): CustomRedactionPatternSafetyIssue {
+  return {
+    code: "custom_redaction_pattern_too_long",
+    message: `Custom redaction patterns are limited to ${MAX_CUSTOM_REDACTION_PATTERN_CHARS} characters.`,
+  };
+}
+
+export function createCustomRedactionPatternUnsupportedConstructIssue(): CustomRedactionPatternSafetyIssue {
+  return {
+    code: "custom_redaction_pattern_unsupported_construct",
+    message: "Custom redaction patterns do not support lookaround, inline flag groups, named groups, or backreferences.",
+  };
+}
+
+export function createCustomRedactionPatternNestedQuantifierIssue(): CustomRedactionPatternSafetyIssue {
+  return {
+    code: "custom_redaction_pattern_nested_quantifier",
+    message: "Custom redaction patterns must not repeat a group that already contains a quantifier.",
+  };
+}
+
+export function createCustomRedactionPatternEmptyMatchIssue(): CustomRedactionPatternSafetyIssue {
+  return {
+    code: "custom_redaction_pattern_empty_match",
+    message: "Custom redaction patterns must not match an empty string.",
+  };
+}
+
+export function createInvalidCustomRedactionPatternIssue(): CustomRedactionPatternSafetyIssue {
+  return {
+    code: "invalid_custom_redaction_pattern",
+    message: "Custom redaction pattern is not a valid regular expression.",
+  };
 }
 
 export function formatCustomReplacement(name: string, value: string): string {
