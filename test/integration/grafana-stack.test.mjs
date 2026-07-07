@@ -2,14 +2,19 @@ import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
-import { dirname, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
-import { defaultObservMeConfig } from "../../src/config/defaults.ts";
+import { handleObsCommand } from "../../src/commands/obs.ts";
+import { getObsStatusRuntimeState } from "../../src/commands/obs-status.ts";
+import { OBS_COST_AGGREGATE_PROMQL } from "../../src/commands/obs-cost.ts";
+import { OBS_TOOLS_CALLS_PROMQL, OBS_TOOLS_FAILURES_PROMQL } from "../../src/commands/obs-tools.ts";
+import { loadSessionConfig } from "../../src/config/load-config.ts";
 import { registerHandlers, startSessionTelemetry } from "../../src/pi/handlers.ts";
 
 const execFile = promisify(execFileCallback);
@@ -46,9 +51,9 @@ function createTestPi() {
   };
 }
 
-function createTestContext(ids) {
+function createTestContext(ids, cwd = projectRoot) {
   return {
-    cwd: projectRoot,
+    cwd,
     sessionId: ids.sessionId,
     model: {
       provider: "anthropic",
@@ -87,6 +92,7 @@ function createIntegrationIds() {
     turnIndex: 1,
     llmRequestId: `llm-request-grafana-stack-${suffix}`,
     toolCallId: `tool-call-grafana-stack-${suffix}`,
+    failedToolCallId: `tool-call-grafana-stack-failed-${suffix}`,
   };
 }
 
@@ -101,33 +107,6 @@ function createLineageEnv(ids) {
   };
 }
 
-function createGrafanaStackIntegrationConfig(otlpHttpPort) {
-  const config = structuredClone(defaultObservMeConfig);
-
-  config.environment = "development";
-  config.tenant = "grafana-stack-it";
-  config.otlp.endpoint = `http://127.0.0.1:${otlpHttpPort}`;
-  config.otlp.headers = {};
-  config.otlp.timeoutMs = 5000;
-  config.otlp.tls.enabled = false;
-  config.privacy.allowInsecureTransport = true;
-  config.resource.attributes = {
-    "service.name": serviceName,
-    "observme.tenant.id": "grafana-stack-it",
-    "pi.project.name": "observme-integration",
-    "deployment.environment.name": "integration",
-  };
-  config.traces.batch.scheduledDelayMillis = 100;
-  config.traces.batch.exportTimeoutMillis = 5000;
-  config.metrics.exportIntervalMillis = 1000;
-  config.metrics.exportTimeoutMillis = 1000;
-  config.logs.batch.scheduledDelayMillis = 100;
-  config.query.enabled = false;
-  config.shutdown.flushTimeoutMs = 10000;
-
-  return config;
-}
-
 function createGrafanaStackState() {
   const projectName = `observme-grafana-it-${process.pid}-${randomUUID().slice(0, 8)}`;
 
@@ -135,6 +114,8 @@ function createGrafanaStackState() {
     projectName,
     env: {},
     grafanaUrl: "",
+    grafanaUsername: "admin",
+    grafanaPassword: "",
     otlpHttpPort: 0,
     createdGrafanaSecret: false,
   };
@@ -167,10 +148,16 @@ function grafanaApiUrl(stack, path) {
   return `${stack.grafanaUrl}${path}`;
 }
 
-function createGrafanaFetchHeaders() {
+function createGrafanaFetchHeaders(stack) {
   return {
     Accept: "application/json",
+    Authorization: createGrafanaBasicAuthorizationHeader(stack),
   };
+}
+
+function createGrafanaBasicAuthorizationHeader(stack) {
+  assert.ok(stack.grafanaPassword, "Grafana admin password should be available for authenticated integration calls");
+  return `Basic ${Buffer.from(`${stack.grafanaUsername}:${stack.grafanaPassword}`).toString("base64")}`;
 }
 
 function tempoTraceUrl(stack, traceId) {
@@ -231,9 +218,18 @@ function hasLokiSessionLog(payload, ids) {
   return text.includes(ids.sessionId) && text.includes("session.started");
 }
 
+function hasLokiErrorLog(payload) {
+  const text = JSON.stringify(payload);
+  return text.includes("tool.call.failed") && text.includes("IntegrationError");
+}
+
 function hasPrometheusTokenTotal(payload) {
   const values = extractPrometheusValues(payload);
   return values.some(value => value >= 19);
+}
+
+function hasPrometheusSeries(payload) {
+  return extractPrometheusValues(payload).length > 0;
 }
 
 function extractPrometheusValues(payload) {
@@ -322,6 +318,12 @@ async function ensureGrafanaSecret(state) {
   state.createdGrafanaSecret = true;
 }
 
+async function readGrafanaAdminPassword() {
+  const password = (await readFile(grafanaAdminSecretPath, "utf8")).trim();
+  assert.ok(password, "Grafana admin password secret must not be empty for authenticated integration calls");
+  return password;
+}
+
 async function prepareGrafanaStackState(state) {
   const otelHttpPort = await getFreePort();
   const otelGrpcPort = await getFreePort();
@@ -333,6 +335,7 @@ async function prepareGrafanaStackState(state) {
   };
 
   await ensureGrafanaSecret(state);
+  state.grafanaPassword = await readGrafanaAdminPassword();
 }
 
 async function startGrafanaStack(state) {
@@ -370,7 +373,7 @@ async function fetchJson(url, options = {}) {
   const response = await fetch(url, {
     ...options,
     headers: {
-      ...createGrafanaFetchHeaders(),
+      Accept: "application/json",
       ...options.headers,
     },
     signal: AbortSignal.timeout(options.timeoutMs ?? 5000),
@@ -380,6 +383,16 @@ async function fetchJson(url, options = {}) {
 
   if (!response.ok) throw new Error(`${url} returned ${response.status}: ${text.slice(0, 1000)}`);
   return payload;
+}
+
+async function fetchGrafanaJson(stack, url, options = {}) {
+  return fetchJson(url, {
+    ...options,
+    headers: {
+      ...createGrafanaFetchHeaders(stack),
+      ...options.headers,
+    },
+  });
 }
 
 async function waitForResult(label, operation, predicate, options = {}) {
@@ -407,7 +420,7 @@ async function waitForResult(label, operation, predicate, options = {}) {
 async function waitForGrafanaHealth(stack) {
   await waitForResult(
     "Grafana health",
-    () => fetchJson(grafanaApiUrl(stack, "/api/health")),
+    () => fetchGrafanaJson(stack, grafanaApiUrl(stack, "/api/health")),
     payload => payload.database === "ok" || payload.status === "ok",
     { timeoutMs: 120000 },
   );
@@ -422,7 +435,7 @@ async function waitForGrafanaDatasources(stack) {
 async function waitForGrafanaDatasource(stack, uid) {
   await waitForResult(
     `Grafana datasource ${uid}`,
-    () => fetchJson(grafanaApiUrl(stack, `/api/datasources/uid/${encodeURIComponent(uid)}`)),
+    () => fetchGrafanaJson(stack, grafanaApiUrl(stack, `/api/datasources/uid/${encodeURIComponent(uid)}`)),
     payload => payload.uid === uid,
     { timeoutMs: 120000 },
   );
@@ -434,17 +447,16 @@ async function invoke(pi, eventName, event, context) {
   await handler(event, context);
 }
 
-async function emitRepresentativeObservMeTelemetry(otlpHttpPort, ids) {
+async function emitRepresentativeObservMeTelemetry(project, ids) {
   const pi = createTestPi();
-  const context = createTestContext(ids);
-  const config = createGrafanaStackIntegrationConfig(otlpHttpPort);
+  const context = createTestContext(ids, project.root);
   const handlerErrors = [];
   let telemetrySession;
 
   registerHandlers(pi, {
     env: createLineageEnv(ids),
     trustedParentContext: true,
-    loadConfig: () => Promise.resolve(config),
+    loadConfig: project.loadConfig,
     startTelemetry: async options => {
       telemetrySession = await startSessionTelemetry(options);
       return telemetrySession;
@@ -512,13 +524,28 @@ async function emitRepresentativeObservMeTelemetry(otlpHttpPort, ids) {
     },
     context,
   );
+  await emitToolCall(pi, context, ids.toolCallId, "read", true);
+  await emitToolCall(pi, context, ids.failedToolCallId, "write", false);
+  await invoke(pi, "turn_end", { turnIndex: ids.turnIndex, success: true }, context);
+  await invoke(pi, "agent_end", { agentRunId: ids.agentRunId, success: true }, context);
+
+  assert.deepEqual(handlerErrors, [], "ObservMe handlers should not throw during Grafana-stack integration telemetry emission");
+  assert.match(traceId ?? "", /^[a-f0-9]{32}$/u, "session span should expose a real trace id");
+
+  return {
+    traceId,
+    shutdown: () => shutdownRepresentativeObservMeTelemetry(pi, context, handlerErrors),
+  };
+}
+
+async function emitToolCall(pi, context, toolCallId, toolName, success) {
   await invoke(
     pi,
     "tool_execution_start",
     {
-      toolCallId: ids.toolCallId,
-      toolName: "read",
-      arguments: { query: "grafana-stack argument" },
+      toolCallId,
+      toolName,
+      arguments: { fixture: "grafana-stack-command-smoke" },
     },
     context,
   );
@@ -526,9 +553,9 @@ async function emitRepresentativeObservMeTelemetry(otlpHttpPort, ids) {
     pi,
     "tool_result",
     {
-      toolCallId: ids.toolCallId,
-      toolName: "read",
-      result: { content: "grafana-stack result" },
+      toolCallId,
+      toolName,
+      result: success ? { content: "grafana-stack result" } : { errorClass: "IntegrationError" },
     },
     context,
   );
@@ -536,26 +563,25 @@ async function emitRepresentativeObservMeTelemetry(otlpHttpPort, ids) {
     pi,
     "tool_execution_end",
     {
-      toolCallId: ids.toolCallId,
-      toolName: "read",
-      success: true,
-      result: { content: "grafana-stack result" },
+      toolCallId,
+      toolName,
+      success,
+      errorClass: success ? undefined : "IntegrationError",
+      result: success ? { content: "grafana-stack result" } : { error: "integration failure" },
     },
     context,
   );
-  await invoke(pi, "turn_end", { turnIndex: ids.turnIndex, success: true }, context);
-  await invoke(pi, "agent_end", { agentRunId: ids.agentRunId, success: true }, context);
-  await invoke(pi, "session_shutdown", { reason: "complete", success: true }, context);
+}
 
-  assert.deepEqual(handlerErrors, [], "ObservMe handlers should not throw during Grafana-stack integration telemetry emission");
-  assert.match(traceId ?? "", /^[a-f0-9]{32}$/u, "session span should expose a real trace id");
-  return traceId;
+async function shutdownRepresentativeObservMeTelemetry(pi, context, handlerErrors) {
+  await invoke(pi, "session_shutdown", { reason: "complete", success: true }, context);
+  assert.deepEqual(handlerErrors, [], "ObservMe handlers should not throw during Grafana-stack shutdown");
 }
 
 async function waitForTempoTraceById(stack, traceId, ids) {
   return waitForResult(
     "Tempo trace by trace id",
-    () => fetchJson(tempoTraceUrl(stack, traceId)),
+    () => fetchGrafanaJson(stack, tempoTraceUrl(stack, traceId)),
     payload => hasTempoTracePayload(payload, ids),
     { timeoutMs: 90000 },
   );
@@ -566,7 +592,7 @@ async function waitForTempoLineageSearch(stack, traceId, ids, range) {
 
   return waitForResult(
     "Tempo lineage search",
-    () => fetchJson(tempoSearchUrl(stack, tags, range)),
+    () => fetchGrafanaJson(stack, tempoSearchUrl(stack, tags, range)),
     payload => hasTempoLineageSearchResult(payload, traceId),
     { timeoutMs: 90000 },
   );
@@ -577,8 +603,19 @@ async function waitForLokiSessionLogs(stack, ids, range) {
 
   return waitForResult(
     "Loki session log query",
-    () => fetchJson(lokiQueryRangeUrl(stack, query, range)),
+    () => fetchGrafanaJson(stack, lokiQueryRangeUrl(stack, query, range)),
     payload => hasLokiSessionLog(payload, ids),
+    { timeoutMs: 90000 },
+  );
+}
+
+async function waitForLokiErrorLogs(stack, range) {
+  const query = `{service_name="${serviceName}", event_name="tool.call.failed"}`;
+
+  return waitForResult(
+    "Loki error label query",
+    () => fetchGrafanaJson(stack, lokiQueryRangeUrl(stack, query, range)),
+    hasLokiErrorLog,
     { timeoutMs: 90000 },
   );
 }
@@ -588,8 +625,23 @@ async function waitForPrometheusTokenTotals(stack) {
 
   return waitForResult(
     "Prometheus token total query",
-    () => fetchJson(prometheusQueryUrl(stack, tokenTotalQuery)),
+    () => fetchGrafanaJson(stack, prometheusQueryUrl(stack, tokenTotalQuery)),
     hasPrometheusTokenTotal,
+    { timeoutMs: 120000, intervalMs: 2000 },
+  );
+}
+
+async function waitForPrometheusCommandQueries(stack) {
+  await waitForPrometheusQuerySeries(stack, "Prometheus cost command query", OBS_COST_AGGREGATE_PROMQL);
+  await waitForPrometheusQuerySeries(stack, "Prometheus tool call command query", OBS_TOOLS_CALLS_PROMQL);
+  await waitForPrometheusQuerySeries(stack, "Prometheus tool failure command query", OBS_TOOLS_FAILURES_PROMQL);
+}
+
+async function waitForPrometheusQuerySeries(stack, label, query) {
+  return waitForResult(
+    label,
+    () => fetchGrafanaJson(stack, prometheusQueryUrl(stack, query)),
+    hasPrometheusSeries,
     { timeoutMs: 120000, intervalMs: 2000 },
   );
 }
@@ -610,7 +662,7 @@ async function waitForDashboardImports(stack) {
 
   return waitForResult(
     "Grafana dashboard provisioning import",
-    () => fetchJson(grafanaApiUrl(stack, "/api/search?type=dash-db&limit=5000")),
+    () => fetchGrafanaJson(stack, grafanaApiUrl(stack, "/api/search?type=dash-db&limit=5000")),
     payload => hasDashboardUids(payload, expectedUids),
     { timeoutMs: 120000 },
   );
@@ -623,20 +675,256 @@ function hasDashboardUids(payload, expectedUids) {
   return expectedUids.every(uid => actualUids.has(uid));
 }
 
-test("ObservMe telemetry is queryable through the Grafana stack and dashboards import", { timeout: 360000 }, async t => {
+async function createGrafanaStackCommandProject(stack) {
+  const root = await mkdtemp(join(tmpdir(), "observme-grafana-stack-commands-"));
+  const configPath = resolve(root, ".pi", "observme.yaml");
+  const globalConfigPath = resolve(root, "global-observme.yaml");
+  const env = {
+    OBSERVME_GRAFANA_USERNAME: stack.grafanaUsername,
+    OBSERVME_GRAFANA_PASSWORD: stack.grafanaPassword,
+  };
+
+  await mkdir(dirname(configPath), { recursive: true, mode: 0o700 });
+  await writeFile(configPath, renderGrafanaStackCommandConfig(stack), { mode: 0o600 });
+
+  return {
+    root,
+    configPath,
+    env,
+    loadConfig: options => loadSessionConfig({
+      ...options,
+      env: { ...options.env, ...env },
+      globalConfigPath,
+      projectConfigPath: configPath,
+      isProjectTrusted: true,
+    }),
+  };
+}
+
+function renderGrafanaStackCommandConfig(stack) {
+  return `# Live-stack /obs command smoke config.
+# Required inputs: Grafana URL, Basic auth username/password, datasource UIDs, and OTLP HTTP endpoint.
+# Credentials are supplied through OBSERVME_GRAFANA_USERNAME/PASSWORD so the fixture does not render secret values.
+observme:
+  enabled: true
+  environment: development
+  tenant: grafana-stack-it
+  otlp:
+    endpoint: http://127.0.0.1:${stack.otlpHttpPort}
+    protocol: http/protobuf
+    timeoutMs: 5000
+    headers:
+      Authorization: ""
+    tls:
+      enabled: false
+  resource:
+    attributes:
+      service.name: ${serviceName}
+      observme.tenant.id: grafana-stack-it
+      pi.project.name: observme-integration
+      deployment.environment.name: integration
+  traces:
+    batch:
+      scheduledDelayMillis: 100
+      exportTimeoutMillis: 5000
+  metrics:
+    exportIntervalMillis: 1000
+    exportTimeoutMillis: 1000
+  logs:
+    batch:
+      scheduledDelayMillis: 100
+  privacy:
+    allowInsecureTransport: true
+  query:
+    enabled: true
+    timeoutMs: 5000
+    maxLogs: 20
+    maxTraces: 20
+    maxMetricSeries: 20
+    maxAgents: 20
+    links:
+      traceUrlTemplate: ${stack.grafanaUrl}/explore?trace={traceId}&ds={tempoDatasourceUid}
+    grafana:
+      url: ${stack.grafanaUrl}
+      token: ""
+      username: \${OBSERVME_GRAFANA_USERNAME}
+      password: \${OBSERVME_GRAFANA_PASSWORD}
+      datasourceUids:
+        tempo: ${tempoDatasourceUid}
+        loki: ${lokiDatasourceUid}
+        prometheus: ${prometheusDatasourceUid}
+      tls:
+        insecureSkipVerify: false
+      transport:
+        preferIPv4: true
+  shutdown:
+    flushTimeoutMs: 10000
+`;
+}
+
+function createObsCommandHarness(project) {
+  const notifications = [];
+
+  return {
+    notifications,
+    ctx: {
+      cwd: project.root,
+      ui: {
+        notify: (message, type) => notifications.push({ message, type }),
+      },
+      isProjectTrusted: () => true,
+    },
+  };
+}
+
+function createObsCommandOptions(project, ids) {
+  const common = { loadConfig: project.loadConfig };
+
+  return {
+    status: common,
+    health: common,
+    cost: common,
+    trace: common,
+    tools: common,
+    agents: {
+      ...common,
+      getRuntime: () => createCommandAgentsRuntime(ids),
+    },
+    errors: common,
+    logs: {
+      ...common,
+      getSession: () => ({ sessionId: ids.sessionId }),
+    },
+    link: common,
+  };
+}
+
+function createCommandAgentsRuntime(ids) {
+  const lineage = {
+    workflowId: ids.workflowId,
+    workflowRootAgentId: ids.rootAgentId,
+    agentId: ids.agentId,
+    parentAgentId: ids.parentAgentId,
+    rootAgentId: ids.rootAgentId,
+    depth: 1,
+    role: "subagent",
+    capability: "integration-test",
+    orphaned: false,
+  };
+
+  return {
+    lineage,
+    children: [],
+    waitJoinHints: [],
+    sessionId: ids.sessionId,
+  };
+}
+
+async function runObsInfoCommand(harness, options, args) {
+  harness.notifications.length = 0;
+  await handleObsCommand(args, harness.ctx, options);
+
+  assert.equal(harness.notifications.length, 1, `/obs ${args} should render one notification`);
+  const notification = harness.notifications[0];
+  assert.equal(notification.type, "info", `/obs ${args} should succeed: ${notification.message}`);
+  return notification.message;
+}
+
+async function runObsRuntimeCommandSmoke(project, ids) {
+  const harness = createObsCommandHarness(project);
+  const options = createObsCommandOptions(project, ids);
+
+  assert.match(await runObsInfoCommand(harness, options, "status"), /ObservMe: enabled/u);
+  const health = await runObsInfoCommand(harness, options, "health");
+  assert.match(health, /Collector: reachable/u);
+  assert.match(health, /Grafana: reachable/u);
+  assert.match(health, /Tempo datasource: ok/u);
+  assert.match(health, /Loki datasource: ok/u);
+  assert.match(health, /Metrics datasource: ok/u);
+
+  const cost = await runObsInfoCommand(harness, options, "cost");
+  assert.match(cost, /Cost by model\/provider/u);
+  assert.doesNotMatch(cost, /No cost metrics found/u);
+
+  const tools = await runObsInfoCommand(harness, options, "tools");
+  assert.match(tools, /Tool calls by tool/u);
+  assert.match(tools, /\bread:/u);
+  assert.match(tools, /write\s+\/\s+[^\s:]+:/u);
+
+  const errors = await runObsInfoCommand(harness, options, "errors");
+  assert.match(errors, /Recent error events/u);
+  assert.match(errors, /tool\.call\.failed/u);
+
+  const logs = await runObsInfoCommand(harness, options, "logs");
+  assert.match(logs, new RegExp(`Session logs for ${escapeRegExp(ids.sessionId)}`, "u"));
+  assert.match(logs, /session\.started/u);
+
+  const agents = await runObsInfoCommand(harness, options, "agents");
+  assert.match(agents, new RegExp(`Workflow: ${escapeRegExp(ids.workflowId)}`, "u"));
+  assert.match(agents, /Lineage drill-down: Tempo attributes pi\.agent\.id, pi\.workflow\.id traces=\d+/u);
+}
+
+async function runObsTraceCommandSmoke(project, ids, traceId) {
+  const harness = createObsCommandHarness(project);
+  const options = createObsCommandOptions(project, ids);
+  const trace = await runObsInfoCommand(harness, options, `trace --session ${ids.sessionId}`);
+  const link = await runObsInfoCommand(harness, options, `link --session ${ids.sessionId}`);
+
+  assert.match(trace, new RegExp(`Trace: ${traceId}`, "u"));
+  assert.match(trace, /Open trace: http:\/\/127\.0\.0\.1:\d+\/explore\?trace=/u);
+  assert.match(link, new RegExp(`Trace: ${traceId}`, "u"));
+  assert.match(link, /Grafana link \(session\)/u);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+async function canRunDockerComposeStack() {
+  try {
+    await execFile("docker", ["compose", "version"], { encoding: "utf8", timeout: 10000 });
+    await execFile("docker", ["info"], { encoding: "utf8", timeout: 10000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("ObservMe telemetry is queryable through the Grafana stack and /obs commands", { timeout: 420000 }, async t => {
+  if (!(await canRunDockerComposeStack())) {
+    t.skip("Docker Compose or the Docker daemon is unavailable; skipping live Grafana-stack integration.");
+    return;
+  }
+
   const stack = createGrafanaStackState();
   await prepareGrafanaStackState(stack);
   t.after(() => stopGrafanaStack(stack));
 
   await startGrafanaStack(stack);
+  const commandProject = await createGrafanaStackCommandProject(stack);
+  t.after(() => rm(commandProject.root, { recursive: true, force: true }));
+
   const ids = createIntegrationIds();
+  let telemetry;
+  t.after(async () => {
+    if (telemetry) await telemetry.shutdown();
+  });
+
   const rangeStart = new Date(Date.now() - 60_000);
-  const traceId = await emitRepresentativeObservMeTelemetry(stack.otlpHttpPort, ids);
+  telemetry = await emitRepresentativeObservMeTelemetry(commandProject, ids);
+  await telemetry.shutdown();
+  assert.equal(getObsStatusRuntimeState().lastExportError, undefined, "ObservMe export should not fail before live-stack command smoke");
+  const traceId = telemetry.traceId;
+  telemetry = undefined;
   const range = { from: rangeStart, to: new Date(Date.now() + 120_000) };
 
   await waitForTempoTraceById(stack, traceId, ids);
   await waitForTempoLineageSearch(stack, traceId, ids, range);
   await waitForLokiSessionLogs(stack, ids, range);
+  await waitForLokiErrorLogs(stack, range);
   await waitForPrometheusTokenTotals(stack);
+  await waitForPrometheusCommandQueries(stack);
   await waitForDashboardImports(stack);
+  await runObsRuntimeCommandSmoke(commandProject, ids);
+  await runObsTraceCommandSmoke(commandProject, ids, traceId);
 });

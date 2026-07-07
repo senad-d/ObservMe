@@ -32,7 +32,7 @@ Review scope and date: 2026-07-07. Maintainability, clean-code, logic, command d
 
 ## Ordered tasks
 
-- [ ] Add a live-stack `/obs` command integration test that exercises real Grafana, Prometheus, Loki, and Tempo paths
+- [x] Add a live-stack `/obs` command integration test that exercises real Grafana, Prometheus, Loki, and Tempo paths
 
 #### Why
 

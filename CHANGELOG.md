@@ -2,6 +2,7 @@
 
 ## 0.1.0 - 2026-07-07
 
+- Added live Grafana-stack `/obs` command integration coverage for authenticated datasource queries and status, health, cost, tools, errors, logs, agents, trace, and link smoke paths.
 - Added Grafana query readiness preflight so query-backed `/obs` commands and `/obs health` fail fast on unresolved tokens, missing auth, invalid Grafana URLs, or missing datasource UIDs without exposing credential values.
 - Added resilient Grafana query transport/auth handling for `/obs` commands: bearer tokens, local Basic auth fallback, local self-signed TLS and IPv4 transport options, and secret-safe 401/403/TLS/DNS/timeout diagnostics.
 - Aligned Loki label provisioning, `/obs errors` and `/obs logs` LogQL, and Loki-backed dashboard selectors with the local Collector output, including `service.name`, `event_name`, `event_category`, and session labels.
