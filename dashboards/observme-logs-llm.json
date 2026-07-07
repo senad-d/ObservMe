@@ -1,0 +1,95 @@
+{
+  "__requires": [
+    { "id": "grafana", "name": "Grafana", "type": "grafana", "version": "10.0.0" },
+    { "id": "prometheus", "name": "Prometheus", "type": "datasource", "version": "1.0.0" },
+    { "id": "loki", "name": "Loki", "type": "datasource", "version": "1.0.0" },
+    { "id": "timeseries", "name": "Time series", "type": "panel", "version": "" },
+    { "id": "stat", "name": "Stat", "type": "panel", "version": "" },
+    { "id": "logs", "name": "Logs", "type": "panel", "version": "" }
+  ],
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "LLM prompt/response size histograms. These work even when content capture is disabled.",
+      "fieldConfig": { "defaults": { "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }, "unit": "decbytes" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "editorMode": "code", "expr": "histogram_quantile(0.95, sum(rate(observme_prompt_size_chars_bucket[$__rate_interval])) by (le))", "legendFormat": "prompt p95", "range": true, "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "editorMode": "code", "expr": "histogram_quantile(0.95, sum(rate(observme_response_size_chars_bucket[$__rate_interval])) by (le))", "legendFormat": "response p95", "range": true, "refId": "B" }
+      ],
+      "title": "LLM input/output size p95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Input and output token totals over the selected dashboard range.",
+      "fieldConfig": { "defaults": { "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "editorMode": "code", "expr": "sum(increase(observme_llm_input_tokens_total[$__range])) by (provider, model)", "legendFormat": "{{provider}}/{{model}} input", "range": true, "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "editorMode": "code", "expr": "sum(increase(observme_llm_output_tokens_total[$__range])) by (provider, model)", "legendFormat": "{{provider}}/{{model}} output", "range": true, "refId": "B" }
+      ],
+      "title": "LLM input/output tokens",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "description": "Content-capture audit events. Redacted content is intentionally not written to Loki; open the linked trace in Tempo to inspect captured span attributes when capture is enabled.",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "id": 3,
+      "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "loki" }, "editorMode": "code", "expr": "{service_name=\"observme-pi-extension\", event_name=~\"llm[.](prompt|response|thinking)[.]captured\"}", "queryType": "range", "refId": "A" }
+      ],
+      "title": "LLM content-capture events",
+      "type": "logs"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "description": "Recent LLM request lifecycle logs by provider/model/stop reason labels.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 8 },
+      "id": 4,
+      "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "loki" }, "editorMode": "code", "expr": "{service_name=\"observme-pi-extension\", event_name=~\"llm[.]request[.](started|completed|failed)\"}", "queryType": "range", "refId": "A" }
+      ],
+      "title": "LLM request logs",
+      "type": "logs"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "description": "All ObservMe logs for the selected range. Filter by pi_session_id in Explore for a single conversation.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 8 },
+      "id": 5,
+      "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "loki" }, "editorMode": "code", "expr": "{service_name=\"observme-pi-extension\"}", "queryType": "range", "refId": "A" }
+      ],
+      "title": "Session logs",
+      "type": "logs"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["observme", "pi", "logs", "llm"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "ObservMe Logs and LLM I/O",
+  "uid": "observme-logs-llm",
+  "version": 1,
+  "weekStart": ""
+}

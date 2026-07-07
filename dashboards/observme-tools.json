@@ -104,7 +104,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_tool_calls_total[5m])) by (tool_name)",
+          "expr": "sum(rate(observme_tool_calls_total[$__rate_interval])) by (tool_name)",
           "range": true,
           "refId": "A",
           "legendFormat": "{{tool_name}}"
@@ -164,7 +164,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_tool_failures_total[5m])) by (tool_name) / clamp_min(sum(rate(observme_tool_calls_total[5m])) by (tool_name), 1e-9)",
+          "expr": "sum(rate(observme_tool_failures_total[$__rate_interval])) by (tool_name) / clamp_min(sum(rate(observme_tool_calls_total[$__rate_interval])) by (tool_name), 1e-9)",
           "range": true,
           "refId": "A",
           "legendFormat": "{{tool_name}}"
@@ -224,7 +224,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[5m])) by (tool_name, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (tool_name, le))",
           "range": true,
           "refId": "A",
           "legendFormat": "{{tool_name}}"
@@ -350,7 +350,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_result_size_chars_bucket[5m])) by (tool_name, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_result_size_chars_bucket[$__rate_interval])) by (tool_name, le))",
           "range": true,
           "refId": "A",
           "legendFormat": "{{tool_name}}"

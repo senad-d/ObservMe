@@ -2,6 +2,7 @@
 
 ## 0.1.0 - 2026-07-07
 
+- Fixed ObservMe latency/size histogram emission for turn, LLM request, tool, bash, agent-run, prompt-size, and response-size metrics; improved Grafana dashboard reliability by switching short fixed PromQL rate windows to `$__rate_interval`; added an ObservMe Logs and LLM I/O dashboard for session logs, LLM request logs, content-capture audit events, token totals, and prompt/response size panels; and wired local-stack Prometheus alert-rule loading plus Loki ruler API support.
 - Added a root `.env.example` and trusted-project `.env` loading for extension `OBSERVME_*` settings, with system environment variables taking precedence and Grafana datasource UID env overrides documented/tested.
 - Added a deterministic, secret-safe Grafana + `/obs` validation flow with a documented checklist and `npm run validate:grafana-obs` script that classifies ingestion, label, Grafana auth/query, TLS/DNS, Pi command, and session-state failures.
 - Added secret-safe `/obs status` config diagnostics for trusted, untrusted, and missing project config contexts, including effective config source, Grafana URL, and query-readiness reporting.

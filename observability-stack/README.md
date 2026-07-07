@@ -86,7 +86,7 @@ Token setup options:
 
 Browser login cookies are not used by the extension; `/obs health`, `/obs cost`, `/obs tools`, `/obs errors`, `/obs logs`, `/obs agents`, and `/obs trace --session` call the Grafana API directly. The self-signed local certificate requires `tls.insecureSkipVerify: true` for this local profile, and `transport.preferIPv4: true` avoids stalls when `observability.local` resolves to IPv6 first.
 
-Provisioned datasource UIDs are `tempo`, `loki`, and `prometheus`. The Collector inserts `service.name=observme-pi-extension`; Loki receives normalized query labels including `service_name`, `pi_session_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, confirm the env vars above are set in the Pi process, then run `/obs health` and check Grafana auth, datasource UID, TLS, and DNS details.
+Provisioned datasource UIDs are `tempo`, `loki`, and `prometheus`. The Collector inserts `service.name=observme-pi-extension`; Loki receives normalized query labels including `service_name`, `pi_session_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, confirm the env vars above are available to the extension through system env or trusted `.env`, then run `/obs health` and check Grafana auth, datasource UID, TLS, and DNS details.
 
 ## Configuration
 - **Stack service variables** are in `observability-stack/.env`; **extension variables** can be exported in your shell or placed in the repository-root `.env` copied from `.env.example`.

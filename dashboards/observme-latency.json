@@ -124,7 +124,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_turn_duration_ms_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_turn_duration_ms_bucket[$__rate_interval])) by (le))",
           "legendFormat": "turn p95",
           "range": true,
           "refId": "A"
@@ -216,7 +216,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[$__rate_interval])) by (le))",
           "legendFormat": "llm p95",
           "range": true,
           "refId": "A"
@@ -308,7 +308,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (le))",
           "legendFormat": "tool p95",
           "range": true,
           "refId": "A"
@@ -400,7 +400,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_turn_duration_ms_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_turn_duration_ms_bucket[$__rate_interval])) by (le))",
           "legendFormat": "turn p95",
           "range": true,
           "refId": "A"
@@ -411,7 +411,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[$__rate_interval])) by (le))",
           "legendFormat": "llm p95",
           "range": true,
           "refId": "B"
@@ -422,7 +422,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (le))",
           "legendFormat": "tool p95",
           "range": true,
           "refId": "C"
@@ -514,7 +514,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[5m])) by (provider, model, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[$__rate_interval])) by (provider, model, le))",
           "legendFormat": "{{provider}} / {{model}}",
           "range": true,
           "refId": "A"
@@ -606,7 +606,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[5m])) by (tool_name, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (tool_name, le))",
           "legendFormat": "{{tool_name}}",
           "range": true,
           "refId": "A"

@@ -104,7 +104,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_llm_requests_total[5m])) by (provider, model)",
+          "expr": "sum(rate(observme_llm_requests_total[$__rate_interval])) by (provider, model)",
           "range": true,
           "refId": "A",
           "legendFormat": "{{provider}} / {{model}}"
@@ -164,7 +164,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_llm_errors_total[5m])) by (provider, model) / clamp_min(sum(rate(observme_llm_requests_total[5m])) by (provider, model), 1e-9)",
+          "expr": "sum(rate(observme_llm_errors_total[$__rate_interval])) by (provider, model) / clamp_min(sum(rate(observme_llm_requests_total[$__rate_interval])) by (provider, model), 1e-9)",
           "range": true,
           "refId": "A",
           "legendFormat": "{{provider}} / {{model}}"
@@ -224,7 +224,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[5m])) by (provider, model, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[$__rate_interval])) by (provider, model, le))",
           "range": true,
           "refId": "A",
           "legendFormat": "{{provider}} / {{model}}"
@@ -350,7 +350,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "1000 * sum(rate(observme_llm_cost_usd_total[5m])) by (provider, model) / clamp_min(sum(rate(observme_turns_completed_total[5m])), 1e-9)",
+          "expr": "1000 * sum(rate(observme_llm_cost_usd_total[$__rate_interval])) by (provider, model) / clamp_min(sum(rate(observme_turns_completed_total[$__rate_interval])), 1e-9)",
           "range": true,
           "refId": "A",
           "legendFormat": "{{provider}} / {{model}}"

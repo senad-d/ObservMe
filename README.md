@@ -151,10 +151,10 @@ See `ObservMe-Production-Docs/02-reference-architecture.md` for the full archite
 ObservMe supports layered configuration with this precedence:
 
 ```text
-defaults → global ~/.pi/agent/observme.yaml → trusted project config → environment variables → runtime options
+defaults → global ~/.pi/agent/observme.yaml → trusted project config → trusted project .env → system environment variables → runtime options
 ```
 
-Factory-safe loading uses defaults/global/environment/runtime options only. Session-scoped loading can add trusted project config when Pi marks the project trusted. `/obs status` reports the effective config source, whether project-local `.pi/observme.yaml` was loaded, skipped because the project is untrusted, or missing, plus the configured Grafana URL and query-readiness status without rendering tokens or passwords. In untrusted projects, ObservMe does not read project-local config and uses safe defaults/global/environment layers instead.
+Factory-safe loading uses defaults/global/system-environment/runtime options only. Session-scoped loading can add trusted project config and a project-local `.env` when Pi marks the project trusted. `/obs status` reports the effective config source, whether project-local `.pi/observme.yaml` was loaded, skipped because the project is untrusted, or missing, plus the configured Grafana URL and query-readiness status without rendering tokens or passwords. In untrusted projects, ObservMe does not read project-local config or `.env` files and uses safe defaults/global/system-environment layers instead.
 
 Default capture policy:
 
@@ -206,7 +206,7 @@ query:
       preferIPv4: true
 ```
 
-Create a Grafana service-account token in Grafana (Administration → Users and access → Service accounts → Add service account/token; Viewer is enough for read-only datasource queries) and export it as `OBSERVME_GRAFANA_TOKEN`, or for local-only Basic auth export `OBSERVME_GRAFANA_PASSWORD="$(cat observability-stack/secrets/grafana_admin_password)"`. If you prefer a project-local env file, run `cp .env.example .env`, fill either `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_PASSWORD`, then restart Pi from that project. The local Collector and Loki profile uses `service.name=observme-pi-extension`; Loki queries use normalized labels such as `service_name`, `pi_session_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, run `/obs health` and check the Pi process environment, Grafana auth, datasource UIDs, TLS, and DNS details.
+Create a Grafana service-account token in Grafana (Administration → Users and access → Service accounts → Add service account/token; Viewer is enough for read-only datasource queries) and export it as `OBSERVME_GRAFANA_TOKEN`, or for local-only Basic auth export `OBSERVME_GRAFANA_PASSWORD="$(cat observability-stack/secrets/grafana_admin_password)"`. If you prefer a project-local env file, run `cp .env.example .env`, fill either `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_PASSWORD`, then restart Pi from that project. The local Collector and Loki profile uses `service.name=observme-pi-extension`; Loki queries use normalized labels such as `service_name`, `pi_session_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, run `/obs health` and check extension env loading, Grafana auth, datasource UIDs, TLS, and DNS details.
 
 Full configuration schema: `ObservMe-Production-Docs/12-configuration-reference.md`. Full redaction/privacy design: `ObservMe-Production-Docs/06-security-privacy-redaction.md`.
 

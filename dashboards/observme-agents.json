@@ -104,7 +104,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_agent_runs_total[5m])) by (agent_role)",
+          "expr": "sum(rate(observme_agent_runs_total[$__rate_interval])) by (agent_role)",
           "range": true,
           "refId": "A",
           "legendFormat": "{{agent_role}}"
@@ -164,7 +164,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_subagents_spawned_total[5m])) by (subagent_depth, spawn_type, spawn_reason)",
+          "expr": "sum(rate(observme_subagents_spawned_total[$__rate_interval])) by (subagent_depth, spawn_type, spawn_reason)",
           "range": true,
           "refId": "A",
           "legendFormat": "depth {{subagent_depth}} / {{spawn_type}} / {{spawn_reason}}"
@@ -224,7 +224,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_subagent_spawn_failures_total[5m])) by (subagent_depth, spawn_type, spawn_reason, error_class)",
+          "expr": "sum(rate(observme_subagent_spawn_failures_total[$__rate_interval])) by (subagent_depth, spawn_type, spawn_reason, error_class)",
           "range": true,
           "refId": "A",
           "legendFormat": "depth {{subagent_depth}} / {{spawn_type}} / {{error_class}}"
@@ -284,7 +284,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_run_duration_ms_bucket[5m])) by (agent_role, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_run_duration_ms_bucket[$__rate_interval])) by (agent_role, le))",
           "range": true,
           "refId": "A",
           "legendFormat": "{{agent_role}}"
@@ -344,7 +344,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_subagent_spawn_duration_ms_bucket[5m])) by (agent_role, spawn_type, spawn_reason, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_subagent_spawn_duration_ms_bucket[$__rate_interval])) by (agent_role, spawn_type, spawn_reason, le))",
           "range": true,
           "refId": "A",
           "legendFormat": "{{agent_role}} / {{spawn_type}} / {{spawn_reason}}"
@@ -524,7 +524,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_tree_depth_bucket[5m])) by (subagent_depth, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_tree_depth_bucket[$__rate_interval])) by (subagent_depth, le))",
           "range": true,
           "refId": "A",
           "legendFormat": "depth p95 {{subagent_depth}}"
@@ -535,7 +535,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_tree_width_bucket[5m])) by (subagent_depth, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_tree_width_bucket[$__rate_interval])) by (subagent_depth, le))",
           "range": true,
           "refId": "B",
           "legendFormat": "width p95 {{subagent_depth}}"
@@ -595,7 +595,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket[5m])) by (subagent_depth, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket[$__rate_interval])) by (subagent_depth, le))",
           "range": true,
           "refId": "A",
           "legendFormat": "depth {{subagent_depth}}"
@@ -655,7 +655,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_orphan_agents_total[5m])) by (agent_role, subagent_depth)",
+          "expr": "sum(rate(observme_orphan_agents_total[$__rate_interval])) by (agent_role, subagent_depth)",
           "range": true,
           "refId": "A",
           "legendFormat": "{{agent_role}} depth {{subagent_depth}}"
@@ -715,7 +715,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_trace_context_propagation_failures_total[5m])) by (agent_role, subagent_depth)",
+          "expr": "sum(rate(observme_trace_context_propagation_failures_total[$__rate_interval])) by (agent_role, subagent_depth)",
           "range": true,
           "refId": "A",
           "legendFormat": "{{agent_role}} depth {{subagent_depth}}"
@@ -775,7 +775,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_wait_duration_ms_bucket[5m])) by (agent_role, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_wait_duration_ms_bucket[$__rate_interval])) by (agent_role, le))",
           "range": true,
           "refId": "A",
           "legendFormat": "wait p95 {{agent_role}}"
@@ -786,7 +786,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_join_duration_ms_bucket[5m])) by (agent_role, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_join_duration_ms_bucket[$__rate_interval])) by (agent_role, le))",
           "range": true,
           "refId": "B",
           "legendFormat": "join p95 {{agent_role}}"
@@ -846,7 +846,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_child_agent_failures_total[5m])) by (agent_role, subagent_depth)",
+          "expr": "sum(rate(observme_child_agent_failures_total[$__rate_interval])) by (agent_role, subagent_depth)",
           "range": true,
           "refId": "A",
           "legendFormat": "child failures {{agent_role}} depth {{subagent_depth}}"
@@ -857,7 +857,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_parent_recovered_from_child_failure_total[5m])) by (agent_role, subagent_depth)",
+          "expr": "sum(rate(observme_parent_recovered_from_child_failure_total[$__rate_interval])) by (agent_role, subagent_depth)",
           "range": true,
           "refId": "B",
           "legendFormat": "recovered {{agent_role}} depth {{subagent_depth}}"

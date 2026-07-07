@@ -118,6 +118,7 @@ services:
     volumes:
       - prometheus-data:/prometheus
       - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:rw
+      - ../dashboards/observme-alerts.yaml:/etc/prometheus/rules/observme-alerts.yaml:ro
     depends_on:
       otel-collector:
         condition: service_healthy

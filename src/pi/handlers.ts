@@ -795,6 +795,7 @@ function createAgentEndHandler(getSession: () => ObservMeTelemetrySession | unde
 
     const span = session.spans.activeAgentRuns.get(runId);
     if (workflowFailed(event)) span?.setStatus({ code: SpanStatusCode.ERROR });
+    recordSpanDurationMs(span, session.metrics.agentRunDurationMs, metricLabels(session.config, session.lineage));
     span?.end();
     session.spans.activeAgentRuns.delete(runId);
     if (session.currentAgentRunId === runId) session.currentAgentRunId = undefined;
@@ -835,6 +836,7 @@ function createBeforeProviderRequestHandler(getSession: () => ObservMeTelemetryS
     const attributes = buildLlmRequestAttributes(event, ctx, session, requestId);
     const span = startChildSpan(session.tracer, SPAN_NAMES.PI_LLM_REQUEST, parentSpan, attributes);
 
+    recordPromptSizeMetric(session, event, llmMetricLabels(session, attributes));
     recordOptionalPromptContent(session, span, event);
     session.currentLlmRequestId = requestId;
     session.spans.activeLlmRequests.set(requestId, span);
@@ -872,6 +874,7 @@ function createMessageEndHandler(getSession: () => ObservMeTelemetrySession | un
 
     span?.setAttributes(attributes);
     recordLlmUsageMetrics(session, message, labels);
+    recordLlmSizeMetrics(session, message, labels);
     recordOptionalLlmContent(session, span, message);
 
     if (isLlmError(message)) {
@@ -882,6 +885,7 @@ function createMessageEndHandler(getSession: () => ObservMeTelemetrySession | un
       emitLifecycleLog(session.logger, LOG_EVENT_NAMES.LLM_REQUEST_COMPLETED, attributes);
     }
 
+    recordSpanDurationMs(span, session.metrics.llmRequestDurationMs, labels);
     span?.end();
     deleteCurrentLlmRequest(session, event);
   };
@@ -953,6 +957,7 @@ function createToolExecutionEndHandler(getSession: () => ObservMeTelemetrySessio
       emitLifecycleLog(session.logger, LOG_EVENT_NAMES.TOOL_CALL_COMPLETED, finalAttributes);
     }
 
+    recordSpanDurationMs(state.span, session.metrics.toolDurationMs, state.labels);
     state.span.end();
     deleteCurrentToolCall(session, toolCallId);
   };
@@ -1082,6 +1087,7 @@ function recordBashExecution(session: ObservMeTelemetrySession, event: unknown):
   }
 
   span.addEvent(LOG_EVENT_NAMES.BASH_COMPLETED, attributes);
+  recordSpanDurationMs(span, session.metrics.bashDurationMs, bashExecutionMetricLabels(session, payload, failed));
   span.end();
   emitLifecycleLog(session.logger, LOG_EVENT_NAMES.BASH_COMPLETED, attributes, failed ? "ERROR" : "INFO");
 }
@@ -1101,6 +1107,7 @@ function createTurnEndHandler(getSession: () => ObservMeTelemetrySession | undef
     const span = session.spans.activeTurns.get(turnId);
 
     if (workflowFailed(event)) span?.setStatus({ code: SpanStatusCode.ERROR });
+    recordSpanDurationMs(span, session.metrics.turnDurationMs, metricLabels(session.config, session.lineage));
     span?.end();
     session.spans.activeTurns.delete(turnId);
     if (session.currentTurnId === turnId) session.currentTurnId = undefined;
@@ -1547,6 +1554,21 @@ function recordLlmUsageMetrics(
   recordObsSessionCost(totalCostUsd);
 }
 
+function recordLlmSizeMetrics(
+  session: ObservMeTelemetrySession,
+  message: Record<string, unknown>,
+  labels: Record<string, string>,
+): void {
+  const responseText = extractAssistantText(message);
+  if (responseText) session.metrics.responseSizeChars.record(responseText.length, labels);
+}
+
+function recordPromptSizeMetric(session: ObservMeTelemetrySession, event: unknown, labels: Record<string, string>): void {
+  const payload = readUnknown(event, "payload");
+  const promptText = extractPayloadPromptText(payload);
+  if (promptText) session.metrics.promptSizeChars.record(promptText.length, labels);
+}
+
 function recordOptionalPromptContent(session: ObservMeTelemetrySession, span: Span, event: unknown): void {
   if (!session.config.capture.prompts) return;
 
@@ -1708,9 +1730,23 @@ function readSpanTraceId(span: Span | undefined): string | undefined {
   return typeof traceId === "string" ? traceId : undefined;
 }
 
+const spanStartTimesMs = new WeakMap<Span, number>();
+
 function startChildSpan(tracer: Tracer, name: string, parent: Span | undefined, attributes: AttributeMap): Span {
   const parentContext = parent ? trace.setSpan(otelContext.active(), parent) : otelContext.active();
-  return tracer.startSpan(name, { attributes }, parentContext);
+  const span = tracer.startSpan(name, { attributes }, parentContext);
+  spanStartTimesMs.set(span, Date.now());
+  return span;
+}
+
+function recordSpanDurationMs(span: Span | undefined, histogram: Histogram, labels: Record<string, string>): void {
+  if (!span) return;
+
+  const startTimeMs = spanStartTimesMs.get(span);
+  if (startTimeMs === undefined) return;
+
+  histogram.record(Math.max(0, Date.now() - startTimeMs), labels);
+  spanStartTimesMs.delete(span);
 }
 
 function evictSpan(span: Span, metrics: ObservMeMetrics): void {

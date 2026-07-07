@@ -33,6 +33,14 @@ compactor:
   retention_enabled: true
   delete_request_store: filesystem
 
+ruler:
+  enable_api: true
+  rule_path: /var/loki/rules-temp
+  storage:
+    type: local
+    local:
+      directory: /var/loki/rules
+
 # Retention is configured via limits_config.retention_period.
 limits_config:
   retention_period: 168h

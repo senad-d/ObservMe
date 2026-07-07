@@ -12,6 +12,7 @@ const dashboardFiles = [
   "dashboards/observme-errors.json",
   "dashboards/observme-branches-compactions.json",
   "dashboards/observme-export-health.json",
+  "dashboards/observme-logs-llm.json",
 ];
 const agentDashboardFile = "dashboards/observme-agents.json";
 const localCollectorConfigFile = "observability-stack/config/otel/otel-collector.yaml";

@@ -33,6 +33,7 @@ const dashboardFiles = [
   "dashboards/observme-errors.json",
   "dashboards/observme-branches-compactions.json",
   "dashboards/observme-export-health.json",
+  "dashboards/observme-logs-llm.json",
 ];
 const grafanaServicePort = 3000;
 const serviceName = "observme-pi-extension";
