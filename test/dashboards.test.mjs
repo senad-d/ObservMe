@@ -9,8 +9,12 @@ const dashboardFiles = [
   "dashboards/observme-tools.json",
   "dashboards/observme-agents.json",
   "dashboards/observme-models.json",
+  "dashboards/observme-errors.json",
+  "dashboards/observme-branches-compactions.json",
+  "dashboards/observme-export-health.json",
 ];
 const agentDashboardFile = "dashboards/observme-agents.json";
+const lokiAttributePattern = /\b(?:event\.name|event\.category|pi\.session\.id|pi\.workflow\.id|pi\.agent\.id)\b/u;
 const metricNamePattern = /\bobservme_[a-z0-9_]+(?:_(?:bucket|sum|count))?\b/gu;
 const forbiddenAgentMetricLabelPattern =
   /\b(?:session_id|workflow_id|workflow_root_agent_id|agent_id|parent_agent_id|child_agent_id|agent_run_id|spawn_id|spawn_tool_call_id|trace_id|span_id|pi_workflow_id|pi_workflow_root_agent_id|pi_agent_id|pi_agent_parent_id|pi_agent_root_id|pi_agent_spawn_id)\b/u;
@@ -83,12 +87,20 @@ function expressionsForDashboard(dashboard) {
 }
 
 function prometheusTargetsForDashboard(dashboard) {
+  return targetsForDashboard(dashboard, "prometheus");
+}
+
+function lokiTargetsForDashboard(dashboard) {
+  return targetsForDashboard(dashboard, "loki");
+}
+
+function targetsForDashboard(dashboard, type) {
   const targets = [];
 
   for (const panel of dashboard.panels) {
     for (const target of panel.targets) {
       const datasourceType = target.datasource?.type ?? panel.datasource?.type;
-      if (datasourceType === "prometheus") targets.push({ panel, target });
+      if (datasourceType === type) targets.push({ panel, target });
     }
   }
 
@@ -157,9 +169,21 @@ async function agentDashboardPrometheusTargetsAvoidHighCardinalityLabels() {
   }
 }
 
+async function lokiDashboardTargetsUseNormalizedAttributeNames() {
+  for (const path of dashboardFiles) {
+    const dashboard = await readJsonFile(path);
+    const targets = lokiTargetsForDashboard(dashboard);
+
+    for (const { panel, target } of targets) {
+      assert.doesNotMatch(target.expr, lokiAttributePattern, `${path}: ${panel.title} uses dotted OTEL attributes in Loki`);
+    }
+  }
+}
+
 test("dashboard JSON files are valid Grafana dashboard documents", dashboardFilesAreValidGrafanaDashboards);
 test("dashboard PromQL queries only use documented ObservMe metric names", dashboardPromqlQueriesUseDocumentedMetrics);
 test(
   "agent dashboard Prometheus targets avoid high-cardinality workflow and agent labels",
   agentDashboardPrometheusTargetsAvoidHighCardinalityLabels,
 );
+test("dashboard Loki targets use normalized OTLP attribute names", lokiDashboardTargetsUseNormalizedAttributeNames);

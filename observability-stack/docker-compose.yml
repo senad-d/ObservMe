@@ -58,7 +58,7 @@ services:
       - grafana-data:/var/lib/grafana
       - ./config/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
       - ./config/grafana/provisioning/dashboards/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
-      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:rw
+      - ../dashboards:/var/lib/grafana/dashboards:ro
     secrets:
       - grafana_admin_password
     expose:

@@ -3,7 +3,7 @@ services:
     environment:
       GF_LOG_LEVEL: debug
     volumes:
-      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:rw
+      - ../dashboards:/var/lib/grafana/dashboards:ro
 
   otel-collector:
     volumes:

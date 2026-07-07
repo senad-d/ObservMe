@@ -987,7 +987,7 @@ Create valid Grafana dashboard JSON, copy only documented query patterns, and ex
 
 ### 43. Build errors, branches/compactions, and export-health dashboards
 
-- [ ] Create `dashboards/observme-errors.json`, `dashboards/observme-branches-compactions.json`, and `dashboards/observme-export-health.json` per `09-dashboards-alerts-slos.md` §7–9.
+- [x] Create `dashboards/observme-errors.json`, `dashboards/observme-branches-compactions.json`, and `dashboards/observme-export-health.json` per `09-dashboards-alerts-slos.md` §7–9.
 
 #### Why
 
@@ -1009,7 +1009,7 @@ Create valid Grafana dashboard JSON, use documented PromQL/LogQL, and normalize 
 
 ### 44. Define alert rules
 
-- [ ] Create an alert-rules artifact (e.g. `dashboards/observme-alerts.yaml` or an equivalent Prometheus/Grafana alerting-rule file) implementing every alert from `09-dashboards-alerts-slos.md` §11, including high LLM error rate, high tool failure rate, subagent spawn failures, export drops detected, cost spike, redaction failures, runaway fan-out, excessive tree depth, orphan agents, trace-context propagation failures, and active agents stuck high.
+- [x] Create an alert-rules artifact (e.g. `dashboards/observme-alerts.yaml` or an equivalent Prometheus/Grafana alerting-rule file) implementing every alert from `09-dashboards-alerts-slos.md` §11, including high LLM error rate, high tool failure rate, subagent spawn failures, export drops detected, cost spike, redaction failures, runaway fan-out, excessive tree depth, orphan agents, trace-context propagation failures, and active agents stuck high.
 
 #### Why
 
@@ -1031,7 +1031,7 @@ Create the alert artifact with every documented expression and severity, referen
 
 ### 45. Define SLO indicators
 
-- [ ] Create an SLO-definitions artifact implementing every SLO from `09-dashboards-alerts-slos.md` §12: observability export SLO, workflow/agent lineage SLO, workflow completion SLO, instrumentation overhead SLO, redaction SLO.
+- [x] Create an SLO-definitions artifact implementing every SLO from `09-dashboards-alerts-slos.md` §12: observability export SLO, workflow/agent lineage SLO, workflow completion SLO, instrumentation overhead SLO, redaction SLO.
 
 #### Why
 
@@ -1053,7 +1053,7 @@ Document each SLO indicator with PromQL where applicable, identify measurement s
 
 ### 46. Add example config files
 
-- [ ] Create `examples/observme.yaml` and `examples/collector.yaml` per `05-otel-pipeline-and-collector.md` §5–6, including the production Collector config with high-cardinality attribute drop processors.
+- [x] Create `examples/observme.yaml` and `examples/collector.yaml` per `05-otel-pipeline-and-collector.md` §5–6, including the production Collector config with high-cardinality attribute drop processors.
 
 #### Why
 
@@ -1075,7 +1075,7 @@ Copy the production reference settings into example YAML, include high-cardinali
 
 ### 47. Add compatibility matrix document
 
-- [ ] Create a compatibility-matrix document tracking tested versions of Pi, Node.js, the OpenTelemetry JS package set, Collector distribution, Tempo, Loki, Prometheus/Mimir, and Grafana per `10-testing-release-operations.md` §11.
+- [x] Create a compatibility-matrix document tracking tested versions of Pi, Node.js, the OpenTelemetry JS package set, Collector distribution, Tempo, Loki, Prometheus/Mimir, and Grafana per `10-testing-release-operations.md` §11.
 
 #### Why
 
@@ -1096,7 +1096,7 @@ Create the document, populate it with versions tested in CI/local validation, an
 
 ### 48. Add Collector integration tests
 
-- [ ] Add integration tests that run a local debug-exporter Collector (per `10-testing-release-operations.md` §5) and assert traces/metrics/logs arrive with expected attributes and that content-capture defaults are respected.
+- [x] Add integration tests that run a local debug-exporter Collector (per `10-testing-release-operations.md` §5) and assert traces/metrics/logs arrive with expected attributes and that content-capture defaults are respected.
 
 #### Why
 
@@ -1118,7 +1118,7 @@ Start a local debug-exporter Collector, run representative telemetry through Obs
 
 ### 49. Add Grafana-stack integration tests
 
-- [ ] Add integration tests using the existing `observability-stack/` Docker Compose setup per `10-testing-release-operations.md` §6: Tempo trace query by trace id, Tempo/Loki query by `pi.agent.id`/`pi.agent.parent_id` for lineage, Loki log query by session id, Prometheus metric query for token totals, Grafana dashboard import validation.
+- [x] Add integration tests using the existing `observability-stack/` Docker Compose setup per `10-testing-release-operations.md` §6: Tempo trace query by trace id, Tempo/Loki query by `pi.agent.id`/`pi.agent.parent_id` for lineage, Loki log query by session id, Prometheus metric query for token totals, Grafana dashboard import validation.
 
 #### Why
 

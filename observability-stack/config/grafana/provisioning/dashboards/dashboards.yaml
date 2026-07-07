@@ -1,1 +1,12 @@
-## ADD HERE
+apiVersion: 1
+
+providers:
+  - name: ObservMe
+    orgId: 1
+    folder: ObservMe
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

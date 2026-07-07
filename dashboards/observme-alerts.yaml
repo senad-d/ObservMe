@@ -1,0 +1,113 @@
+groups:
+  - name: observme.alerts
+    rules:
+      - alert: ObservMeHighLlmErrorRate
+        expr: >-
+          sum(rate(observme_llm_errors_total[10m])) / clamp_min(sum(rate(observme_llm_requests_total[10m])), 1e-9) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: High LLM error rate
+          description: More than 5% of ObservMe LLM requests are failing over 10 minutes.
+          runbook: Severity guidance from production docs: warning.
+      - alert: ObservMeHighToolFailureRate
+        expr: >-
+          sum(rate(observme_tool_failures_total[10m])) by (tool_name) / clamp_min(sum(rate(observme_tool_calls_total[10m])) by (tool_name), 1e-9) > 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: High tool failure rate
+          description: More than 10% of ObservMe tool calls are failing for one tool_name over 10 minutes.
+          runbook: Severity guidance from production docs: warning.
+      - alert: ObservMeSubagentSpawnFailures
+        expr: >-
+          sum(rate(observme_subagent_spawn_failures_total[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Subagent spawn failures detected
+          description: At least one ObservMe subagent spawn failure occurred in the last 10 minutes.
+          runbook: Severity guidance from production docs: warning.
+      - alert: ObservMeExportDropsDetected
+        expr: >-
+          sum(rate(observme_telemetry_dropped_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Export drops detected
+          description: ObservMe is locally dropping telemetry before export.
+          runbook: Severity guidance from production docs: warning.
+      - alert: ObservMeCostSpike
+        expr: >-
+          sum(increase(observme_llm_cost_usd_total[1h])) > 50
+        for: 15m
+        labels:
+          severity: budget-dependent
+        annotations:
+          summary: LLM cost spike
+          description: ObservMe LLM spend increased by more than 50 USD in one hour.
+          runbook: Severity guidance from production docs: depends on organization budget.
+      - alert: ObservMeRedactionFailures
+        expr: >-
+          sum(rate(observme_redaction_failures_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Redaction failures detected
+          description: ObservMe redaction failures occurred; treat as critical when content capture is enabled.
+          runbook: Severity guidance from production docs: critical if content capture is enabled.
+      - alert: ObservMeRunawayAgentFanOut
+        expr: >-
+          histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket[10m])) by (le)) > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Runaway agent fan-out
+          description: p95 ObservMe agent fan-out exceeded 20 over 10 minutes.
+          runbook: Severity guidance from production docs: warning; tune the threshold to the organization's normal orchestrator workload.
+      - alert: ObservMeExcessiveAgentTreeDepth
+        expr: >-
+          histogram_quantile(0.95, sum(rate(observme_agent_tree_depth_bucket[10m])) by (le)) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Excessive agent tree depth
+          description: p95 ObservMe agent tree depth exceeded 5 over 10 minutes.
+          runbook: Severity guidance from production docs: warning; tune the threshold to expected maximum delegation depth.
+      - alert: ObservMeOrphanAgentsDetected
+        expr: >-
+          sum(rate(observme_orphan_agents_total[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Orphan agents detected
+          description: ObservMe detected agent runtimes without usable parent lineage.
+          runbook: Severity guidance from production docs: warning.
+      - alert: ObservMeTraceContextPropagationFailures
+        expr: >-
+          sum(rate(observme_trace_context_propagation_failures_total[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Trace-context propagation failures
+          description: ObservMe failed to propagate or recover trace context for subagent work.
+          runbook: Severity guidance from production docs: warning.
+      - alert: ObservMeActiveAgentsStuckHigh
+        expr: >-
+          sum(observme_active_agents) > 100
+        for: 30m
+        labels:
+          severity: deployment-dependent
+        annotations:
+          summary: Active agents stuck high
+          description: ObservMe active-agent gauge remains above 100.
+          runbook: Severity guidance from production docs: depends on normal fleet size; tune per deployment.

@@ -1,7 +1,6 @@
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133
-    path: /healthz
 
 receivers:
   otlp:
@@ -13,9 +12,15 @@ receivers:
 
 processors:
   memory_limiter:
-    check_interval: 5s
-    limit_mib: 256
-    spike_limit_mib: 64
+    check_interval: 1s
+    limit_mib: 1024
+    spike_limit_mib: 256
+
+  batch:
+    timeout: 2s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
   resource/observme:
     attributes:
       - key: telemetry.source
@@ -24,6 +29,7 @@ processors:
       - key: service.namespace
         value: pi
         action: upsert
+
   resource/drop_high_cardinality_metric_attrs:
     attributes:
       - key: pi.workflow.id
@@ -46,6 +52,7 @@ processors:
         action: delete
       - key: pi.session.id
         action: delete
+
   attributes/drop_content_attributes:
     actions:
       - key: gen_ai.input.messages
@@ -62,43 +69,48 @@ processors:
         action: delete
       - key: pi.tool.result.redacted
         action: delete
-  attributes/loki_query_hints:
-    actions:
-      - key: loki.attribute.labels
-        value: event.name,pi.session.id,pi.agent.id,pi.agent.parent_id
-        action: insert
-  resource/loki_query_hints:
-    attributes:
-      - key: loki.resource.labels
-        value: service.name
-        action: insert
-  batch:
-    timeout: 5s
-    send_batch_size: 8192
 
 exporters:
-  prometheus:
-    endpoint: 0.0.0.0:8889
-    metric_expiration: 60m
-  loki:
-    endpoint: http://loki:3100/loki/api/v1/push
   otlp/tempo:
     endpoint: tempo:4317
     tls:
       insecure: true
+    sending_queue:
+      enabled: true
+    retry_on_failure:
+      enabled: true
+
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    sending_queue:
+      enabled: true
+    retry_on_failure:
+      enabled: true
+
+  prometheusremotewrite/mimir:
+    endpoint: http://mimir:9009/api/v1/push
+    sending_queue:
+      enabled: true
+    retry_on_failure:
+      enabled: true
+
+  debug:
+    verbosity: basic
 
 service:
   extensions: [health_check]
   pipelines:
-    metrics:
-      receivers: [otlp]
-      processors: [memory_limiter, resource/observme, resource/drop_high_cardinality_metric_attrs, batch]
-      exporters: [prometheus]
-    logs:
-      receivers: [otlp]
-      processors: [memory_limiter, resource/observme, resource/loki_query_hints, attributes/drop_content_attributes, attributes/loki_query_hints, batch]
-      exporters: [loki]
     traces:
       receivers: [otlp]
       processors: [memory_limiter, resource/observme, attributes/drop_content_attributes, batch]
       exporters: [otlp/tempo]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/observme, resource/drop_high_cardinality_metric_attrs, batch]
+      exporters: [prometheusremotewrite/mimir]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/observme, attributes/drop_content_attributes, batch]
+      exporters: [otlphttp/loki]

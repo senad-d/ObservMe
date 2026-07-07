@@ -1,0 +1,56 @@
+version: 1
+source: ObservMe-Production-Docs/09-dashboards-alerts-slos.md#12-slos
+slos:
+  - id: observability-export
+    name: Observability Export SLO
+    objective: 99% of observed telemetry events are not locally dropped over 30 days.
+    target: ">= 0.99"
+    window: 30d
+    measurement_source: Prometheus metrics emitted by ObservMe.
+    indicator:
+      type: promql
+      expr: >-
+        1 - (sum(rate(observme_telemetry_dropped_total[30d])) / clamp_min(sum(rate(observme_events_observed_total[30d])), 1e-9))
+  - id: agent-lineage
+    name: Agent Lineage SLO
+    objective: 99% of known subagent spawns produce either propagated trace context or parent/child lineage attributes.
+    target: ">= 0.99"
+    window: 30d
+    measurement_source: Prometheus metrics emitted by ObservMe lineage and subagent instrumentation.
+    indicator:
+      type: promql
+      expr: >-
+        1 - ((sum(rate(observme_subagent_spawn_failures_total{reason="lineage_missing"}[30d])) + sum(rate(observme_orphan_agents_total[30d])) + sum(rate(observme_trace_context_propagation_failures_total[30d]))) / clamp_min(sum(rate(observme_subagents_spawned_total[30d])), 1e-9))
+  - id: workflow-completion
+    name: Workflow Completion SLO
+    objective: 99% of started workflows complete or explicitly fail with terminal telemetry over 30 days.
+    target: ">= 0.99"
+    window: 30d
+    measurement_source: Prometheus workflow lifecycle counters emitted by ObservMe.
+    indicator:
+      type: promql
+      expr: >-
+        (sum(rate(observme_workflows_completed_total[30d])) + sum(rate(observme_workflow_errors_total[30d]))) / clamp_min(sum(rate(observme_workflows_started_total[30d])), 1e-9)
+  - id: instrumentation-overhead
+    name: Instrumentation Overhead SLO
+    objective: 99% of event handlers complete in under 10ms.
+    target: "99% < 10ms"
+    window: 30d
+    measurement_source: Prometheus histogram metric observme_handler_duration_ms emitted by ObservMe handlers.
+    indicator:
+      type: metric
+      metric: observme_handler_duration_ms
+      threshold_ms: 10
+      percentile: 0.99
+      suggested_promql: >-
+        histogram_quantile(0.99, sum(rate(observme_handler_duration_ms_bucket[30d])) by (le)) < 10
+  - id: redaction
+    name: Redaction SLO
+    objective: 100% of configured secret test patterns are redacted in CI.
+    target: "100%"
+    measurement_source: CI redaction test corpus for configured secret patterns.
+    indicator:
+      type: ci_test
+      ci_test_time: true
+      runtime_only: false
+      description: This is a test SLO, not runtime-only.

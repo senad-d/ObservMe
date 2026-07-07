@@ -43,6 +43,8 @@
     "lint:eslint": "eslint . --max-warnings=0",
     "format:check": "node scripts/check-format.mjs",
     "test": "node --test test/*.test.mjs",
+    "test:integration:collector": "node --test test/integration/collector-debug.test.mjs",
+    "test:integration:grafana-stack": "node --test test/integration/grafana-stack.test.mjs",
     "test:coverage": "node scripts/test-coverage.mjs",
     "test:tui-artifacts": "node scripts/generate-tui-artifacts.mjs",
     "smoke:discover": "node scripts/smoke-observability.mjs",

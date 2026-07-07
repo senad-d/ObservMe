@@ -53,4 +53,11 @@
 - Removed the remaining template command/tool scaffolding, renamed the extension factory to `observme`, and removed package `_template` metadata now that real ObservMe registration is in place.
 - Added the initial Grafana dashboard pack for ObservMe overview, cost, and latency views with PromQL validation against documented semantic-convention metric names.
 - Added Grafana dashboards for tool reliability, agent/subagent lineage health, and model usage with documented PromQL/LogQL plus safe agent metric labels.
+- Added Grafana dashboards for errors, branch/compaction behavior, and export health with documented PromQL/LogQL and normalized Loki attribute names.
+- Added Prometheus-compatible ObservMe alert rules for the documented LLM, tool, subagent, export, cost, redaction, agent-tree, orphan, trace-context, and active-agent failure modes.
+- Added ObservMe SLO definitions for export health, agent lineage, workflow completion, instrumentation overhead, and CI/test-time redaction coverage.
+- Added example ObservMe and production Collector YAML configs, including high-cardinality metric-attribute drops and content-attribute drops for the Grafana stack.
+- Added the ObservMe compatibility matrix documenting tested Pi, Node.js, and OpenTelemetry package versions plus the pinned Grafana-stack component versions awaiting integration validation.
+- Added Collector debug-exporter integration tests with a local Docker Collector config, asserting ObservMe traces, metrics, logs, required attributes, and default-disabled content capture behavior.
+- Added Grafana-stack integration tests using `observability-stack/`, including Tempo trace/lineage queries, Loki session-log queries, Prometheus token-total queries, and Grafana dashboard provisioning validation.
 - Complete ObservMe command behavior and full event coverage are not implemented yet; see `specs/spec-tasks.md` for the planned implementation sequence.
