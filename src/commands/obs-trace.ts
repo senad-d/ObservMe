@@ -1,0 +1,370 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { LoadSessionConfigOptions } from "../config/load-config.ts";
+import { loadSessionConfig } from "../config/load-config.ts";
+import type { ObservMeConfig } from "../config/schema.ts";
+import { createGrafanaQueryClient, type GrafanaFetch } from "../query/grafana.ts";
+import type { TimeRange, TraceSummary } from "../query/tempo.ts";
+import { searchTempo } from "../query/tempo.ts";
+import { COMMON_SPAN_ATTRIBUTES } from "../semconv/attributes.ts";
+import type { ObsSessionSnapshot } from "./obs-session.ts";
+import { getLocalObsSessionSnapshot } from "./obs-session.ts";
+
+export interface ObsTraceCommandContext {
+  readonly cwd?: string;
+  readonly ui: {
+    notify: (message: string, type?: "info" | "warning" | "error") => Promise<void> | void;
+  };
+  readonly isProjectTrusted?: () => boolean | Promise<boolean>;
+}
+
+export type ObsTraceScope = "current-session" | "last-turn" | "session";
+export type ObsTraceSource = "runtime" | "tempo";
+export type ObsTraceConfigLoader = (options: LoadSessionConfigOptions) => Promise<ObservMeConfig>;
+export type ObsTraceSessionSnapshot = Pick<ObsSessionSnapshot, "sessionId" | "traceId" | "turns">;
+export type ObsTraceSessionProvider = (
+  ctx: ObsTraceCommandContext,
+) => Promise<ObsTraceSessionSnapshot> | ObsTraceSessionSnapshot;
+export type ObsTraceSessionTraceResolver = (
+  sessionId: string,
+  ctx: ObsTraceCommandContext,
+  config: ObservMeConfig,
+) => Promise<string | undefined> | string | undefined;
+export type ObsTraceProvider = (
+  ctx: ObsTraceCommandContext,
+  request: ObsTraceRequest,
+) => Promise<ObsTraceSnapshot> | ObsTraceSnapshot;
+
+export interface ObsTraceRequest {
+  readonly scope: ObsTraceScope;
+  readonly sessionId?: string;
+}
+
+export interface ObsTraceSnapshot {
+  readonly scope: ObsTraceScope;
+  readonly source: ObsTraceSource;
+  readonly traceId: string;
+  readonly traceLink: string;
+  readonly sessionId?: string;
+}
+
+export interface ObsTraceSnapshotOptions {
+  readonly loadConfig?: ObsTraceConfigLoader;
+  readonly fetch?: GrafanaFetch;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly configDirName?: string;
+  readonly getSession?: ObsTraceSessionProvider;
+  readonly resolveSessionTraceId?: ObsTraceSessionTraceResolver;
+  readonly searchRangeHours?: number;
+  readonly now?: () => Date;
+}
+
+export interface RegisterObsTraceCommandOptions extends ObsTraceSnapshotOptions {
+  readonly getTrace?: ObsTraceProvider;
+}
+
+interface ObsTraceTarget {
+  readonly scope: ObsTraceScope;
+  readonly source: ObsTraceSource;
+  readonly traceId: string;
+  readonly sessionId?: string;
+}
+
+const OBS_COMMAND_NAME = "obs";
+const OBS_TRACE_SUBCOMMAND = "trace";
+const OBS_TRACE_USAGE = "Usage: /obs trace [--last-turn|--session <session-id>]";
+const DEFAULT_TRACE_SEARCH_RANGE_HOURS = 24;
+const millisecondsPerHour = 60 * 60 * 1000;
+const safeSessionIdPattern = /^[A-Za-z0-9._:-]{1,256}$/u;
+const sensitiveSessionIdValuePatterns = [
+  /(?:^|\b)(?:prompt|system prompt|user prompt|assistant response|thinking|raw content)(?:\b|:)/iu,
+  /(?:^|\s)(?:sudo|rm|mv|cp|curl|wget|npm|pnpm|yarn|node|python3?|bash|sh|git)\s+\S+/iu,
+  /(?:^|[\s=:])(?:~|\.{1,2}\/|\/|[A-Za-z]:\\|\\\\)\S*/u,
+  /\b[A-Z][A-Z0-9_]{2,}=[^\s]+/u,
+] as const;
+const defaultObsTraceRequest = { scope: "current-session" } as const satisfies ObsTraceRequest;
+
+export function registerObsTraceCommand(pi: ExtensionAPI, options: RegisterObsTraceCommandOptions = {}): void {
+  const command = new ObsTraceCommand(options);
+
+  pi.registerCommand(OBS_COMMAND_NAME, {
+    description: "Show an ObservMe Grafana trace link. Usage: /obs trace [--last-turn|--session <session-id>]",
+    getArgumentCompletions: getObsTraceCommandArgumentCompletions,
+    handler: command.handle.bind(command),
+  });
+}
+
+export async function handleObsTraceCommand(
+  args: string,
+  ctx: ObsTraceCommandContext,
+  options: RegisterObsTraceCommandOptions = {},
+): Promise<void> {
+  const request = parseObsTraceRequestForSubcommand(args, OBS_TRACE_SUBCOMMAND);
+
+  if (!request) {
+    await notifyTrace(ctx, OBS_TRACE_USAGE, "warning");
+    return;
+  }
+
+  try {
+    const snapshot = await resolveObsTraceSnapshot(ctx, request, options);
+    await notifyTrace(ctx, renderObsTrace(snapshot), "info");
+  } catch (error) {
+    await notifyTrace(ctx, `ObservMe trace unavailable: ${formatError(error)}`, "error");
+  }
+}
+
+export function getObsTraceCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
+  const normalizedPrefix = prefix.trim().toLowerCase();
+  if (!OBS_TRACE_SUBCOMMAND.startsWith(normalizedPrefix)) return null;
+  return [{ value: OBS_TRACE_SUBCOMMAND, label: OBS_TRACE_SUBCOMMAND }];
+}
+
+export async function getObsTraceSnapshot(
+  ctx: ObsTraceCommandContext,
+  request: ObsTraceRequest = defaultObsTraceRequest,
+  options: ObsTraceSnapshotOptions = {},
+): Promise<ObsTraceSnapshot> {
+  const config = await loadObsTraceConfig(ctx, options);
+  const target = await resolveObsTraceTarget(ctx, request, config, options);
+  const client = createGrafanaQueryClient(config, { fetch: options.fetch });
+  const traceLink = client.getTraceLink(target.traceId);
+
+  return { ...target, traceLink };
+}
+
+export async function resolveObsTraceSnapshot(
+  ctx: ObsTraceCommandContext,
+  request: ObsTraceRequest,
+  options: RegisterObsTraceCommandOptions,
+): Promise<ObsTraceSnapshot> {
+  if (options.getTrace) return options.getTrace(ctx, request);
+  return getObsTraceSnapshot(ctx, request, options);
+}
+
+export function renderObsTrace(snapshot: ObsTraceSnapshot): string {
+  return renderObsTraceWithTitle(snapshot, "Trace link");
+}
+
+export function renderObsTraceWithTitle(snapshot: ObsTraceSnapshot, title: string): string {
+  const lines = [`${title} (${formatObsTraceScope(snapshot.scope)})`];
+  const sessionId = normalizeOptionalString(snapshot.sessionId);
+
+  if (sessionId) lines.push(`Session: ${sessionId}`);
+  lines.push(`Trace: ${snapshot.traceId}`);
+  lines.push(`Open trace: ${snapshot.traceLink}`);
+  return lines.join("\n");
+}
+
+export function parseObsTraceRequestForSubcommand(args: string, subcommand: string): ObsTraceRequest | undefined {
+  const tokens = tokenizeObsTraceArgs(args);
+  const [rawSubcommand, ...optionTokens] = tokens;
+
+  if (rawSubcommand?.toLowerCase() !== subcommand) return undefined;
+  return parseObsTraceOptions(optionTokens);
+}
+
+class ObsTraceCommand {
+  readonly #options: RegisterObsTraceCommandOptions;
+
+  constructor(options: RegisterObsTraceCommandOptions) {
+    this.#options = options;
+  }
+
+  async handle(args: string, ctx: ObsTraceCommandContext): Promise<void> {
+    await handleObsTraceCommand(args, ctx, this.#options);
+  }
+}
+
+async function loadObsTraceConfig(
+  ctx: ObsTraceCommandContext,
+  options: ObsTraceSnapshotOptions,
+): Promise<ObservMeConfig> {
+  const loadConfig = options.loadConfig ?? loadSessionConfig;
+  return loadConfig({ ctx, cwd: ctx.cwd, configDirName: options.configDirName, env: options.env });
+}
+
+async function resolveObsTraceTarget(
+  ctx: ObsTraceCommandContext,
+  request: ObsTraceRequest,
+  config: ObservMeConfig,
+  options: ObsTraceSnapshotOptions,
+): Promise<ObsTraceTarget> {
+  const session = await resolveObsTraceSession(ctx, options);
+
+  if (request.scope === "current-session") return resolveCurrentSessionTraceTarget(session);
+  if (request.scope === "last-turn") return resolveLastTurnTraceTarget(session);
+  return resolveRequestedSessionTraceTarget(ctx, request, session, config, options);
+}
+
+async function resolveObsTraceSession(
+  ctx: ObsTraceCommandContext,
+  options: ObsTraceSnapshotOptions,
+): Promise<ObsTraceSessionSnapshot> {
+  if (options.getSession) return options.getSession(ctx);
+  return getLocalObsSessionSnapshot();
+}
+
+function resolveCurrentSessionTraceTarget(session: ObsTraceSessionSnapshot): ObsTraceTarget {
+  const traceId = normalizeOptionalString(session.traceId);
+  if (!traceId) throw new Error("No current ObservMe session trace is available.");
+
+  return {
+    scope: "current-session",
+    source: "runtime",
+    sessionId: normalizeOptionalString(session.sessionId),
+    traceId,
+  };
+}
+
+function resolveLastTurnTraceTarget(session: ObsTraceSessionSnapshot): ObsTraceTarget {
+  const traceId = normalizeOptionalString(session.traceId);
+
+  if (normalizeTurnCount(session.turns) < 1) throw new Error("No last-turn ObservMe trace is available yet.");
+  if (!traceId) throw new Error("No last-turn ObservMe trace is available yet.");
+
+  return {
+    scope: "last-turn",
+    source: "runtime",
+    sessionId: normalizeOptionalString(session.sessionId),
+    traceId,
+  };
+}
+
+async function resolveRequestedSessionTraceTarget(
+  ctx: ObsTraceCommandContext,
+  request: ObsTraceRequest,
+  session: ObsTraceSessionSnapshot,
+  config: ObservMeConfig,
+  options: ObsTraceSnapshotOptions,
+): Promise<ObsTraceTarget> {
+  const sessionId = normalizeObsTraceSessionId(request.sessionId);
+  const localTraceId = resolveLocalTraceIdForSession(sessionId, session);
+
+  if (localTraceId) return { scope: "session", source: "runtime", sessionId, traceId: localTraceId };
+
+  const traceId = await resolveSessionTraceId(sessionId, ctx, config, options);
+  if (!traceId) throw new Error("No trace was found for the requested ObservMe session id.");
+  return { scope: "session", source: "tempo", sessionId, traceId };
+}
+
+async function resolveSessionTraceId(
+  sessionId: string,
+  ctx: ObsTraceCommandContext,
+  config: ObservMeConfig,
+  options: ObsTraceSnapshotOptions,
+): Promise<string | undefined> {
+  if (options.resolveSessionTraceId) return normalizeOptionalString(await options.resolveSessionTraceId(sessionId, ctx, config));
+  return searchSessionTraceId(config, sessionId, options);
+}
+
+async function searchSessionTraceId(
+  config: ObservMeConfig,
+  sessionId: string,
+  options: ObsTraceSnapshotOptions,
+): Promise<string | undefined> {
+  const traces = await searchTempo(
+    config,
+    { [COMMON_SPAN_ATTRIBUTES.PI_SESSION_ID]: sessionId },
+    createObsTraceSearchRange(options),
+    { fetch: options.fetch },
+  );
+
+  return readFirstTraceId(traces);
+}
+
+function readFirstTraceId(traces: readonly TraceSummary[]): string | undefined {
+  return traces.map(trace => normalizeOptionalString(trace.traceId)).find(isString);
+}
+
+function createObsTraceSearchRange(options: ObsTraceSnapshotOptions): TimeRange {
+  const to = options.now?.() ?? new Date();
+  const rangeHours = normalizeSearchRangeHours(options.searchRangeHours);
+  return { from: new Date(to.getTime() - rangeHours * millisecondsPerHour), to };
+}
+
+function normalizeSearchRangeHours(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return DEFAULT_TRACE_SEARCH_RANGE_HOURS;
+  return value;
+}
+
+function resolveLocalTraceIdForSession(sessionId: string, session: ObsTraceSessionSnapshot): string | undefined {
+  const currentSessionId = normalizeOptionalString(session.sessionId);
+  const traceId = normalizeOptionalString(session.traceId);
+
+  if (!currentSessionId || currentSessionId !== sessionId) return undefined;
+  return traceId;
+}
+
+function normalizeObsTraceSessionId(value: string | undefined): string {
+  const sessionId = normalizeOptionalString(value);
+
+  if (!sessionId) throw new Error("Unsafe ObservMe session id: empty values are not query inputs.");
+  if (!safeSessionIdPattern.test(sessionId) || isSensitiveSessionIdValue(sessionId)) {
+    throw new Error(
+      "Unsafe ObservMe session id: only generated session IDs may be used; raw prompts, commands, paths, and environment values are not query inputs.",
+    );
+  }
+
+  return sessionId;
+}
+
+function isSensitiveSessionIdValue(value: string): boolean {
+  return sensitiveSessionIdValuePatterns.some(pattern => pattern.test(value));
+}
+
+function normalizeOptionalString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeTurnCount(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return 0;
+  return Math.trunc(value);
+}
+
+function parseObsTraceOptions(tokens: readonly string[]): ObsTraceRequest | undefined {
+  const [first, second, ...rest] = tokens;
+
+  if (first === undefined) return defaultObsTraceRequest;
+  if (rest.length > 0) return undefined;
+  if (isCurrentSessionToken(first) && second === undefined) return defaultObsTraceRequest;
+  if (first.toLowerCase() === "--last-turn" && second === undefined) return { scope: "last-turn" };
+  if (first.toLowerCase() === "--session" && second !== undefined) return { scope: "session", sessionId: second };
+  if (first.toLowerCase().startsWith("--session=") && second === undefined) return parseInlineSessionRequest(first);
+  return undefined;
+}
+
+function parseInlineSessionRequest(token: string): ObsTraceRequest | undefined {
+  const sessionId = token.slice("--session=".length);
+  return sessionId ? { scope: "session", sessionId } : undefined;
+}
+
+function isCurrentSessionToken(token: string): boolean {
+  return token.toLowerCase() === "--current-session";
+}
+
+function tokenizeObsTraceArgs(args: string): string[] {
+  return args.trim().split(/\s+/u).filter(isString);
+}
+
+function formatObsTraceScope(scope: ObsTraceScope): string {
+  if (scope === "current-session") return "current session";
+  if (scope === "last-turn") return "last turn";
+  return "session";
+}
+
+function isString(value: string | undefined): value is string {
+  return value !== undefined && value.length > 0;
+}
+
+async function notifyTrace(
+  ctx: ObsTraceCommandContext,
+  message: string,
+  type: "info" | "warning" | "error",
+): Promise<void> {
+  await ctx.ui.notify(message, type);
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

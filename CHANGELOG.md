@@ -45,4 +45,6 @@
 - Added a Loki query client with Grafana datasource-proxy LogQL execution, dotted-attribute normalization for Loki, timeout handling, and result capping.
 - Added a Prometheus query client with Grafana datasource-proxy PromQL execution, timeout handling, result capping, and high-cardinality metric-label rejection.
 - Added the `/obs cost` command with safe model/provider aggregate PromQL, configured timeout/result-limit handling through the Prometheus client, and default rejection of session-scoped metric cost queries.
+- Added `/obs trace` and `/obs link` commands that build Grafana Tempo trace links from the configured URL template for current, last-turn, or safe session-id scopes.
+- Added the `/obs tools` command with safe tool-name/error-class PromQL aggregates plus configured timeout/result-limit handling through the Prometheus client.
 - Complete ObservMe command behavior and full event coverage are not implemented yet; see `specs/spec-tasks.md` for the planned implementation sequence.

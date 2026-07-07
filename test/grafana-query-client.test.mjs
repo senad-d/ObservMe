@@ -124,6 +124,12 @@ test("Grafana trace links render configured safe trace URL templates", () => {
     getGrafanaTraceLink(config, sampleTraceId.toUpperCase()),
     "https://grafana.local/explore?trace=4bf92f3577b34da6a3ce929d0e0e4736&ds=tempo%2Fmain",
   );
+
+  config.query.links.traceUrlTemplate = "https://grafana.local/explore?trace=${traceId}&ds=${tempoDatasourceUid}";
+  assert.equal(
+    getGrafanaTraceLink(config, sampleTraceId),
+    "https://grafana.local/explore?trace=4bf92f3577b34da6a3ce929d0e0e4736&ds=tempo%2Fmain",
+  );
 });
 
 test("Grafana trace links fall back to a bounded Tempo Explore URL", () => {

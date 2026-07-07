@@ -805,7 +805,7 @@ Use the Prometheus client to run documented aggregate PromQL, default to provide
 
 ### 35. Implement `/obs trace` and `/obs link` commands
 
-- [ ] Create `src/commands/obs-trace.ts` and `src/commands/obs-link.ts` using the Grafana client (task 30) to return trace links for the current session, last turn, or a given session ID, per `08-query-grafana-integration.md` §4, §5.
+- [x] Create `src/commands/obs-trace.ts` and `src/commands/obs-link.ts` using the Grafana client (task 30) to return trace links for the current session, last turn, or a given session ID, per `08-query-grafana-integration.md` §4, §5.
 
 #### Why
 
@@ -828,7 +828,7 @@ Build links through the Grafana client and configurable URL template, support cu
 
 ### 36. Implement `/obs tools` command
 
-- [ ] Create `src/commands/obs-tools.ts` using the Prometheus client (task 33) to run the tool call/failure PromQL from `08-query-grafana-integration.md` §4.
+- [x] Create `src/commands/obs-tools.ts` using the Prometheus client (task 33) to run the tool call/failure PromQL from `08-query-grafana-integration.md` §4.
 
 #### Why
 

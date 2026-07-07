@@ -158,8 +158,8 @@ export function buildObsSessionTraceLink(traceId: string | undefined, traceUrlTe
   if (!traceId || !template) return undefined;
 
   if (template.includes("{{traceId}}")) return template.replaceAll("{{traceId}}", encodeURIComponent(traceId));
-  if (template.includes("{traceId}")) return template.replaceAll("{traceId}", encodeURIComponent(traceId));
   if (template.includes("${traceId}")) return template.replaceAll("${traceId}", encodeURIComponent(traceId));
+  if (template.includes("{traceId}")) return template.replaceAll("{traceId}", encodeURIComponent(traceId));
   if (template.includes("$traceId")) return template.replaceAll("$traceId", encodeURIComponent(traceId));
   if (template.includes("%TRACE_ID%")) return template.replaceAll("%TRACE_ID%", encodeURIComponent(traceId));
   if (template.includes("__TRACE_ID__")) return template.replaceAll("__TRACE_ID__", encodeURIComponent(traceId));

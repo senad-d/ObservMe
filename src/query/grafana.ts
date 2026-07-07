@@ -83,12 +83,12 @@ const datasourceDefinitions = [
 ] as const;
 const traceTemplateReplacements: readonly TraceTemplateReplacement[] = [
   { pattern: /\{\{\s*traceId\s*\}\}/gu, key: "traceId" },
-  { pattern: /\{traceId\}/gu, key: "traceId" },
   { pattern: /\$\{traceId\}/gu, key: "traceId" },
+  { pattern: /\{traceId\}/gu, key: "traceId" },
   { pattern: /%TRACE_ID%/gu, key: "traceId" },
   { pattern: /\{\{\s*tempoDatasourceUid\s*\}\}/gu, key: "tempoDatasourceUid" },
-  { pattern: /\{tempoDatasourceUid\}/gu, key: "tempoDatasourceUid" },
   { pattern: /\$\{tempoDatasourceUid\}/gu, key: "tempoDatasourceUid" },
+  { pattern: /\{tempoDatasourceUid\}/gu, key: "tempoDatasourceUid" },
   { pattern: /%TEMPO_DATASOURCE_UID%/gu, key: "tempoDatasourceUid" },
 ];
 

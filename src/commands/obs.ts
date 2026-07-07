@@ -3,22 +3,34 @@ import type { ObsCostCommandContext, RegisterObsCostCommandOptions } from "./obs
 import { handleObsCostCommand } from "./obs-cost.ts";
 import type { ObsHealthCommandContext, RegisterObsHealthCommandOptions } from "./obs-health.ts";
 import { handleObsHealthCommand } from "./obs-health.ts";
+import type { ObsLinkCommandContext, RegisterObsLinkCommandOptions } from "./obs-link.ts";
+import { handleObsLinkCommand } from "./obs-link.ts";
 import type { ObsSessionCommandContext, RegisterObsSessionCommandOptions } from "./obs-session.ts";
 import { handleObsSessionCommand } from "./obs-session.ts";
 import type { ObsStatusCommandContext, RegisterObsStatusCommandOptions } from "./obs-status.ts";
 import { handleObsStatusCommand } from "./obs-status.ts";
+import type { ObsToolsCommandContext, RegisterObsToolsCommandOptions } from "./obs-tools.ts";
+import { handleObsToolsCommand } from "./obs-tools.ts";
+import type { ObsTraceCommandContext, RegisterObsTraceCommandOptions } from "./obs-trace.ts";
+import { handleObsTraceCommand } from "./obs-trace.ts";
 
 export interface ObsCommandContext
   extends ObsStatusCommandContext,
     ObsHealthCommandContext,
     ObsSessionCommandContext,
-    ObsCostCommandContext {}
+    ObsCostCommandContext,
+    ObsTraceCommandContext,
+    ObsToolsCommandContext,
+    ObsLinkCommandContext {}
 
 export interface RegisterObsCommandOptions {
   readonly status?: RegisterObsStatusCommandOptions;
   readonly health?: RegisterObsHealthCommandOptions;
   readonly session?: RegisterObsSessionCommandOptions;
   readonly cost?: RegisterObsCostCommandOptions;
+  readonly trace?: RegisterObsTraceCommandOptions;
+  readonly tools?: RegisterObsToolsCommandOptions;
+  readonly link?: RegisterObsLinkCommandOptions;
 }
 
 const OBS_COMMAND_NAME = "obs";
@@ -26,13 +38,24 @@ const OBS_STATUS_SUBCOMMAND = "status";
 const OBS_HEALTH_SUBCOMMAND = "health";
 const OBS_SESSION_SUBCOMMAND = "session";
 const OBS_COST_SUBCOMMAND = "cost";
-const obsSubcommands = [OBS_STATUS_SUBCOMMAND, OBS_HEALTH_SUBCOMMAND, OBS_SESSION_SUBCOMMAND, OBS_COST_SUBCOMMAND] as const;
+const OBS_TRACE_SUBCOMMAND = "trace";
+const OBS_TOOLS_SUBCOMMAND = "tools";
+const OBS_LINK_SUBCOMMAND = "link";
+const obsSubcommands = [
+  OBS_STATUS_SUBCOMMAND,
+  OBS_HEALTH_SUBCOMMAND,
+  OBS_SESSION_SUBCOMMAND,
+  OBS_COST_SUBCOMMAND,
+  OBS_TRACE_SUBCOMMAND,
+  OBS_TOOLS_SUBCOMMAND,
+  OBS_LINK_SUBCOMMAND,
+] as const;
 
 export function registerObsCommand(pi: ExtensionAPI, options: RegisterObsCommandOptions = {}): void {
   const command = new ObsCommand(options);
 
   pi.registerCommand(OBS_COMMAND_NAME, {
-    description: "Run ObservMe commands. Usage: /obs <status|health|session|cost>",
+    description: "Run ObservMe commands. Usage: /obs <status|health|session|cost|trace|tools|link>",
     getArgumentCompletions: getObsRootCommandArgumentCompletions,
     handler: command.handle.bind(command),
   });
@@ -65,7 +88,22 @@ export async function handleObsCommand(
     return;
   }
 
-  await ctx.ui.notify("Usage: /obs <status|health|session|cost>", "warning");
+  if (subcommand === OBS_TRACE_SUBCOMMAND) {
+    await handleObsTraceCommand(args, ctx, options.trace);
+    return;
+  }
+
+  if (subcommand === OBS_TOOLS_SUBCOMMAND) {
+    await handleObsToolsCommand(args, ctx, options.tools);
+    return;
+  }
+
+  if (subcommand === OBS_LINK_SUBCOMMAND) {
+    await handleObsLinkCommand(args, ctx, options.link);
+    return;
+  }
+
+  await ctx.ui.notify("Usage: /obs <status|health|session|cost|trace|tools|link>", "warning");
 }
 
 export function getObsRootCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
