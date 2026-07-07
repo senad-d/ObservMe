@@ -4,6 +4,7 @@ import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../query/prometheus.ts";
 import { createPrometheusQueryClient } from "../query/prometheus.ts";
+import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
 
 export interface ObsCostCommandContext {
   readonly cwd?: string;
@@ -45,6 +46,8 @@ export const OBS_COST_AGGREGATE_PROMQL = "sum(increase(observme_llm_cost_usd_tot
 const OBS_COMMAND_NAME = "obs";
 const OBS_COST_SUBCOMMAND = "cost";
 const OBS_COST_WINDOW = "24h";
+const OBS_COST_ERROR_NEXT_ACTION = "run /obs health and verify query.grafana.url, Grafana credentials, and the Metrics datasource UID.";
+const OBS_COST_NO_METRICS_NEXT_ACTION = "generate LLM usage, then verify the Metrics datasource with /obs health.";
 
 type ObsCostRequestStatus = "cost" | "session-disabled" | "usage";
 
@@ -79,7 +82,14 @@ export async function handleObsCostCommand(
     const snapshot = await resolveObsCostSnapshot(ctx, options);
     await notifyCost(ctx, renderObsCost(snapshot), "info");
   } catch (error) {
-    await notifyCost(ctx, `ObservMe cost unavailable: ${formatError(error)}`, "error");
+    await notifyCost(
+      ctx,
+      formatObsCommandFailure("ObservMe cost unavailable", error, {
+        subsystem: "Prometheus",
+        nextAction: OBS_COST_ERROR_NEXT_ACTION,
+      }),
+      "error",
+    );
   }
 }
 
@@ -108,7 +118,7 @@ export function renderObsCost(snapshot: ObsCostSnapshot): string {
   const lines = [`Cost by model/provider (last ${snapshot.window})`];
 
   if (rows.length === 0) {
-    lines.push("No cost metrics found.");
+    lines.push(appendObsRecoveryHint("No cost metrics found.", OBS_COST_NO_METRICS_NEXT_ACTION));
     return lines.join("\n");
   }
 
@@ -227,8 +237,4 @@ async function notifyCost(ctx: ObsCostCommandContext, message: string, type: "in
 
 function formatUsd(value: number): string {
   return `$${value.toFixed(2)}`;
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

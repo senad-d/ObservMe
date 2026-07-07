@@ -86,6 +86,7 @@ test("/obs trace builds current-session links with the configured Grafana URL te
       "Session: session-1",
       `Trace: ${traceId}`,
       `Open trace: https://grafana.local/explore?trace=${traceId}&ds=tempo%2Fmain`,
+      "Trace visibility: active sessions may show ended child spans before the root pi.session span; the root is exported after session_shutdown.",
     ].join("\n"),
   );
 });
@@ -108,6 +109,7 @@ test("/obs trace --last-turn returns the current trace once a turn has been obse
   assert.equal(notifications[0].type, "info");
   assert.match(notifications[0].message, /Trace link \(last turn\)/u);
   assert.match(notifications[0].message, new RegExp(`Open trace: https://grafana\\.local/explore\\?trace=${traceId}`, "u"));
+  assert.match(notifications[0].message, /root pi\.session span; the root is exported after session_shutdown/u);
 });
 
 test("/obs trace --session searches Tempo by safe session id and renders a configured Grafana trace link", async () => {
@@ -141,6 +143,7 @@ test("/obs trace --session searches Tempo by safe session id and renders a confi
   assert.equal(notifications[0].type, "info");
   assert.match(notifications[0].message, /Trace link \(session\)/u);
   assert.match(notifications[0].message, new RegExp(`Open trace: https://grafana\\.local/explore\\?trace=${remoteTraceId}`, "u"));
+  assert.doesNotMatch(notifications[0].message, /root pi\.session span/u);
 });
 
 test("/obs trace and /obs link reject raw prompt or command-like session ids before building query strings", async () => {

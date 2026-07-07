@@ -4,6 +4,7 @@ import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import { createGrafanaQueryClient, type GrafanaFetch } from "../query/grafana.ts";
 import type { TimeRange, TraceSummary } from "../query/tempo.ts";
+import { formatObsCommandFailure, readObsDiagnosticMessage, type ObsCommandRecoveryHint } from "./obs-diagnostics.ts";
 import { searchTempo } from "../query/tempo.ts";
 import { COMMON_SPAN_ATTRIBUTES } from "../semconv/attributes.ts";
 import type { ObsSessionSnapshot } from "./obs-session.ts";
@@ -72,6 +73,10 @@ interface ObsTraceTarget {
 const OBS_COMMAND_NAME = "obs";
 const OBS_TRACE_SUBCOMMAND = "trace";
 const OBS_TRACE_USAGE = "Usage: /obs trace [--last-turn|--session <session-id>]";
+const OBS_TRACE_TEMPO_ERROR_NEXT_ACTION = "run /obs health and verify query.grafana.url, Grafana credentials, and the Tempo datasource UID.";
+const OBS_TRACE_SESSION_ERROR_NEXT_ACTION = "wait for a Pi turn or query a generated session id with /obs trace --session <session-id>.";
+const OBS_TRACE_NOT_FOUND_NEXT_ACTION = "check the session id, wait for trace export, then verify Tempo datasource with /obs health.";
+const OBS_TRACE_ACTIVE_SESSION_NOTE = "Trace visibility: active sessions may show ended child spans before the root pi.session span; the root is exported after session_shutdown.";
 const DEFAULT_TRACE_SEARCH_RANGE_HOURS = 24;
 const millisecondsPerHour = 60 * 60 * 1000;
 const safeSessionIdPattern = /^[A-Za-z0-9._:-]{1,256}$/u;
@@ -109,7 +114,7 @@ export async function handleObsTraceCommand(
     const snapshot = await resolveObsTraceSnapshot(ctx, request, options);
     await notifyTrace(ctx, renderObsTrace(snapshot), "info");
   } catch (error) {
-    await notifyTrace(ctx, `ObservMe trace unavailable: ${formatError(error)}`, "error");
+    await notifyTrace(ctx, formatObsCommandFailure("ObservMe trace unavailable", error, resolveObsTraceDiagnostic(error)), "error");
   }
 }
 
@@ -152,6 +157,8 @@ export function renderObsTraceWithTitle(snapshot: ObsTraceSnapshot, title: strin
   if (sessionId) lines.push(`Session: ${sessionId}`);
   lines.push(`Trace: ${snapshot.traceId}`);
   lines.push(`Open trace: ${snapshot.traceLink}`);
+  const visibilityNote = formatObsTraceVisibilityNote(snapshot);
+  if (visibilityNote) lines.push(visibilityNote);
   return lines.join("\n");
 }
 
@@ -353,6 +360,11 @@ function formatObsTraceScope(scope: ObsTraceScope): string {
   return "session";
 }
 
+function formatObsTraceVisibilityNote(snapshot: ObsTraceSnapshot): string | undefined {
+  if (snapshot.source !== "runtime") return undefined;
+  return OBS_TRACE_ACTIVE_SESSION_NOTE;
+}
+
 function isString(value: string | undefined): value is string {
   return value !== undefined && value.length > 0;
 }
@@ -365,6 +377,18 @@ async function notifyTrace(
   await ctx.ui.notify(message, type);
 }
 
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function resolveObsTraceDiagnostic(error: unknown): ObsCommandRecoveryHint {
+  const message = readObsDiagnosticMessage(error);
+
+  if (isObsTraceSessionErrorMessage(message)) return { subsystem: "Session trace", nextAction: OBS_TRACE_SESSION_ERROR_NEXT_ACTION };
+  if (isObsTraceNotFoundMessage(message)) return { subsystem: "Tempo", nextAction: OBS_TRACE_NOT_FOUND_NEXT_ACTION };
+  return { subsystem: "Tempo", nextAction: OBS_TRACE_TEMPO_ERROR_NEXT_ACTION };
+}
+
+function isObsTraceSessionErrorMessage(message: string): boolean {
+  return /No current ObservMe session trace|No last-turn ObservMe trace|Unsafe ObservMe session id/u.test(message);
+}
+
+function isObsTraceNotFoundMessage(message: string): boolean {
+  return /No trace was found/u.test(message);
 }

@@ -160,8 +160,12 @@ test("/obs cost fails fast when Grafana token is unresolved without exposing pla
   assert.equal(fetchCalls, 0);
   assert.equal(notifications.length, 1);
   assert.equal(notifications[0].type, "error");
-  assert.match(notifications[0].message, /ObservMe cost unavailable: Grafana query configuration is not ready/u);
+  assert.match(notifications[0].message, /ObservMe cost unavailable: Prometheus: Grafana query configuration is not ready/u);
   assert.match(notifications[0].message, /query\.grafana\.token is unresolved/u);
+  assert.match(
+    notifications[0].message,
+    /Next: run \/obs health and verify query\.grafana\.url, Grafana credentials, and the Metrics datasource UID\./u,
+  );
   assert.doesNotMatch(notifications[0].message, /\$\{OBSERVME_GRAFANA_TOKEN\}/u);
 });
 
@@ -179,5 +183,11 @@ test("root obs command dispatches cost subcommand", async () => {
 
   assert.deepEqual(getObsRootCommandArgumentCompletions("co"), [{ value: "cost", label: "cost" }]);
   assert.equal(notifications[0].type, "info");
-  assert.equal(notifications[0].message, "Cost by model/provider (last 24h)\nNo cost metrics found.");
+  assert.equal(
+    notifications[0].message,
+    [
+      "Cost by model/provider (last 24h)",
+      "No cost metrics found. Next: generate LLM usage, then verify the Metrics datasource with /obs health.",
+    ].join("\n"),
+  );
 });

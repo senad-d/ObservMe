@@ -7,6 +7,17 @@ import type { ObservMeConfig } from "../config/schema.ts";
 export type GrafanaFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 export type GrafanaAuthMode = "bearer" | "basic" | "none";
 
+export interface GrafanaTransportOptions {
+  readonly fetch?: GrafanaFetch;
+  readonly timeoutMs?: number;
+}
+
+export interface GrafanaTransportFetchOptions {
+  readonly method?: string;
+  readonly headers?: Record<string, string>;
+  readonly timeoutMessage?: string;
+}
+
 interface GrafanaAuthReadiness {
   readonly mode: GrafanaAuthMode;
   readonly detail?: string;
@@ -17,6 +28,7 @@ interface ErrorWithCode {
   readonly cause?: unknown;
 }
 
+const minimumTimeoutMs = 1;
 const unresolvedEnvironmentPlaceholderPattern = /\$\{[A-Z0-9_]+\}/u;
 const tlsErrorCodes = new Set<string>([
   "DEPTH_ZERO_SELF_SIGNED_CERT",
@@ -27,6 +39,85 @@ const tlsErrorCodes = new Set<string>([
 ]);
 const dnsErrorCodes = new Set<string>(["ENOTFOUND", "EAI_AGAIN"]);
 const connectionTimeoutErrorCodes = new Set<string>(["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"]);
+
+export class GrafanaTransportClient {
+  readonly #config: ObservMeConfig;
+  readonly #fetcher: GrafanaFetch;
+  readonly #timeoutMs: number;
+
+  constructor(config: ObservMeConfig, options: GrafanaTransportOptions = {}) {
+    this.#config = config;
+    this.#fetcher = resolveGrafanaFetch(config, options.fetch);
+    this.#timeoutMs = resolveGrafanaTimeoutMs(config, options.timeoutMs);
+  }
+
+  get timeoutMs(): number {
+    return this.#timeoutMs;
+  }
+
+  apiUrl(apiPath: string): URL {
+    return buildGrafanaApiUrl(this.#config.query.grafana.url, apiPath);
+  }
+
+  datasourceApiUrl(datasourceUid: string, apiPath: string): URL {
+    return buildGrafanaDatasourceApiUrl(this.#config.query.grafana.url, datasourceUid, apiPath);
+  }
+
+  datasourceProxyUrl(datasourceUid: string, proxyPath: string): URL {
+    return buildGrafanaDatasourceProxyUrl(this.#config.query.grafana.url, datasourceUid, proxyPath);
+  }
+
+  async fetch(input: string | URL, options: GrafanaTransportFetchOptions = {}): Promise<Response> {
+    return fetchGrafanaRequest(
+      this.#fetcher,
+      input,
+      createGrafanaRequestInit(this.#config, options),
+      this.#timeoutMs,
+      options.timeoutMessage,
+    );
+  }
+
+  formatHttpFailure(response: Response): string {
+    return formatGrafanaHttpFailure(response, this.#config);
+  }
+}
+
+export function createGrafanaTransport(
+  config: ObservMeConfig,
+  options: GrafanaTransportOptions = {},
+): GrafanaTransportClient {
+  return new GrafanaTransportClient(config, options);
+}
+
+export function buildGrafanaApiUrl(baseUrl: string, apiPath: string): URL {
+  const url = new URL(baseUrl.trim());
+  const basePath = url.pathname.replace(/\/+$/u, "");
+  const path = apiPath.replace(/^\/+/, "");
+  url.pathname = `${basePath}/${path}`;
+  url.search = "";
+  url.hash = "";
+  return url;
+}
+
+export function buildGrafanaDatasourceApiUrl(baseUrl: string, datasourceUid: string, apiPath: string): URL {
+  return buildGrafanaApiUrl(
+    baseUrl,
+    joinGrafanaApiPath(`/api/datasources/uid/${encodeURIComponent(datasourceUid)}`, apiPath),
+  );
+}
+
+export function buildGrafanaDatasourceProxyUrl(baseUrl: string, datasourceUid: string, proxyPath: string): URL {
+  return buildGrafanaApiUrl(
+    baseUrl,
+    joinGrafanaApiPath(`/api/datasources/proxy/uid/${encodeURIComponent(datasourceUid)}`, proxyPath),
+  );
+}
+
+export function resolveGrafanaTimeoutMs(config: ObservMeConfig, overrideMs?: number): number {
+  const timeoutMs = overrideMs ?? config.query.timeoutMs;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < minimumTimeoutMs) return minimumTimeoutMs;
+  return Math.trunc(timeoutMs);
+}
 
 export function createGrafanaHeaders(config: ObservMeConfig): Record<string, string> {
   const headers: Record<string, string> = { Accept: "application/json" };
@@ -83,6 +174,44 @@ export function normalizeConfiguredGrafanaSecret(value: string): string | undefi
   const trimmed = value.trim();
   if (!trimmed || hasUnresolvedEnvironmentPlaceholder(trimmed)) return undefined;
   return trimmed;
+}
+
+async function fetchGrafanaRequest(
+  fetcher: GrafanaFetch,
+  input: string | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  timeoutMessage: string | undefined,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetcher(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    throw normalizeGrafanaTransportError(error, timeoutMessage);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function createGrafanaRequestInit(config: ObservMeConfig, options: GrafanaTransportFetchOptions): RequestInit {
+  return {
+    method: options.method ?? "GET",
+    headers: { ...createGrafanaHeaders(config), ...options.headers },
+  };
+}
+
+function normalizeGrafanaTransportError(error: unknown, timeoutMessage: string | undefined): Error {
+  if (timeoutMessage && isAbortError(error)) return new Error(timeoutMessage);
+  return new Error(formatGrafanaFetchFailure(error));
+}
+
+function joinGrafanaApiPath(prefix: string, path: string): string {
+  const normalizedPrefix = prefix.replace(/\/+$/u, "");
+  const normalizedPath = path.replace(/^\/+/, "");
+  if (!normalizedPath) return normalizedPrefix;
+  return `${normalizedPrefix}/${normalizedPath}`;
 }
 
 export async function fetchGrafanaWithNode(

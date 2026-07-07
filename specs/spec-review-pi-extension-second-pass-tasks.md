@@ -53,7 +53,7 @@ The unit and smoke suites pass, but the current running stack still reproduces u
 - The test documents required environment/config inputs and skips cleanly when Docker or live-stack prerequisites are unavailable.
 - Normal unit tests, lint, and the targeted integration command pass.
 
-- [ ] Consolidate Grafana query transport, headers, timeout, token, and error normalization into one shared client layer
+- [x] Consolidate Grafana query transport, headers, timeout, token, and error normalization into one shared client layer
 
 #### Why
 
@@ -73,7 +73,7 @@ The unit and smoke suites pass, but the current running stack still reproduces u
 - Tests show a 401, timeout, invalid URL, and success are reported consistently across health and datasource query commands.
 - No token value is logged, rendered, or included in thrown errors.
 
-- [ ] Define and document a supported local-stack ObservMe query profile
+- [x] Define and document a supported local-stack ObservMe query profile
 
 #### Why
 
@@ -93,7 +93,7 @@ The repository includes `.pi/observme.yaml`, `examples/observme.yaml`, a Docker 
 - Tests or smoke checks verify the documented datasource UIDs, local URL shape, and key labels match the stack provisioning.
 - The README and examples no longer imply that the current placeholder token config is sufficient for query commands.
 
-- [ ] Improve query-command diagnostics and recovery hints without broad rewrites
+- [x] Improve query-command diagnostics and recovery hints without broad rewrites
 
 #### Why
 

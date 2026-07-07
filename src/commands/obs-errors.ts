@@ -5,6 +5,7 @@ import type { ObservMeConfig } from "../config/schema.ts";
 import type { LokiFetch } from "../query/loki.ts";
 import { createLokiQueryClient } from "../query/loki.ts";
 import type { ObsLokiLogSummaryRow, ObsLokiTimeRangeOptions } from "./obs-loki-summary.ts";
+import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
 import {
   createRecentObsLokiTimeRange,
   formatObsLokiWindow,
@@ -48,6 +49,8 @@ export const OBS_ERRORS_LOGQL = `{service_name="observme-pi-extension", event_na
 const OBS_COMMAND_NAME = "obs";
 const OBS_ERRORS_SUBCOMMAND = "errors";
 const OBS_ERRORS_USAGE = "Usage: /obs errors";
+const OBS_ERRORS_ERROR_NEXT_ACTION = "run /obs health and verify query.grafana.url, Grafana credentials, the Loki datasource UID, and service labels.";
+const OBS_ERRORS_NO_LOGS_NEXT_ACTION = "generate error telemetry, then verify Loki labels and datasource with /obs health.";
 
 export function registerObsErrorsCommand(pi: ExtensionAPI, options: RegisterObsErrorsCommandOptions = {}): void {
   const command = new ObsErrorsCommand(options);
@@ -73,7 +76,14 @@ export async function handleObsErrorsCommand(
     const snapshot = await resolveObsErrorsSnapshot(ctx, options);
     await notifyErrors(ctx, renderObsErrors(snapshot), "info");
   } catch (error) {
-    await notifyErrors(ctx, `ObservMe errors unavailable: ${formatError(error)}`, "error");
+    await notifyErrors(
+      ctx,
+      formatObsCommandFailure("ObservMe errors unavailable", error, {
+        subsystem: "Loki",
+        nextAction: OBS_ERRORS_ERROR_NEXT_ACTION,
+      }),
+      "error",
+    );
   }
 }
 
@@ -105,7 +115,7 @@ export function renderObsErrors(snapshot: ObsErrorsSnapshot): string {
     window: snapshot.window,
     maxLogs: snapshot.maxLogs,
     rows: snapshot.logs,
-    emptyMessage: "No error logs found.",
+    emptyMessage: appendObsRecoveryHint("No error logs found.", OBS_ERRORS_NO_LOGS_NEXT_ACTION),
   });
 }
 
@@ -158,8 +168,4 @@ async function notifyErrors(
   type: "info" | "warning" | "error",
 ): Promise<void> {
   await ctx.ui.notify(message, type);
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

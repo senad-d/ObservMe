@@ -219,7 +219,19 @@ test("root obs command dispatches errors and logs subcommands", async () => {
   assert.deepEqual(getObsRootCommandArgumentCompletions("er"), [{ value: "errors", label: "errors" }]);
   assert.deepEqual(getObsRootCommandArgumentCompletions("lo"), [{ value: "logs", label: "logs" }]);
   assert.equal(notifications[0].type, "info");
-  assert.equal(notifications[0].message, ["Recent error events (last 1h, max 2)", "No error logs found."].join("\n"));
+  assert.equal(
+    notifications[0].message,
+    [
+      "Recent error events (last 1h, max 2)",
+      "No error logs found. Next: generate error telemetry, then verify Loki labels and datasource with /obs health.",
+    ].join("\n"),
+  );
   assert.equal(notifications[1].type, "info");
-  assert.equal(notifications[1].message, ["Session logs for session-1 (last 1h, max 2)", "No session logs found."].join("\n"));
+  assert.equal(
+    notifications[1].message,
+    [
+      "Session logs for session-1 (last 1h, max 2)",
+      "No session logs found. Next: wait for telemetry export, then verify Loki labels and datasource with /obs health.",
+    ].join("\n"),
+  );
 });

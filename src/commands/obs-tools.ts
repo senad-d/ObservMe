@@ -4,6 +4,7 @@ import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../query/prometheus.ts";
 import { createPrometheusQueryClient } from "../query/prometheus.ts";
+import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
 
 export interface ObsToolsCommandContext {
   readonly cwd?: string;
@@ -55,6 +56,9 @@ const OBS_COMMAND_NAME = "obs";
 const OBS_TOOLS_SUBCOMMAND = "tools";
 const OBS_TOOLS_WINDOW = "1h";
 const OBS_TOOLS_USAGE = "Usage: /obs tools";
+const OBS_TOOLS_ERROR_NEXT_ACTION = "run /obs health and verify query.grafana.url, Grafana credentials, and the Metrics datasource UID.";
+const OBS_TOOLS_NO_CALLS_NEXT_ACTION = "run tool activity, then verify the Metrics datasource with /obs health.";
+const OBS_TOOLS_NO_FAILURES_NEXT_ACTION = "check after a failing tool call, then verify Metrics labels with /obs health.";
 
 type ObsToolsRequestStatus = "tools" | "usage";
 
@@ -87,7 +91,14 @@ export async function handleObsToolsCommand(
     const snapshot = await resolveObsToolsSnapshot(ctx, options);
     await notifyTools(ctx, renderObsTools(snapshot), "info");
   } catch (error) {
-    await notifyTools(ctx, `ObservMe tools unavailable: ${formatError(error)}`, "error");
+    await notifyTools(
+      ctx,
+      formatObsCommandFailure("ObservMe tools unavailable", error, {
+        subsystem: "Prometheus",
+        nextAction: OBS_TOOLS_ERROR_NEXT_ACTION,
+      }),
+      "error",
+    );
   }
 }
 
@@ -119,14 +130,14 @@ export function renderObsTools(snapshot: ObsToolsSnapshot): string {
   const lines = [`Tool calls by tool (last ${snapshot.window})`];
 
   if (calls.length === 0) {
-    lines.push("No tool call metrics found.");
+    lines.push(appendObsRecoveryHint("No tool call metrics found.", OBS_TOOLS_NO_CALLS_NEXT_ACTION));
   } else {
     lines.push(...calls.map(renderObsToolCallRow));
   }
 
   lines.push(`Tool failures by tool/error (last ${snapshot.window})`);
   if (failures.length === 0) {
-    lines.push("No tool failure metrics found.");
+    lines.push(appendObsRecoveryHint("No tool failure metrics found.", OBS_TOOLS_NO_FAILURES_NEXT_ACTION));
   } else {
     lines.push(...failures.map(renderObsToolFailureRow));
   }
@@ -272,8 +283,4 @@ function formatRatePerSecond(value: number): string {
 
 function trimTrailingFractionZeros(value: string): string {
   return value.replace(/\.0+$/u, "").replace(/(\.\d*?)0+$/u, "$1");
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

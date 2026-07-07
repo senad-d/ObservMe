@@ -1,11 +1,6 @@
 import type { ObservMeConfig } from "../config/schema.ts";
-import type { GrafanaFetch } from "./grafana-transport.ts";
-import {
-  createGrafanaHeaders,
-  formatGrafanaFetchFailure,
-  formatGrafanaHttpFailure,
-  resolveGrafanaFetch,
-} from "./grafana-transport.ts";
+import type { GrafanaFetch, GrafanaTransportClient } from "./grafana-transport.ts";
+import { createGrafanaTransport } from "./grafana-transport.ts";
 import { assertGrafanaQueryReady } from "./grafana-readiness.ts";
 
 export type PrometheusFetch = GrafanaFetch;
@@ -78,7 +73,6 @@ const allForbiddenHighCardinalityPrometheusLabels = [
   ...FORBIDDEN_HIGH_CARDINALITY_PROMETHEUS_LABELS,
   ...forbiddenHighCardinalityPrometheusLabelAliases,
 ] as const;
-const minimumTimeoutMs = 1;
 const minimumMaxMetricSeries = 1;
 const minimumMaxAgents = 1;
 const maxPromQlQueryLength = 4096;
@@ -93,11 +87,11 @@ const sensitiveQueryValuePatterns = [
 
 export class PrometheusQueryClient {
   readonly #config: ObservMeConfig;
-  readonly #fetcher: PrometheusFetch;
+  readonly #transport: GrafanaTransportClient;
 
   constructor(config: ObservMeConfig, options: PrometheusQueryClientOptions = {}) {
     this.#config = config;
-    this.#fetcher = resolveGrafanaFetch(config, options.fetch);
+    this.#transport = createGrafanaTransport(config, options);
   }
 
   async queryPrometheus(
@@ -105,7 +99,7 @@ export class PrometheusQueryClient {
     time?: Date,
     options: PrometheusQueryExecutionOptions = {},
   ): Promise<QueryResult> {
-    return queryPrometheus(this.#config, query, time, { ...options, fetch: this.#fetcher });
+    return queryPrometheusWithTransport(this.#config, this.#transport, query, time, options);
   }
 }
 
@@ -122,16 +116,26 @@ export async function queryPrometheus(
   time?: Date,
   options: PrometheusQueryOptions = {},
 ): Promise<QueryResult> {
+  return queryPrometheusWithTransport(config, createGrafanaTransport(config, options), query, time, options);
+}
+
+async function queryPrometheusWithTransport(
+  config: ObservMeConfig,
+  transport: GrafanaTransportClient,
+  query: string,
+  time: Date | undefined,
+  options: PrometheusQueryExecutionOptions,
+): Promise<QueryResult> {
   if (!config.query.enabled) return emptyPrometheusQueryResult();
 
   assertGrafanaQueryReady(config, "prometheus");
   const normalizedQuery = normalizePrometheusQuery(query);
   const queryTime = normalizeQueryTime(time);
   const resultLimit = resolveResultLimit(config, options.resultLimit);
-  const url = createPrometheusQueryUrl(config, normalizedQuery, queryTime, resultLimit);
-  const response = await fetchPrometheusQuery(url, config, resolveGrafanaFetch(config, options.fetch));
+  const url = createPrometheusQueryUrl(config, transport, normalizedQuery, queryTime, resultLimit);
+  const response = await transport.fetch(url, { timeoutMessage: "Prometheus query timed out." });
 
-  return readPrometheusQueryResult(response, config, resultLimit);
+  return readPrometheusQueryResult(response, transport, resultLimit);
 }
 
 export function findForbiddenPrometheusLabels(query: string): string[] {
@@ -186,58 +190,28 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-function createPrometheusQueryUrl(config: ObservMeConfig, query: string, time: Date | undefined, resultLimit: number): string {
-  const url = buildGrafanaApiUrl(
-    config.query.grafana.url,
-    `/api/datasources/proxy/uid/${encodeURIComponent(config.query.grafana.datasourceUids.prometheus)}/api/v1/query`,
-  );
+function createPrometheusQueryUrl(
+  config: ObservMeConfig,
+  transport: GrafanaTransportClient,
+  query: string,
+  time: Date | undefined,
+  resultLimit: number,
+): URL {
+  const url = transport.datasourceProxyUrl(config.query.grafana.datasourceUids.prometheus, "/api/v1/query");
 
   url.searchParams.set("query", query);
   url.searchParams.set("limit", String(resultLimit));
-  url.searchParams.set("timeout", formatPrometheusDuration(resolveQueryTimeoutMs(config)));
+  url.searchParams.set("timeout", formatPrometheusDuration(transport.timeoutMs));
   if (time) url.searchParams.set("time", formatPrometheusTimestamp(time));
-  return url.toString();
-}
-
-function buildGrafanaApiUrl(baseUrl: string, apiPath: string): URL {
-  const url = new URL(baseUrl);
-  const basePath = url.pathname.replace(/\/+$/u, "");
-  const path = apiPath.replace(/^\/+/, "");
-  url.pathname = `${basePath}/${path}`;
-  url.search = "";
-  url.hash = "";
   return url;
-}
-
-async function fetchPrometheusQuery(url: string, config: ObservMeConfig, fetcher: PrometheusFetch): Promise<Response> {
-  const timeoutMs = resolveQueryTimeoutMs(config);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    return await fetcher(url, {
-      method: "GET",
-      headers: createGrafanaHeaders(config),
-      signal: controller.signal,
-    });
-  } catch (error) {
-    throw normalizePrometheusFetchError(error);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function normalizePrometheusFetchError(error: unknown): Error {
-  if (isAbortError(error)) return new Error("Prometheus query timed out.");
-  return new Error(formatGrafanaFetchFailure(error));
 }
 
 async function readPrometheusQueryResult(
   response: Response,
-  config: ObservMeConfig,
+  transport: GrafanaTransportClient,
   resultLimit: number,
 ): Promise<QueryResult> {
-  if (!response.ok) throw new Error(`Prometheus query failed: ${formatGrafanaHttpFailure(response, config)}`);
+  if (!response.ok) throw new Error(`Prometheus query failed: ${transport.formatHttpFailure(response)}`);
 
   const payload = (await response.json()) as unknown;
   const apiError = readPrometheusApiError(payload);
@@ -385,12 +359,6 @@ function normalizeExplicitResultLimit(limit: number): number {
   return Math.trunc(limit);
 }
 
-function resolveQueryTimeoutMs(config: ObservMeConfig): number {
-  const timeoutMs = config.query.timeoutMs;
-  if (!Number.isFinite(timeoutMs) || timeoutMs < minimumTimeoutMs) return minimumTimeoutMs;
-  return Math.trunc(timeoutMs);
-}
-
 function resolveMaxMetricSeries(config: ObservMeConfig): number {
   const maxMetricSeries = config.query.maxMetricSeries;
   if (!Number.isFinite(maxMetricSeries) || maxMetricSeries < minimumMaxMetricSeries) return minimumMaxMetricSeries;
@@ -413,12 +381,4 @@ function formatPrometheusDuration(milliseconds: number): string {
 
 function trimTrailingFractionZeros(value: string): string {
   return value.replace(/\.0+$/u, "").replace(/(\.\d*?)0+$/u, "$1");
-}
-
-function isAbortError(error: unknown): boolean {
-  return isNamedError(error) && error.name === "AbortError";
-}
-
-function isNamedError(error: unknown): error is { name: string } {
-  return typeof error === "object" && error !== null && "name" in error && typeof error.name === "string";
 }

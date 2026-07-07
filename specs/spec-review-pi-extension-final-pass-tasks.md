@@ -44,7 +44,7 @@ Review scope and date: 2026-07-07. Final Pi-extension verification focused on co
 
 ## Ordered tasks
 
-- [ ] Add a real Pi runtime smoke test for `/obs` command registration, command invocation, and session-scoped state
+- [x] Add a real Pi runtime smoke test for `/obs` command registration, command invocation, and session-scoped state
 
 #### Why
 
@@ -65,7 +65,7 @@ The current smoke tests use a custom harness and confirm that handlers and comma
 - Backend-dependent checks are either verified against configured Grafana auth or skipped with a clear reason.
 - The smoke test is documented in `package.json` scripts or test docs and passes in the normal local development environment.
 
-- [ ] Decide and verify how active session traces should appear before `session_shutdown`
+- [x] Decide and verify how active session traces should appear before `session_shutdown`
 
 #### Why
 
@@ -85,7 +85,7 @@ Live Tempo search showed active traces with `<root span not yet received>` while
 - Post-shutdown traces still include a canonical `pi.session` root span with session/workflow attributes.
 - No change introduces unbounded flushing, timers from the extension factory, or blocking behavior in Pi lifecycle handlers.
 
-- [ ] Verify trusted project config loading and command behavior in the same process that exports telemetry
+- [x] Verify trusted project config loading and command behavior in the same process that exports telemetry
 
 #### Why
 
@@ -105,7 +105,7 @@ The live command reproduction in a separate Node process loaded `.pi/observme.ya
 - `/obs status` or equivalent diagnostics make config-source/readiness issues discoverable without leaking secrets.
 - Tests cover trusted, untrusted, and missing-project-config command contexts.
 
-- [ ] Create a deterministic user-facing validation flow for “Grafana has data and `/obs` commands work”
+- [x] Create a deterministic user-facing validation flow for “Grafana has data and `/obs` commands work”
 
 #### Why
 

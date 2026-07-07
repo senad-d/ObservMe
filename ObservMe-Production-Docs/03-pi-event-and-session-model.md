@@ -181,6 +181,8 @@ pi.compaction.modified_files_count
 | `session_tree` | emit branch/tree-navigation span/log/metric and include `summaryEntry` when present |
 | `session_shutdown` | end open spans and flush exporters within timeout |
 
+The root `pi.session` span is intentionally long-lived and remains open until `session_shutdown`. During an active session, Tempo searches may show ended child spans before the root span is exported; post-shutdown traces must include the canonical `pi.session` root with the session and workflow attributes.
+
 ## 7. Correlation IDs
 
 ObservMe must maintain the following IDs:

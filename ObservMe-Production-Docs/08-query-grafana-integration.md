@@ -45,9 +45,33 @@ Authentication and local transport behavior:
 
 - Prefer `query.grafana.token` for Grafana service-account or bearer tokens.
 - If the token is blank or an unresolved environment placeholder, ObservMe may use `query.grafana.username` plus `query.grafana.password` as a local-development Basic auth fallback.
-- Query-backed commands fail fast before backend calls when `query.grafana.token` is unresolved, auth is missing/incomplete, `query.grafana.url` is invalid, or a required datasource UID is blank.
+- Query-backed commands fail fast before backend calls when Grafana auth is unresolved/missing/incomplete, `query.grafana.url` is invalid, or a required datasource UID is blank.
 - `401` and `403` responses are surfaced as Grafana authentication failures without printing token or password values.
-- For the bundled `observability-stack/` behind `https://observability.local`, set `query.grafana.tls.insecureSkipVerify=true` only for the local self-signed certificate and `query.grafana.transport.preferIPv4=true` when DNS resolution stalls on IPv6.
+- Browser login cookies are irrelevant because `/obs` commands call the Grafana API directly from the Pi process.
+
+Bundled local-stack profile:
+
+```yaml
+query:
+  enabled: true
+  links:
+    traceUrlTemplate: https://observability.local/explore?left=...
+  grafana:
+    url: https://observability.local
+    token: ${OBSERVME_GRAFANA_TOKEN}
+    username: admin
+    password: ${OBSERVME_GRAFANA_PASSWORD}
+    datasourceUids:
+      tempo: tempo
+      loki: loki
+      prometheus: prometheus
+    tls:
+      insecureSkipVerify: true
+    transport:
+      preferIPv4: true
+```
+
+For the bundled `observability-stack/`, the supported command path is nginx HTTPS at `https://observability.local`; the default stack does not publish Grafana on `localhost:3000`. Create a Grafana service-account token with Viewer access for read-only datasource queries and export it as `OBSERVME_GRAFANA_TOKEN`, or export/set `OBSERVME_GRAFANA_PASSWORD` from `observability-stack/secrets/grafana_admin_password` for local Basic auth. Extension environment values can come from system environment variables before Pi starts, or from a trusted project `.env` copied from `.env.example`; system variables override `.env`. The local self-signed certificate requires `query.grafana.tls.insecureSkipVerify=true`, and `query.grafana.transport.preferIPv4=true` avoids DNS stalls when `observability.local` resolves to IPv6 first. Provisioned datasource UIDs are `tempo`, `loki`, and `prometheus`; Loki selectors use normalized labels such as `service_name`, `pi_session_id`, `event_name`, and `event_category`.
 
 ## 4. Commands
 
@@ -96,7 +120,7 @@ Open trace: https://grafana.example.com/...
 
 ### `/obs trace`
 
-Returns a Grafana Tempo trace link.
+Returns a Grafana Tempo trace link. For the current active session, the link is available from runtime state before shutdown. Tempo may show ended child spans before the long-lived root `pi.session` span appears; the root is exported after `session_shutdown`.
 
 Options:
 

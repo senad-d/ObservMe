@@ -311,6 +311,40 @@ test("session_shutdown ends root span, updates active workflow metrics, emits li
   );
 });
 
+test("active traces can contain ended child spans before the pi.session root is exported", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-active-trace" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("agent_start")({ source: "user" }, {});
+  await pi.handlers.get("agent_end")({ agentRunId: "agent-run-000001", status: "ok" }, {});
+
+  const [sessionSpan, agentRunSpan] = telemetry.tracer.spans;
+  assert.equal(sessionSpan.name, SPAN_NAMES.PI_SESSION);
+  assert.equal(sessionSpan.attributes["pi.session.id"], "session-active-trace");
+  assert.equal(sessionSpan.attributes["pi.workflow.id"], telemetry.lineage.workflowId);
+  assert.equal(agentRunSpan.name, SPAN_NAMES.PI_AGENT_RUN);
+  assert.equal(agentRunSpan.parentSpan, sessionSpan);
+  assert.equal(agentRunSpan.ended, true);
+  assert.equal(sessionSpan.ended, false);
+  assert.deepEqual(telemetry.controller.flushCalls, []);
+  assert.deepEqual(telemetry.controller.shutdownCalls, []);
+
+  await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
+
+  assert.equal(sessionSpan.ended, true);
+  assert.ok(sessionSpan.events.some(event => event.name === LOG_EVENT_NAMES.SESSION_SHUTDOWN));
+  assert.deepEqual(telemetry.controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.deepEqual(telemetry.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+});
+
 test("agent-run and turn handlers create canonical child spans with derived turn ids", async () => {
   const pi = createFakePi();
   let telemetry;

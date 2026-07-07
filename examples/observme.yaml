@@ -106,20 +106,26 @@ observme:
     maxMetricSeries: 20
     maxAgents: 20
     links:
-      traceUrlTemplate: http://localhost:3000/explore?traceId=${traceId}
+      # Uses the supported bundled-stack Grafana Explore fallback.
+      traceUrlTemplate: https://observability.local/explore?left=...
     grafana:
-      url: http://localhost:3000
+      # Supported local command path: Grafana behind nginx HTTPS.
+      url: https://observability.local
+      # Preferred: set a Grafana service-account token in this env var.
       token: ${OBSERVME_GRAFANA_TOKEN}
+      # Local fallback: set OBSERVME_GRAFANA_PASSWORD from observability-stack/secrets/grafana_admin_password.
       username: "admin"
-      password: "admin"
+      password: ${OBSERVME_GRAFANA_PASSWORD}
       datasourceUids:
         tempo: tempo
         loki: loki
         prometheus: prometheus
       tls:
-        insecureSkipVerify: false
+        # Local self-signed certificate only; keep false for production CAs.
+        insecureSkipVerify: true
       transport:
-        preferIPv4: false
+        # Avoid observability.local resolving to an unreachable IPv6 loopback first.
+        preferIPv4: true
 
   shutdown:
     flushTimeoutMs: 3000

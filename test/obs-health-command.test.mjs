@@ -124,6 +124,7 @@ test("/obs health reports unresolved Grafana auth before making Grafana calls", 
   assert.equal(notifications[0].type, "warning");
   assert.match(notifications[0].message, /Collector: reachable/u);
   assert.match(notifications[0].message, /Grafana: unreachable \(Grafana query configuration is not ready: .*query\.grafana\.token is unresolved/u);
+  assert.match(notifications[0].message, /Next: check query\.grafana\.url and credentials, then rerun \/obs health\./u);
   assert.doesNotMatch(notifications[0].message, /\$\{OBSERVME_GRAFANA_TOKEN\}/u);
 });
 
@@ -149,7 +150,7 @@ test("/obs health reports an unreachable Collector without throwing", async () =
 
   assert.equal(notifications.length, 1);
   assert.equal(notifications[0].type, "warning");
-  assert.match(notifications[0].message, /Collector: unreachable \(connect ECONNREFUSED\)/u);
+  assert.match(notifications[0].message, /Collector: unreachable \(connect ECONNREFUSED Next: verify the Collector is running and otlp\.endpoint is reachable\.\)/u);
   assert.match(notifications[0].message, /Grafana: reachable/u);
 });
 

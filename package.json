@@ -28,6 +28,7 @@
     "node": ">=22.19.0"
   },
   "files": [
+    ".env.example",
     "README.md",
     "LICENSE",
     "SECURITY.md",
@@ -51,10 +52,12 @@
     "smoke:packaged": "node scripts/smoke-packaged-install.mjs",
     "smoke:handlers": "node scripts/smoke-handler-execution.mjs",
     "smoke:pi-lifecycle": "node scripts/smoke-pi-lifecycle.mjs",
-    "check": "node --check scripts/check-package-contents.mjs && node --check scripts/test-coverage.mjs && node --check scripts/smoke-observability.mjs && node --check scripts/smoke-packaged-install.mjs && node --check scripts/smoke-handler-execution.mjs && node --check scripts/smoke-pi-lifecycle.mjs",
+    "smoke:pi-runtime": "node scripts/smoke-pi-runtime.mjs",
+    "validate:grafana-obs": "node scripts/validate-grafana-obs-flow.mjs",
+    "check": "node --check scripts/check-package-contents.mjs && node --check scripts/test-coverage.mjs && node --check scripts/smoke-observability.mjs && node --check scripts/smoke-packaged-install.mjs && node --check scripts/smoke-handler-execution.mjs && node --check scripts/smoke-pi-lifecycle.mjs && node --check scripts/smoke-pi-runtime.mjs && node --check scripts/validate-grafana-obs-flow.mjs",
     "pack:dry-run": "npm pack --dry-run --json",
     "check:pack": "node scripts/check-package-contents.mjs",
-    "validate": "npm run lint && npm run test && npm run check:pack && npm run smoke:packaged && npm run smoke:handlers && npm run smoke:pi-lifecycle"
+    "validate": "npm run lint && npm run test && npm run check:pack && npm run smoke:packaged && npm run smoke:handlers && npm run smoke:pi-lifecycle && npm run smoke:pi-runtime"
   },
   "pi": {
     "extensions": [

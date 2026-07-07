@@ -165,6 +165,9 @@ OBSERVME_GRAFANA_URL
 OBSERVME_GRAFANA_TOKEN
 OBSERVME_GRAFANA_USERNAME
 OBSERVME_GRAFANA_PASSWORD
+OBSERVME_GRAFANA_TEMPO_DATASOURCE_UID
+OBSERVME_GRAFANA_LOKI_DATASOURCE_UID
+OBSERVME_GRAFANA_PROMETHEUS_DATASOURCE_UID
 OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY
 OBSERVME_GRAFANA_PREFER_IPV4
 OBSERVME_HASH_SALT
@@ -199,8 +202,11 @@ Rules:
 1. Defaults
 2. Global config (`~/.pi/agent/observme.yaml`)
 3. Project config (`<cwd>/<CONFIG_DIR_NAME>/observme.yaml`, normally `.pi/observme.yaml`) only when `ctx.isProjectTrusted()` is true
-4. Environment variables
-5. Explicit runtime options
+4. Project env file (`<cwd>/.env`) only when `ctx.isProjectTrusted()` is true
+5. System environment variables
+6. Explicit runtime options
+
+Copy `.env.example` to `.env` for project-local extension variables, or export the same `OBSERVME_*` names in the shell before starting Pi. System environment variables override `.env` values, and `.env` must never be committed.
 
 ## 5. Safe Production Defaults
 
@@ -242,15 +248,17 @@ capture:
 
 ## 7. Local Grafana Query Development
 
-For the bundled `observability-stack/` behind `https://observability.local`, use a supported local-only query configuration such as:
+For the bundled `observability-stack/`, the supported `/obs` command path is authenticated Grafana through nginx HTTPS at `https://observability.local`. The default stack does not publish Grafana on `localhost:3000`; use a direct `http://127.0.0.1:<port>` Grafana URL only for tests or a custom Compose override.
 
 ```yaml
 query:
   enabled: true
+  links:
+    traceUrlTemplate: https://observability.local/explore?left=...
   grafana:
     url: https://observability.local
-    token: ${OBSERVME_GRAFANA_TOKEN}      # preferred for service-account/bearer auth when set
-    username: admin                       # optional local Basic auth fallback
+    token: ${OBSERVME_GRAFANA_TOKEN}      # preferred service-account/bearer token
+    username: admin                       # local Basic auth fallback
     password: ${OBSERVME_GRAFANA_PASSWORD}
     datasourceUids:
       tempo: tempo
@@ -259,17 +267,20 @@ query:
     tls:
       insecureSkipVerify: true            # local self-signed cert only
     transport:
-      preferIPv4: true                    # avoids localhost/observability.local IPv6 stalls
+      preferIPv4: true                    # avoids observability.local IPv6 stalls
 ```
 
 Rules:
 
+- Create a Grafana service-account token with Viewer access for read-only datasource queries and export it as `OBSERVME_GRAFANA_TOKEN`, or export/set `OBSERVME_GRAFANA_PASSWORD` from `observability-stack/secrets/grafana_admin_password` for local Basic auth. These values may come from system environment variables or a trusted project `.env` copied from `.env.example`.
+- Browser login cookies are not used by the extension; `/obs` commands call the Grafana API directly from the Pi process.
 - A resolved `query.grafana.token` is sent as `Authorization: Bearer ...` and takes precedence.
 - When the token is blank or an unresolved placeholder, a resolved `query.grafana.username` and `query.grafana.password` are sent as Basic auth for local development.
-- Query-backed commands and `/obs health` must fail fast before Grafana calls when `query.grafana.token` is unresolved, auth is missing/incomplete, `query.grafana.url` is invalid, or a required datasource UID is blank.
+- Query-backed commands and `/obs health` must fail fast before Grafana calls when Grafana auth is unresolved/missing/incomplete, `query.grafana.url` is invalid, or a required datasource UID is blank.
 - `/obs health` must report Grafana `401`/`403` responses as authentication failures and must not print token or password values.
 - `tls.insecureSkipVerify=true` is only for local self-signed certificates; production should trust the CA instead.
 - `transport.preferIPv4=true` uses Node's local HTTP(S) transport with IPv4 DNS lookup for Grafana calls.
+- Provisioned datasource UIDs are `tempo`, `loki`, and `prometheus`; Loki selectors use normalized labels such as `service_name`, `pi_session_id`, `event_name`, and `event_category` for ObservMe data.
 
 ## 8. Unsafe Debug Mode
 

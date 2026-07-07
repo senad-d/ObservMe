@@ -19,7 +19,7 @@ A production-ready observability stack powered by **Grafana**, **Prometheus**, *
 ## Quick Start (Local)
 1. **Move into the stack directory:**
    ```bash
-   cd observability
+   cd observability-stack
    ```
 
 2. **Create the environment file:**
@@ -54,12 +54,46 @@ A production-ready observability stack powered by **Grafana**, **Prometheus**, *
    - User: `admin` (or `GRAFANA_ADMIN_USER` in `.env`)
    - Password: value from `secrets/grafana_admin_password`
 
-## Configuration
-- **Environment variables** are in `observability/.env`.
-- **Service configs** live under `observability/config/`.
-- **Nginx** configuration is at `observability/nginx/nginx.conf`.
+## ObservMe `/obs` Command Query Profile
 
-> **Domain changes:** If you change `OBSERVABILITY_DOMAIN`, update `nginx/nginx.conf` and the TLS certificate filenames in `observability/secrets/`.
+The supported local command path is authenticated Grafana through nginx HTTPS:
+
+```yaml
+query:
+  enabled: true
+  links:
+    traceUrlTemplate: https://observability.local/explore?left=...
+  grafana:
+    url: https://observability.local
+    token: ${OBSERVME_GRAFANA_TOKEN}
+    username: admin
+    password: ${OBSERVME_GRAFANA_PASSWORD}
+    datasourceUids:
+      tempo: tempo
+      loki: loki
+      prometheus: prometheus
+    tls:
+      insecureSkipVerify: true
+    transport:
+      preferIPv4: true
+```
+
+Token setup options:
+
+- Preferred: in Grafana, open Administration → Users and access → Service accounts, create a service account/token with Viewer access for read-only datasource queries, and export it as `OBSERVME_GRAFANA_TOKEN` before starting Pi.
+- Local fallback: export `OBSERVME_GRAFANA_PASSWORD="$(cat secrets/grafana_admin_password)"` from this directory so ObservMe can use Basic auth with `username: admin`.
+- Env-file option: copy the repository-root `.env.example` to `.env`, fill either `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_PASSWORD`, and restart Pi from that trusted project. System environment variables override `.env` values.
+
+Browser login cookies are not used by the extension; `/obs health`, `/obs cost`, `/obs tools`, `/obs errors`, `/obs logs`, `/obs agents`, and `/obs trace --session` call the Grafana API directly. The self-signed local certificate requires `tls.insecureSkipVerify: true` for this local profile, and `transport.preferIPv4: true` avoids stalls when `observability.local` resolves to IPv6 first.
+
+Provisioned datasource UIDs are `tempo`, `loki`, and `prometheus`. The Collector inserts `service.name=observme-pi-extension`; Loki receives normalized query labels including `service_name`, `pi_session_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, confirm the env vars above are set in the Pi process, then run `/obs health` and check Grafana auth, datasource UID, TLS, and DNS details.
+
+## Configuration
+- **Stack service variables** are in `observability-stack/.env`; **extension variables** can be exported in your shell or placed in the repository-root `.env` copied from `.env.example`.
+- **Service configs** live under `observability-stack/config/`.
+- **Nginx** configuration is at `observability-stack/nginx/nginx.conf`.
+
+> **Domain changes:** If you change `OBSERVABILITY_DOMAIN`, update `nginx/nginx.conf` and the TLS certificate filenames in `observability-stack/secrets/`.
 
 ## Telemetry Ingestion
 The OpenTelemetry Collector listens on:
@@ -111,9 +145,9 @@ Disk metric semantics can vary by runtime and storage driver. If `container_fs_u
 
 ## TLS Certificates
 - **Local development:** use `scripts/generate-dev-cert.sh`.
-- **Let’s Encrypt rotation:** use `scripts/rotate_cert.sh` (see `observability/scripts/README.md`).
+- **Let’s Encrypt rotation:** use `scripts/rotate_cert.sh`.
 
-Certificates are stored in `observability/secrets/` and are **gitignored**.
+Certificates are stored in `observability-stack/secrets/` and are **gitignored**.
 
 ## EC2 Bootstrap (Optional)
 The `ec2/userdata.sh` script provisions Docker, pulls the repo, configures secrets, requests TLS certs, and starts the stack. It expects several environment variables (domain, repo URL/ref, Grafana credentials, and Let’s Encrypt settings).
@@ -121,7 +155,7 @@ The `ec2/userdata.sh` script provisions Docker, pulls the repo, configures secre
 See `ec2/userdata.sh` for the full list of required variables and behavior.
 
 ## Operations
-Common commands from `observability`:
+Common commands from `observability-stack`:
 ```bash
 # Start
 docker compose up -d
@@ -137,6 +171,6 @@ docker compose logs -f
 ```
 
 ## Security Notes
-- Secrets in `deploy/observability/secrets/` are not versioned.
+- Secrets in `observability-stack/secrets/` are not versioned.
 - Grafana admin password is reset from the secret on startup.
 - TLS is terminated at Nginx; ensure certificates match your domain.

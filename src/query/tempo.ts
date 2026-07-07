@@ -1,11 +1,6 @@
 import type { ObservMeConfig } from "../config/schema.ts";
-import type { GrafanaFetch } from "./grafana-transport.ts";
-import {
-  createGrafanaHeaders,
-  formatGrafanaFetchFailure,
-  formatGrafanaHttpFailure,
-  resolveGrafanaFetch,
-} from "./grafana-transport.ts";
+import type { GrafanaFetch, GrafanaTransportClient } from "./grafana-transport.ts";
+import { createGrafanaTransport } from "./grafana-transport.ts";
 import { assertGrafanaQueryReady } from "./grafana-readiness.ts";
 import {
   AGENT_RUN_ATTRIBUTES,
@@ -49,7 +44,6 @@ interface NormalizedTimeRange {
   readonly to: Date;
 }
 
-const minimumTimeoutMs = 1;
 const minimumMaxTraces = 1;
 const maxTempoSearchAttributes = 8;
 const maxTempoSearchAttributeValueLength = 256;
@@ -114,15 +108,15 @@ const generatedCorrelationAttributeKeys = new Set<string>([
 
 export class TempoQueryClient {
   readonly #config: ObservMeConfig;
-  readonly #fetcher: TempoFetch;
+  readonly #transport: GrafanaTransportClient;
 
   constructor(config: ObservMeConfig, options: TempoQueryClientOptions = {}) {
     this.#config = config;
-    this.#fetcher = resolveGrafanaFetch(config, options.fetch);
+    this.#transport = createGrafanaTransport(config, options);
   }
 
   async searchTempo(attrs: Record<string, string>, range: TimeRange): Promise<TraceSummary[]> {
-    return searchTempo(this.#config, attrs, range, { fetch: this.#fetcher });
+    return searchTempoWithTransport(this.#config, this.#transport, attrs, range);
   }
 }
 
@@ -139,16 +133,25 @@ export async function searchTempo(
   range: TimeRange,
   options: TempoQueryClientOptions = {},
 ): Promise<TraceSummary[]> {
+  return searchTempoWithTransport(config, createGrafanaTransport(config, options), attrs, range);
+}
+
+async function searchTempoWithTransport(
+  config: ObservMeConfig,
+  transport: GrafanaTransportClient,
+  attrs: Record<string, string>,
+  range: TimeRange,
+): Promise<TraceSummary[]> {
   if (!config.query.enabled) return [];
 
   assertGrafanaQueryReady(config, "tempo");
   const searchAttrs = normalizeTempoSearchAttributes(attrs);
   const timeRange = normalizeTimeRange(range);
   const maxTraces = resolveMaxTraces(config);
-  const url = createTempoSearchUrl(config, searchAttrs, timeRange, maxTraces);
-  const response = await fetchTempoSearch(url, config, resolveGrafanaFetch(config, options.fetch));
+  const url = createTempoSearchUrl(config, transport, searchAttrs, timeRange, maxTraces);
+  const response = await transport.fetch(url, { timeoutMessage: "Tempo search timed out." });
 
-  return readTempoTraceSummaries(response, config, maxTraces);
+  return readTempoTraceSummaries(response, transport, maxTraces);
 }
 
 function normalizeTempoSearchAttributes(attrs: Record<string, string>): NormalizedTempoSearchAttribute[] {
@@ -240,20 +243,18 @@ function normalizeDate(value: Date, label: string): Date {
 
 function createTempoSearchUrl(
   config: ObservMeConfig,
+  transport: GrafanaTransportClient,
   attrs: readonly NormalizedTempoSearchAttribute[],
   range: NormalizedTimeRange,
   maxTraces: number,
-): string {
-  const url = buildGrafanaApiUrl(
-    config.query.grafana.url,
-    `/api/datasources/proxy/uid/${encodeURIComponent(config.query.grafana.datasourceUids.tempo)}/api/search`,
-  );
+): URL {
+  const url = transport.datasourceProxyUrl(config.query.grafana.datasourceUids.tempo, "/api/search");
 
   url.searchParams.set("tags", buildTempoTagsQuery(attrs));
   url.searchParams.set("start", formatEpochSeconds(range.from, "floor"));
   url.searchParams.set("end", formatEpochSeconds(range.to, "ceil"));
   url.searchParams.set("limit", String(maxTraces));
-  return url.toString();
+  return url;
 }
 
 function buildTempoTagsQuery(attrs: readonly NormalizedTempoSearchAttribute[]): string {
@@ -274,45 +275,12 @@ function formatEpochSeconds(date: Date, direction: "floor" | "ceil"): string {
   return String(rounded);
 }
 
-function buildGrafanaApiUrl(baseUrl: string, apiPath: string): URL {
-  const url = new URL(baseUrl);
-  const basePath = url.pathname.replace(/\/+$/u, "");
-  const path = apiPath.replace(/^\/+/, "");
-  url.pathname = `${basePath}/${path}`;
-  url.search = "";
-  url.hash = "";
-  return url;
-}
-
-async function fetchTempoSearch(url: string, config: ObservMeConfig, fetcher: TempoFetch): Promise<Response> {
-  const timeoutMs = resolveQueryTimeoutMs(config);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    return await fetcher(url, {
-      method: "GET",
-      headers: createGrafanaHeaders(config),
-      signal: controller.signal,
-    });
-  } catch (error) {
-    throw normalizeTempoFetchError(error);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function normalizeTempoFetchError(error: unknown): Error {
-  if (isAbortError(error)) return new Error("Tempo search timed out.");
-  return new Error(formatGrafanaFetchFailure(error));
-}
-
 async function readTempoTraceSummaries(
   response: Response,
-  config: ObservMeConfig,
+  transport: GrafanaTransportClient,
   maxTraces: number,
 ): Promise<TraceSummary[]> {
-  if (!response.ok) throw new Error(`Tempo search failed: ${formatGrafanaHttpFailure(response, config)}`);
+  if (!response.ok) throw new Error(`Tempo search failed: ${transport.formatHttpFailure(response)}`);
 
   const payload = (await response.json()) as unknown;
   const traces = extractTempoTraceItems(payload);
@@ -375,22 +343,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function resolveQueryTimeoutMs(config: ObservMeConfig): number {
-  const timeoutMs = config.query.timeoutMs;
-  if (!Number.isFinite(timeoutMs) || timeoutMs < minimumTimeoutMs) return minimumTimeoutMs;
-  return Math.trunc(timeoutMs);
-}
-
 function resolveMaxTraces(config: ObservMeConfig): number {
   const maxTraces = config.query.maxTraces;
   if (!Number.isFinite(maxTraces) || maxTraces < minimumMaxTraces) return minimumMaxTraces;
   return Math.trunc(maxTraces);
-}
-
-function isAbortError(error: unknown): boolean {
-  return isNamedError(error) && error.name === "AbortError";
-}
-
-function isNamedError(error: unknown): error is { name: string } {
-  return typeof error === "object" && error !== null && "name" in error && typeof error.name === "string";
 }

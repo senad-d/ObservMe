@@ -4,6 +4,7 @@ import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { LokiFetch } from "../query/loki.ts";
 import { createLokiQueryClient } from "../query/loki.ts";
+import { appendObsRecoveryHint, formatObsCommandFailure, readObsDiagnosticMessage, type ObsCommandRecoveryHint } from "./obs-diagnostics.ts";
 import type { ObsLokiLogSummaryRow, ObsLokiTimeRangeOptions } from "./obs-loki-summary.ts";
 import {
   createRecentObsLokiTimeRange,
@@ -54,6 +55,9 @@ export const OBS_LOGS_LOGQL_PREFIX = '{service_name="observme-pi-extension", pi_
 const OBS_COMMAND_NAME = "obs";
 const OBS_LOGS_SUBCOMMAND = "logs";
 const OBS_LOGS_USAGE = "Usage: /obs logs";
+const OBS_LOGS_LOKI_ERROR_NEXT_ACTION = "run /obs health and verify query.grafana.url, Grafana credentials, the Loki datasource UID, and service labels.";
+const OBS_LOGS_SESSION_ERROR_NEXT_ACTION = "run /obs session to confirm a current session before /obs logs.";
+const OBS_LOGS_NO_LOGS_NEXT_ACTION = "wait for telemetry export, then verify Loki labels and datasource with /obs health.";
 const safeSessionIdPattern = /^[A-Za-z0-9._:-]{1,256}$/u;
 const sensitiveSessionIdValuePatterns = [
   /(?:^|\b)(?:prompt|system prompt|user prompt|assistant response|thinking|raw content)(?:\b|:)/iu,
@@ -86,7 +90,7 @@ export async function handleObsLogsCommand(
     const snapshot = await resolveObsLogsSnapshot(ctx, options);
     await notifyLogs(ctx, renderObsLogs(snapshot), "info");
   } catch (error) {
-    await notifyLogs(ctx, `ObservMe logs unavailable: ${formatError(error)}`, "error");
+    await notifyLogs(ctx, formatObsCommandFailure("ObservMe logs unavailable", error, resolveObsLogsDiagnostic(error)), "error");
   }
 }
 
@@ -125,7 +129,7 @@ export function renderObsLogs(snapshot: ObsLogsSnapshot): string {
     window: snapshot.window,
     maxLogs: snapshot.maxLogs,
     rows: snapshot.logs,
-    emptyMessage: "No session logs found.",
+    emptyMessage: appendObsRecoveryHint("No session logs found.", OBS_LOGS_NO_LOGS_NEXT_ACTION),
   });
 }
 
@@ -216,6 +220,14 @@ async function notifyLogs(
   await ctx.ui.notify(message, type);
 }
 
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function resolveObsLogsDiagnostic(error: unknown): ObsCommandRecoveryHint {
+  if (isObsLogsSessionErrorMessage(readObsDiagnosticMessage(error))) {
+    return { subsystem: "Session", nextAction: OBS_LOGS_SESSION_ERROR_NEXT_ACTION };
+  }
+
+  return { subsystem: "Loki", nextAction: OBS_LOGS_LOKI_ERROR_NEXT_ACTION };
+}
+
+function isObsLogsSessionErrorMessage(message: string): boolean {
+  return /current ObservMe session id|Unsafe ObservMe session id/u.test(message);
 }

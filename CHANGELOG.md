@@ -2,7 +2,15 @@
 
 ## 0.1.0 - 2026-07-07
 
+- Added a root `.env.example` and trusted-project `.env` loading for extension `OBSERVME_*` settings, with system environment variables taking precedence and Grafana datasource UID env overrides documented/tested.
+- Added a deterministic, secret-safe Grafana + `/obs` validation flow with a documented checklist and `npm run validate:grafana-obs` script that classifies ingestion, label, Grafana auth/query, TLS/DNS, Pi command, and session-state failures.
+- Added secret-safe `/obs status` config diagnostics for trusted, untrusted, and missing project config contexts, including effective config source, Grafana URL, and query-readiness reporting.
+- Documented and tested active-session trace visibility: `/obs trace` now explains that ended child spans can appear before the long-lived root `pi.session` span, which is exported after `session_shutdown`.
+- Added a real Pi RPC runtime smoke test that loads the local extension, discovers `/obs`, runs `/obs status`, `/obs session`, and `/obs health`, and verifies trusted project config plus authenticated Grafana health probes against a local deterministic backend.
 - Added live Grafana-stack `/obs` command integration coverage for authenticated datasource queries and status, health, cost, tools, errors, logs, agents, trace, and link smoke paths.
+- Added concise, secret-safe `/obs` query-command diagnostics with subsystem-specific recovery hints for Grafana auth, Prometheus, Loki, Tempo, session, timeout, empty-result, and health failures.
+- Documented and tested the supported local-stack `/obs` query profile for nginx HTTPS Grafana at `https://observability.local`, including token/Basic auth setup, datasource UIDs, TLS/IPv4 settings, and Loki label expectations.
+- Consolidated Grafana URL construction, datasource proxy paths, auth headers, timeout handling, local transport selection, and secret-safe HTTP/fetch error normalization behind one shared query transport used by `/obs health`, Prometheus, Loki, Tempo, and Grafana health clients.
 - Added Grafana query readiness preflight so query-backed `/obs` commands and `/obs health` fail fast on unresolved tokens, missing auth, invalid Grafana URLs, or missing datasource UIDs without exposing credential values.
 - Added resilient Grafana query transport/auth handling for `/obs` commands: bearer tokens, local Basic auth fallback, local self-signed TLS and IPv4 transport options, and secret-safe 401/403/TLS/DNS/timeout diagnostics.
 - Aligned Loki label provisioning, `/obs errors` and `/obs logs` LogQL, and Loki-backed dashboard selectors with the local Collector output, including `service.name`, `event_name`, `event_category`, and session labels.

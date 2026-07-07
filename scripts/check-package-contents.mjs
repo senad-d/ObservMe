@@ -4,9 +4,10 @@ import { readFileSync } from "node:fs";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const hiddenEnvironmentFilePattern = /^\.env(?:$|\.)/;
+const allowedEnvironmentExampleFiles = new Set([".env.example"]);
 
 const forbiddenChecks = [
-  { label: "environment files", test: (path) => hiddenEnvironmentFilePattern.test(path) },
+  { label: "environment files", test: path => hiddenEnvironmentFilePattern.test(path) && !allowedEnvironmentExampleFiles.has(path) },
   { label: "project-local pi state", test: (path) => path === ".pi" || path.startsWith(".pi/") },
   { label: "node_modules", test: (path) => path.startsWith("node_modules/") || path.includes("/node_modules/") },
   { label: "planning specs", test: (path) => path.startsWith("specs/") || path.includes("/specs/") },

@@ -111,7 +111,7 @@ All commands are registered under `/obs`.
 
 | Command | Description | Backend access |
 | --- | --- | --- |
-| `/obs status` | Shows local ObservMe enablement, OTLP endpoint, signal enablement, capture flags, queue drops, and last export error. | Local state only |
+| `/obs status` | Shows local ObservMe enablement, OTLP endpoint, config source/trust status, Grafana query URL/readiness, signal enablement, capture flags, queue drops, and last export error. | Local state only |
 | `/obs health` | Checks Collector, Grafana, and configured datasource reachability with bounded timeouts. | Collector/Grafana |
 | `/obs session` | Shows current-session turn, LLM-call, tool-call, cost, and trace-link state from runtime counters. | Local state only |
 | `/obs cost` | Queries Prometheus/Mimir for safe model/provider token and cost aggregates. | Prometheus/Mimir via Grafana |
@@ -124,6 +124,8 @@ All commands are registered under `/obs`.
 | `/obs backfill` | Optional historical replay for the current session with explicit confirmation, replay markers, redaction, and export rate limits. | OTLP export when confirmed |
 
 Query-backed commands enforce configured timeouts and result limits and reject raw prompt, command, path, or other sensitive query inputs.
+
+Trace visibility note: `/obs trace` and `/obs session` can link to the current trace as soon as `session_start` creates it. During an active Pi session, Tempo may show ended child spans before the long-lived root `pi.session` span appears; the canonical root span is ended, flushed, and visible after `session_shutdown`.
 
 ## Architecture
 
@@ -152,7 +154,7 @@ ObservMe supports layered configuration with this precedence:
 defaults → global ~/.pi/agent/observme.yaml → trusted project config → environment variables → runtime options
 ```
 
-Factory-safe loading uses defaults/global/environment/runtime options only. Session-scoped loading can add trusted project config when Pi marks the project trusted.
+Factory-safe loading uses defaults/global/environment/runtime options only. Session-scoped loading can add trusted project config when Pi marks the project trusted. `/obs status` reports the effective config source, whether project-local `.pi/observme.yaml` was loaded, skipped because the project is untrusted, or missing, plus the configured Grafana URL and query-readiness status without rendering tokens or passwords. In untrusted projects, ObservMe does not read project-local config and uses safe defaults/global/environment layers instead.
 
 Default capture policy:
 
@@ -178,7 +180,33 @@ When optional content capture is enabled, the redaction pipeline applies size gu
 
 Metadata such as token counts, duration, status, model/provider, tool name, and agent role/depth is captured by default. High-cardinality identifiers (session IDs, workflow IDs, agent IDs, trace/span IDs, entry IDs) are allowed on spans/logs for drill-down but are blocked from Prometheus metric labels.
 
-Grafana-backed query commands prefer `query.grafana.token` bearer/service-account auth. For the bundled local stack, you can use `query.grafana.username` plus `query.grafana.password`, `query.grafana.tls.insecureSkipVerify: true`, and `query.grafana.transport.preferIPv4: true` for `https://observability.local`; query commands and `/obs health` fail fast on unresolved tokens, missing auth, invalid Grafana URLs, or missing datasource UIDs, and report `401`/`403`, TLS, DNS, and timeout failures without printing secrets.
+Grafana-backed query commands use the Grafana HTTP API, so browser login cookies are irrelevant. Configure either a Grafana service-account token (`OBSERVME_GRAFANA_TOKEN`) or local Basic auth (`OBSERVME_GRAFANA_USERNAME`/`OBSERVME_GRAFANA_PASSWORD`); token auth takes precedence and secrets are never rendered in command errors. You can supply these values as system environment variables before starting Pi, or copy `.env.example` to `.env` in a trusted project; system environment variables override `.env` values.
+
+### Supported local-stack query profile
+
+The bundled `observability-stack/` supports `/obs` query commands through authenticated Grafana behind nginx HTTPS at `https://observability.local`. The default Compose stack does not publish Grafana on `localhost:3000`; use that direct HTTP path only if you add your own override.
+
+```yaml
+query:
+  enabled: true
+  links:
+    traceUrlTemplate: https://observability.local/explore?left=...
+  grafana:
+    url: https://observability.local
+    token: ${OBSERVME_GRAFANA_TOKEN}
+    username: admin
+    password: ${OBSERVME_GRAFANA_PASSWORD}
+    datasourceUids:
+      tempo: tempo
+      loki: loki
+      prometheus: prometheus
+    tls:
+      insecureSkipVerify: true
+    transport:
+      preferIPv4: true
+```
+
+Create a Grafana service-account token in Grafana (Administration → Users and access → Service accounts → Add service account/token; Viewer is enough for read-only datasource queries) and export it as `OBSERVME_GRAFANA_TOKEN`, or for local-only Basic auth export `OBSERVME_GRAFANA_PASSWORD="$(cat observability-stack/secrets/grafana_admin_password)"`. If you prefer a project-local env file, run `cp .env.example .env`, fill either `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_PASSWORD`, then restart Pi from that project. The local Collector and Loki profile uses `service.name=observme-pi-extension`; Loki queries use normalized labels such as `service_name`, `pi_session_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, run `/obs health` and check the Pi process environment, Grafana auth, datasource UIDs, TLS, and DNS details.
 
 Full configuration schema: `ObservMe-Production-Docs/12-configuration-reference.md`. Full redaction/privacy design: `ObservMe-Production-Docs/06-security-privacy-redaction.md`.
 
@@ -199,7 +227,7 @@ See [`SECURITY.md`](SECURITY.md) and `ObservMe-Production-Docs/06-security-priva
 - Grafana dashboards: `dashboards/observme-*.json`.
 - Alert rules: `dashboards/observme-alerts.yaml`.
 - SLO definitions: `dashboards/observme-slos.yaml`.
-- Minimal ObservMe config: `examples/observme.yaml`.
+- Supported local-stack ObservMe config: `examples/observme.yaml`.
 - Production Collector config with high-cardinality and content-drop processors: `examples/collector.yaml`.
 - Compatibility matrix: `docs/compatibility-matrix.md`.
 
@@ -243,8 +271,12 @@ npm run test
 npm run test:integration:collector
 npm run test:integration:grafana-stack
 npm run check:pack
+npm run smoke:pi-runtime
+npm run validate:grafana-obs
 pi --no-extensions -e .
 ```
+
+End-to-end troubleshooting flow: [`docs/validation-flow.md`](docs/validation-flow.md) provides a deterministic, secret-safe checklist and script for the common user-facing case where Grafana has data but `/obs` commands are failing.
 
 ## Publishing
 
@@ -254,6 +286,7 @@ ObservMe publishes to npm as `@senad-d/observme`. Run from a clean working tree 
 npm login
 npm whoami
 npm run validate
+npm run validate:grafana-obs  # with the release-candidate stack and Grafana query env configured
 npm version <version>
 npm publish --access public
 ```

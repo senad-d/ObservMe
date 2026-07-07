@@ -16,8 +16,8 @@ import {
   startObsSessionRuntimeState,
 } from "../commands/obs-session.ts";
 import { clearObsStatusExportError, recordObsStatusExportResult, recordObsStatusQueueDrop, updateObsStatusRuntimeState } from "../commands/obs-status.ts";
-import type { LoadSessionConfigOptions } from "../config/load-config.ts";
-import { loadSessionConfig } from "../config/load-config.ts";
+import type { LoadSessionConfigOptions, SessionConfigDiagnostics } from "../config/load-config.ts";
+import { loadSessionConfig, loadSessionConfigWithDiagnostics } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import { EXTENSION_DISPLAY_NAME, EXTENSION_STATUS_KEY } from "../constants.ts";
 import { emitUnsafeCaptureWarning } from "../config/validate.ts";
@@ -671,6 +671,17 @@ function isExistingSessionStart(event: unknown): boolean {
   return reason === "resume" || reason === "reload" || readBoolean(event, "resumed") === true || readBoolean(event, "existingSession") === true;
 }
 
+async function loadSessionConfigForHandler(
+  loadConfigFn: LoadSessionConfig,
+  options: RegisterHandlersOptions,
+  ctx: ObservMeHandlerContext,
+): Promise<{ readonly config: ObservMeConfig; readonly diagnostics?: SessionConfigDiagnostics }> {
+  const loadOptions = { ctx, cwd: ctx.cwd, configDirName: options.configDirName, env: options.env };
+
+  if (options.loadConfig) return { config: await loadConfigFn(loadOptions), diagnostics: undefined };
+  return loadSessionConfigWithDiagnostics(loadOptions);
+}
+
 function createSessionStartHandler(
   loadConfigFn: LoadSessionConfig,
   startTelemetryFn: StartSessionTelemetry,
@@ -678,7 +689,8 @@ function createSessionStartHandler(
   setSession: (session: ObservMeTelemetrySession) => void,
 ): Handler {
   return async (event, ctx) => {
-    const config = await loadConfigFn({ ctx, cwd: ctx.cwd, configDirName: options.configDirName, env: options.env });
+    const loadedConfig = await loadSessionConfigForHandler(loadConfigFn, options, ctx);
+    const config = loadedConfig.config;
     await emitUnsafeCaptureWarning(config, ctx);
 
     const recovery = await resolveStartupRecovery(event, ctx, config, options);
@@ -688,7 +700,7 @@ function createSessionStartHandler(
       trustedParentContext: options.trustedParentContext === true || Boolean(recovery.customCorrelation ?? recovery.header?.correlation),
     });
     const session = await startTelemetryFn({ config, lineage });
-    updateObsStatusRuntimeState({ config: session.config });
+    updateObsStatusRuntimeState({ config: session.config, configDiagnostics: loadedConfig.diagnostics });
     clearObsStatusExportError();
     setSession(session);
     const attributes = buildSessionAttributes(event, ctx, session.config, lineage, recovery);

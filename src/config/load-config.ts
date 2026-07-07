@@ -36,7 +36,26 @@ export interface LoadSessionConfigOptions extends LoadConfigOptions {
   cwd?: string;
   configDirName?: string;
   projectConfigPath?: string;
+  envFilePath?: string;
+  loadEnvFile?: boolean;
   isProjectTrusted?: boolean | (() => boolean | Promise<boolean>);
+}
+
+export type SessionConfigProjectStatus = "loaded" | "missing" | "skipped_untrusted";
+export type SessionConfigEffectiveSource = "runtime_options" | "environment" | "trusted_project" | "global" | "defaults";
+
+export interface SessionConfigDiagnostics {
+  readonly projectTrusted: boolean;
+  readonly projectConfigStatus: SessionConfigProjectStatus;
+  readonly effectiveSource: SessionConfigEffectiveSource;
+  readonly globalConfigLoaded: boolean;
+  readonly environmentOverrides: boolean;
+  readonly runtimeOptionsApplied: boolean;
+}
+
+export interface LoadSessionConfigResult {
+  readonly config: ObservMeConfig;
+  readonly diagnostics: SessionConfigDiagnostics;
 }
 
 interface ParsedYamlLine {
@@ -45,6 +64,7 @@ interface ParsedYamlLine {
 }
 
 const defaultConfigDirName = ".pi";
+const defaultEnvFileName = ".env";
 const observmeYamlFileName = "observme.yaml";
 
 export async function loadFactoryConfig(options: LoadConfigOptions = {}): Promise<ObservMeConfig> {
@@ -55,23 +75,44 @@ export async function loadFactoryConfig(options: LoadConfigOptions = {}): Promis
 }
 
 export async function loadSessionConfig(options: LoadSessionConfigOptions = {}): Promise<ObservMeConfig> {
+  return (await loadSessionConfigWithDiagnostics(options)).config;
+}
+
+export async function loadSessionConfigWithDiagnostics(options: LoadSessionConfigOptions = {}): Promise<LoadSessionConfigResult> {
   const globalConfig = await readConfigFile(resolveGlobalConfigPath(options), options);
   const projectTrusted = await resolveProjectTrust(options);
   const projectConfig = projectTrusted ? await readConfigFile(resolveProjectConfigPath(options), options) : undefined;
+  const envFile = await readTrustedProjectEnvFile(projectTrusted, options);
+  const environment = options.env ?? process.env;
+  const effectiveEnvironment = mergeEnvironment(envFile, environment);
+  const envFileConfig = envFile ? envToConfig(envFile) : undefined;
+  const environmentConfig = envToConfig(environment);
+  const diagnostics = createSessionConfigDiagnostics({
+    globalConfig,
+    projectConfig,
+    projectTrusted,
+    envFileConfig,
+    environmentConfig,
+    runtimeOptions: options.runtimeOptions,
+  });
   const config = mergeConfigLayers([
     defaultObservMeConfig,
     globalConfig,
     projectConfig,
-    envToConfig(options.env),
+    envFileConfig,
+    environmentConfig,
     options.runtimeOptions,
   ]);
 
-  return ensureValidObservMeConfig(config, {
-    env: options.env,
-    isProjectTrusted: projectTrusted,
-    projectConfigWasRead: Boolean(projectConfig),
-    logger: options.logger,
-  });
+  return {
+    config: ensureValidObservMeConfig(config, {
+      env: effectiveEnvironment,
+      isProjectTrusted: projectTrusted,
+      projectConfigWasRead: Boolean(projectConfig),
+      logger: options.logger,
+    }),
+    diagnostics,
+  };
 }
 
 export function mergeConfigLayers(layers: Array<DeepPartial<ObservMeConfig> | undefined>): ObservMeConfig {
@@ -107,6 +148,9 @@ export function envToConfig(env: NodeJS.ProcessEnv = process.env): DeepPartial<O
   setString(config, ["query", "grafana", "token"], env.OBSERVME_GRAFANA_TOKEN);
   setString(config, ["query", "grafana", "username"], env.OBSERVME_GRAFANA_USERNAME);
   setString(config, ["query", "grafana", "password"], env.OBSERVME_GRAFANA_PASSWORD);
+  setString(config, ["query", "grafana", "datasourceUids", "tempo"], env.OBSERVME_GRAFANA_TEMPO_DATASOURCE_UID);
+  setString(config, ["query", "grafana", "datasourceUids", "loki"], env.OBSERVME_GRAFANA_LOKI_DATASOURCE_UID);
+  setString(config, ["query", "grafana", "datasourceUids", "prometheus"], env.OBSERVME_GRAFANA_PROMETHEUS_DATASOURCE_UID);
   setBoolean(config, ["query", "grafana", "tls", "insecureSkipVerify"], env.OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY);
   setBoolean(config, ["query", "grafana", "transport", "preferIPv4"], env.OBSERVME_GRAFANA_PREFER_IPV4);
   setBoolean(config, ["capture", "prompts"], env.OBSERVME_CAPTURE_PROMPTS);
@@ -132,6 +176,59 @@ export function envToConfig(env: NodeJS.ProcessEnv = process.env): DeepPartial<O
   return config;
 }
 
+function createSessionConfigDiagnostics(options: {
+  readonly globalConfig?: DeepPartial<ObservMeConfig>;
+  readonly projectConfig?: DeepPartial<ObservMeConfig>;
+  readonly projectTrusted: boolean;
+  readonly envFileConfig?: DeepPartial<ObservMeConfig>;
+  readonly environmentConfig: DeepPartial<ObservMeConfig>;
+  readonly runtimeOptions?: DeepPartial<ObservMeConfig>;
+}): SessionConfigDiagnostics {
+  const globalConfigLoaded = options.globalConfig !== undefined;
+  const projectConfigStatus = resolveSessionConfigProjectStatus(options.projectTrusted, options.projectConfig);
+  const environmentOverrides = hasConfigLayer(options.envFileConfig) || hasConfigLayer(options.environmentConfig);
+  const runtimeOptionsApplied = hasConfigLayer(options.runtimeOptions);
+
+  return {
+    projectTrusted: options.projectTrusted,
+    projectConfigStatus,
+    effectiveSource: resolveSessionConfigEffectiveSource({
+      globalConfig: options.globalConfig,
+      projectConfig: options.projectConfig,
+      environmentOverrides,
+      runtimeOptionsApplied,
+    }),
+    globalConfigLoaded,
+    environmentOverrides,
+    runtimeOptionsApplied,
+  };
+}
+
+function resolveSessionConfigProjectStatus(
+  projectTrusted: boolean,
+  projectConfig: DeepPartial<ObservMeConfig> | undefined,
+): SessionConfigProjectStatus {
+  if (!projectTrusted) return "skipped_untrusted";
+  return projectConfig === undefined ? "missing" : "loaded";
+}
+
+function resolveSessionConfigEffectiveSource(options: {
+  readonly globalConfig?: DeepPartial<ObservMeConfig>;
+  readonly projectConfig?: DeepPartial<ObservMeConfig>;
+  readonly environmentOverrides: boolean;
+  readonly runtimeOptionsApplied: boolean;
+}): SessionConfigEffectiveSource {
+  if (options.runtimeOptionsApplied) return "runtime_options";
+  if (options.environmentOverrides) return "environment";
+  if (hasConfigLayer(options.projectConfig)) return "trusted_project";
+  if (hasConfigLayer(options.globalConfig)) return "global";
+  return "defaults";
+}
+
+function hasConfigLayer(layer: DeepPartial<ObservMeConfig> | undefined): boolean {
+  return layer !== undefined && Object.keys(layer).length > 0;
+}
+
 export function parseObservMeConfigText(text: string): DeepPartial<ObservMeConfig> {
   const parsed = text.trimStart().startsWith("{") ? (JSON.parse(text) as ConfigObject) : parseSimpleYaml(text);
   const observmeConfig = parsed.observme;
@@ -151,6 +248,26 @@ async function readConfigFile(
   } catch (error) {
     if (isMissingFileError(error)) return undefined;
     options.logger?.warn?.(`ObservMe config file ${path} was ignored: ${formatError(error)}`);
+    return undefined;
+  }
+}
+
+async function readTrustedProjectEnvFile(
+  projectTrusted: boolean,
+  options: LoadSessionConfigOptions,
+): Promise<NodeJS.ProcessEnv | undefined> {
+  if (!projectTrusted || options.loadEnvFile === false) return undefined;
+  return readEnvFile(resolveProjectEnvFilePath(options), options);
+}
+
+async function readEnvFile(path: string, options: LoadConfigOptions): Promise<NodeJS.ProcessEnv | undefined> {
+  try {
+    const text = await readOptionalText(path, options.readText ?? defaultReadConfigText);
+    if (!text || text.trim() === "") return undefined;
+    return parseEnvFileText(text);
+  } catch (error) {
+    if (isMissingFileError(error)) return undefined;
+    options.logger?.warn?.(`ObservMe env file ${path} was ignored: ${formatError(error)}`);
     return undefined;
   }
 }
@@ -178,11 +295,21 @@ function resolveProjectConfigPath(options: LoadSessionConfigOptions): string {
   return options.projectConfigPath ?? join(cwd, configDirName, observmeYamlFileName);
 }
 
+function resolveProjectEnvFilePath(options: LoadSessionConfigOptions): string {
+  const cwd = options.cwd ?? process.cwd();
+  return options.envFilePath ?? join(cwd, defaultEnvFileName);
+}
+
 async function resolveProjectTrust(options: LoadSessionConfigOptions): Promise<boolean> {
   if (typeof options.isProjectTrusted === "boolean") return options.isProjectTrusted;
   if (typeof options.isProjectTrusted === "function") return options.isProjectTrusted();
   if (typeof options.ctx?.isProjectTrusted === "function") return options.ctx.isProjectTrusted();
   return false;
+}
+
+function mergeEnvironment(envFile: NodeJS.ProcessEnv | undefined, environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (!envFile) return environment;
+  return { ...envFile, ...environment };
 }
 
 function cloneConfig<T>(value: T): T {
@@ -203,6 +330,84 @@ function deepMergeObjects(base: ConfigObject, overlay: ConfigObject): ConfigObje
   }
 
   return merged;
+}
+
+function parseEnvFileText(text: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  const lines = text.split(/\r?\n/u);
+
+  lines.forEach((line, index) => {
+    const entry = parseEnvFileLine(line, index + 1);
+    if (entry) env[entry.key] = entry.value;
+  });
+
+  return env;
+}
+
+function parseEnvFileLine(line: string, lineNumber: number): { key: string; value: string } | undefined {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) return undefined;
+
+  const assignment = stripEnvExportPrefix(trimmed);
+  const separatorIndex = assignment.indexOf("=");
+  if (separatorIndex <= 0) throw new Error(`Invalid .env line ${lineNumber}: expected KEY=value.`);
+
+  const key = assignment.slice(0, separatorIndex).trim();
+  if (!isValidEnvKey(key)) throw new Error(`Invalid .env line ${lineNumber}: environment variable name is invalid.`);
+
+  return { key, value: parseEnvValue(assignment.slice(separatorIndex + 1)) };
+}
+
+function stripEnvExportPrefix(line: string): string {
+  if (!line.startsWith("export ")) return line;
+  return line.slice("export ".length).trimStart();
+}
+
+function parseEnvValue(valueText: string): string {
+  const trimmed = valueText.trimStart();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("\"") || trimmed.startsWith("'")) return parseQuotedEnvValue(trimmed);
+  return stripEnvInlineComment(valueText).trim();
+}
+
+function parseQuotedEnvValue(valueText: string): string {
+  const closingIndex = findClosingEnvQuote(valueText);
+  if (closingIndex === -1) throw new Error("Invalid .env quoted value.");
+  return unquoteEnvValue(valueText.slice(0, closingIndex + 1));
+}
+
+function findClosingEnvQuote(valueText: string): number {
+  const quote = valueText[0];
+
+  for (let index = 1; index < valueText.length; index += 1) {
+    if (valueText[index] === quote && valueText[index - 1] !== "\\") return index;
+  }
+
+  return -1;
+}
+
+function unquoteEnvValue(valueText: string): string {
+  const quote = valueText[0];
+  const value = valueText.slice(1, -1);
+  if (quote === "'") return value;
+  return value.replace(/\\([nrt"\\])/gu, (_match, escaped: string) => decodeEscapedEnvCharacter(escaped));
+}
+
+function decodeEscapedEnvCharacter(escaped: string): string {
+  if (escaped === "n") return "\n";
+  if (escaped === "r") return "\r";
+  if (escaped === "t") return "\t";
+  return escaped;
+}
+
+function stripEnvInlineComment(valueText: string): string {
+  const commentIndex = valueText.search(/\s#/u);
+  if (commentIndex === -1) return valueText;
+  return valueText.slice(0, commentIndex);
+}
+
+function isValidEnvKey(key: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/u.test(key);
 }
 
 function parseSimpleYaml(text: string): ConfigObject {

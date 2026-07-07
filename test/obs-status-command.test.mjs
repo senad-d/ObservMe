@@ -17,13 +17,37 @@ function cloneDefaultConfig() {
   return structuredClone(defaultObservMeConfig);
 }
 
-function createCommandContext(notifications) {
+const trustedProjectConfigYaml = `
+observme:
+  environment: development
+  otlp:
+    endpoint: https://otel.project.test:4318
+  query:
+    grafana:
+      url: https://grafana.project.test
+      token: ""
+      username: smoke
+      password: smoke
+`;
+
+function createCommandContext(notifications, projectTrusted = false) {
   return {
     cwd: "/workspace/demo",
     ui: {
       notify: (message, type) => notifications.push({ message, type }),
     },
-    isProjectTrusted: () => false,
+    isProjectTrusted: () => projectTrusted,
+  };
+}
+
+function createReader(files, calls = []) {
+  return async path => {
+    calls.push(path);
+    if (Object.hasOwn(files, path)) return files[path];
+
+    const error = new Error(`Missing fixture ${path}`);
+    error.code = "ENOENT";
+    throw error;
   };
 }
 
@@ -64,6 +88,8 @@ test("renderObsStatus reports local enablement, signals, capture flags, drops, a
     [
       "ObservMe: enabled",
       "OTLP endpoint: http://localhost:4318",
+      "Grafana URL: https://grafana.example.com/",
+      "Grafana query readiness: not_ready (unresolved_grafana_token)",
       "Traces: enabled",
       "Metrics: disabled",
       "Logs: enabled",
@@ -109,6 +135,69 @@ test("/obs status uses local status state and makes no network call", async t =>
   assert.match(notifications[0].message, /OTLP endpoint: https:\/\/otel\.local:4318/u);
   assert.match(notifications[0].message, /Queue drops: 3/u);
   assert.match(notifications[0].message, /Last export error: flush timed out/u);
+});
+
+test("/obs status reports trusted project config source and Grafana query readiness", async t => {
+  resetObsStatusRuntimeState();
+  t.after(() => resetObsStatusRuntimeState());
+
+  const notifications = [];
+  const readCalls = [];
+  await handleObsStatusCommand("status", createCommandContext(notifications, true), {
+    globalConfigPath: "global.yaml",
+    projectConfigPath: "project.yaml",
+    readText: createReader({ "project.yaml": trustedProjectConfigYaml }, readCalls),
+    env: {},
+  });
+
+  assert.deepEqual(readCalls, ["global.yaml", "project.yaml", "/workspace/demo/.env"]);
+  assert.equal(notifications.length, 1);
+  assert.match(notifications[0].message, /OTLP endpoint: https:\/\/otel\.project\.test:4318/u);
+  assert.match(notifications[0].message, /Config source: trusted project config \(\.pi\/observme\.yaml\)/u);
+  assert.match(notifications[0].message, /Project config: loaded \(trusted \.pi\/observme\.yaml\)/u);
+  assert.match(notifications[0].message, /Grafana URL: https:\/\/grafana\.project\.test\//u);
+  assert.match(notifications[0].message, /Grafana query readiness: ready/u);
+});
+
+test("/obs status explains untrusted project config is skipped", async t => {
+  resetObsStatusRuntimeState();
+  t.after(() => resetObsStatusRuntimeState());
+
+  const notifications = [];
+  const readCalls = [];
+  await handleObsStatusCommand("status", createCommandContext(notifications, false), {
+    globalConfigPath: "global.yaml",
+    projectConfigPath: "project.yaml",
+    readText: createReader({ "project.yaml": trustedProjectConfigYaml }, readCalls),
+    env: {},
+  });
+
+  assert.deepEqual(readCalls, ["global.yaml"]);
+  assert.equal(notifications.length, 1);
+  assert.match(notifications[0].message, /OTLP endpoint: https:\/\/otel-collector\.example\.com:4318/u);
+  assert.match(notifications[0].message, /Config source: defaults/u);
+  assert.match(notifications[0].message, /Project config: skipped \(project is untrusted; safe defaults\/global\/env only\)/u);
+  assert.doesNotMatch(notifications[0].message, /otel\.project\.test/u);
+});
+
+test("/obs status explains missing trusted project config", async t => {
+  resetObsStatusRuntimeState();
+  t.after(() => resetObsStatusRuntimeState());
+
+  const notifications = [];
+  const readCalls = [];
+  await handleObsStatusCommand("status", createCommandContext(notifications, true), {
+    globalConfigPath: "global.yaml",
+    projectConfigPath: "project.yaml",
+    readText: createReader({}, readCalls),
+    env: {},
+  });
+
+  assert.deepEqual(readCalls, ["global.yaml", "project.yaml", "/workspace/demo/.env"]);
+  assert.equal(notifications.length, 1);
+  assert.match(notifications[0].message, /Config source: defaults/u);
+  assert.match(notifications[0].message, /Project config: missing \(trusted project has no \.pi\/observme\.yaml\)/u);
+  assert.match(notifications[0].message, /Grafana query readiness: not_ready \(unresolved_grafana_token\)/u);
 });
 
 test("obs command registers status completion and warns for unknown subcommands", async () => {

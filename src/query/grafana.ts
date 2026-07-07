@@ -1,11 +1,6 @@
 import type { ObservMeConfig } from "../config/schema.ts";
-import type { GrafanaFetch } from "./grafana-transport.ts";
-import {
-  createGrafanaHeaders,
-  formatGrafanaFetchFailure,
-  formatGrafanaHttpFailure,
-  resolveGrafanaFetch,
-} from "./grafana-transport.ts";
+import type { GrafanaTransportClient, GrafanaTransportOptions } from "./grafana-transport.ts";
+import { createGrafanaTransport } from "./grafana-transport.ts";
 import type { GrafanaQueryDatasourceKey } from "./grafana-readiness.ts";
 import { formatGrafanaQueryReadiness, getGrafanaQueryReadiness } from "./grafana-readiness.ts";
 
@@ -25,17 +20,13 @@ export interface GrafanaHealthResult {
   readonly checks: readonly GrafanaHealthCheckResult[];
 }
 
-export interface GrafanaQueryClientOptions {
-  readonly fetch?: GrafanaFetch;
-}
+export type GrafanaQueryClientOptions = GrafanaTransportOptions;
 
 interface GrafanaHealthTarget {
   readonly label: string;
   readonly kind: GrafanaHealthCheckKind;
-  readonly url: string;
-  readonly headers: Record<string, string>;
-  readonly config: ObservMeConfig;
-  readonly fallbackUrl?: string;
+  readonly url: URL;
+  readonly fallbackUrl?: URL;
 }
 
 interface GrafanaDatasourceDefinition {
@@ -77,7 +68,6 @@ interface GrafanaExplorePane {
 
 type GrafanaExplorePanes = Record<string, GrafanaExplorePane>;
 
-const minimumTimeoutMs = 1;
 const traceIdPattern = /^[a-f0-9]{32}$/iu;
 const zeroTraceIdPattern = /^0{32}$/u;
 const traceIdTemplatePattern = /\{\{\s*traceId\s*\}\}|\{traceId\}|\$\{traceId\}|%TRACE_ID%/u;
@@ -106,15 +96,15 @@ const traceTemplateReplacements: readonly TraceTemplateReplacement[] = [
 
 export class GrafanaQueryClient {
   readonly #config: ObservMeConfig;
-  readonly #fetcher: GrafanaFetch;
+  readonly #transport: GrafanaTransportClient;
 
   constructor(config: ObservMeConfig, options: GrafanaQueryClientOptions = {}) {
     this.#config = config;
-    this.#fetcher = resolveGrafanaFetch(config, options.fetch);
+    this.#transport = createGrafanaTransport(config, options);
   }
 
   async health(): Promise<GrafanaHealthResult> {
-    return getGrafanaHealth(this.#config, { fetch: this.#fetcher });
+    return getGrafanaHealthWithTransport(this.#config, this.#transport);
   }
 
   getTraceLink(traceId: string): string {
@@ -133,14 +123,19 @@ export async function getGrafanaHealth(
   config: ObservMeConfig,
   options: GrafanaQueryClientOptions = {},
 ): Promise<GrafanaHealthResult> {
-  const timeoutMs = resolveQueryTimeoutMs(config);
-  const fetcher = resolveGrafanaFetch(config, options.fetch);
+  return getGrafanaHealthWithTransport(config, createGrafanaTransport(config, options));
+}
+
+async function getGrafanaHealthWithTransport(
+  config: ObservMeConfig,
+  transport: GrafanaTransportClient,
+): Promise<GrafanaHealthResult> {
   const checks = await Promise.all([
-    checkGrafanaReachability(config, fetcher, timeoutMs),
-    ...createDatasourceDefinitions(config).map(datasource => checkDatasourceReachability(config, datasource, fetcher, timeoutMs)),
+    checkGrafanaReachability(config, transport),
+    ...createDatasourceDefinitions(config).map(datasource => checkDatasourceReachability(config, datasource, transport)),
   ]);
 
-  return { timeoutMs, checks };
+  return { timeoutMs: transport.timeoutMs, checks };
 }
 
 export function getGrafanaTraceLink(config: ObservMeConfig, traceId: string): string {
@@ -155,15 +150,14 @@ export function getGrafanaTraceLink(config: ObservMeConfig, traceId: string): st
 
 async function checkGrafanaReachability(
   config: ObservMeConfig,
-  fetcher: GrafanaFetch,
-  timeoutMs: number,
+  transport: GrafanaTransportClient,
 ): Promise<GrafanaHealthCheckResult> {
   const preflight = resolveGrafanaPreflightResult(config, "Grafana", "service");
   if (preflight) return preflight;
 
   try {
-    const target = createGrafanaHealthTarget(config);
-    return await checkGrafanaTarget(target, fetcher, timeoutMs);
+    const target = createGrafanaHealthTarget(transport);
+    return await checkGrafanaTarget(target, transport);
   } catch (error) {
     return failedHealthResult("Grafana", "service", error);
   }
@@ -172,15 +166,14 @@ async function checkGrafanaReachability(
 async function checkDatasourceReachability(
   config: ObservMeConfig,
   datasource: GrafanaDatasourceDefinition,
-  fetcher: GrafanaFetch,
-  timeoutMs: number,
+  transport: GrafanaTransportClient,
 ): Promise<GrafanaHealthCheckResult> {
   const preflight = resolveGrafanaPreflightResult(config, datasource.label, "datasource", datasource.key);
   if (preflight) return preflight;
 
   try {
-    const target = createDatasourceHealthTarget(config, datasource);
-    return await checkGrafanaTarget(target, fetcher, timeoutMs);
+    const target = createDatasourceHealthTarget(transport, datasource);
+    return await checkGrafanaTarget(target, transport);
   } catch (error) {
     return failedHealthResult(datasource.label, "datasource", error);
   }
@@ -188,77 +181,44 @@ async function checkDatasourceReachability(
 
 async function checkGrafanaTarget(
   target: GrafanaHealthTarget,
-  fetcher: GrafanaFetch,
-  timeoutMs: number,
+  transport: GrafanaTransportClient,
 ): Promise<GrafanaHealthCheckResult> {
   try {
-    const response = await fetchGrafanaTarget(target, fetcher, timeoutMs);
-    if (!shouldFetchGrafanaFallbackTarget(target, response)) return responseToHealthResult(target, response);
-    return responseToHealthResult(target, await fetchGrafanaFallbackTarget(target, fetcher, timeoutMs));
+    const response = await transport.fetch(target.url);
+    if (!shouldFetchGrafanaFallbackTarget(target, response)) return responseToHealthResult(target, response, transport);
+    return responseToHealthResult(target, await fetchGrafanaFallbackTarget(target, transport), transport);
   } catch (error) {
     return failedHealthResult(target.label, target.kind, error);
   }
 }
 
-async function fetchGrafanaTarget(target: GrafanaHealthTarget, fetcher: GrafanaFetch, timeoutMs: number): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    return await fetcher(target.url, {
-      method: "GET",
-      headers: target.headers,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function createGrafanaHealthTarget(config: ObservMeConfig): GrafanaHealthTarget {
+function createGrafanaHealthTarget(transport: GrafanaTransportClient): GrafanaHealthTarget {
   return {
     label: "Grafana",
     kind: "service",
-    url: buildGrafanaApiUrl(config.query.grafana.url, "/api/health"),
-    headers: createGrafanaHeaders(config),
-    config,
+    url: transport.apiUrl("/api/health"),
   };
 }
 
 function createDatasourceHealthTarget(
-  config: ObservMeConfig,
+  transport: GrafanaTransportClient,
   datasource: GrafanaDatasourceDefinition,
 ): GrafanaHealthTarget {
   return {
     label: datasource.label,
     kind: "datasource",
-    url: buildGrafanaApiUrl(config.query.grafana.url, `/api/datasources/uid/${encodeURIComponent(datasource.uid)}/health`),
-    headers: createGrafanaHeaders(config),
-    config,
-    fallbackUrl: createDatasourceFallbackHealthUrl(config, datasource),
+    url: transport.datasourceApiUrl(datasource.uid, "/health"),
+    fallbackUrl: createDatasourceFallbackHealthUrl(transport, datasource),
   };
 }
 
 function createDatasourceFallbackHealthUrl(
-  config: ObservMeConfig,
+  transport: GrafanaTransportClient,
   datasource: GrafanaDatasourceDefinition,
-): string | undefined {
+): URL | undefined {
   if (!datasource.fallbackHealthPath) return undefined;
 
-  return buildGrafanaApiUrl(
-    config.query.grafana.url,
-    `/api/datasources/proxy/uid/${encodeURIComponent(datasource.uid)}${datasource.fallbackHealthPath}`,
-  );
-}
-
-function buildGrafanaApiUrl(baseUrl: string, apiPath: string): string {
-  const url = new URL(baseUrl);
-  const basePath = url.pathname.replace(/\/+$/u, "");
-  const path = apiPath.replace(/^\/+/, "");
-  url.pathname = `${basePath}/${path}`;
-  url.search = "";
-  url.hash = "";
-  return url.toString();
+  return transport.datasourceProxyUrl(datasource.uid, datasource.fallbackHealthPath);
 }
 
 function createDatasourceDefinitions(config: ObservMeConfig): GrafanaDatasourceDefinition[] {
@@ -288,14 +248,18 @@ function resolveGrafanaPreflightResult(
   };
 }
 
-function responseToHealthResult(target: GrafanaHealthTarget, response: Response): GrafanaHealthCheckResult {
+function responseToHealthResult(
+  target: GrafanaHealthTarget,
+  response: Response,
+  transport: GrafanaTransportClient,
+): GrafanaHealthCheckResult {
   if (response.ok) return { label: target.label, kind: target.kind, status: "ok" };
 
   return {
     label: target.label,
     kind: target.kind,
     status: "failed",
-    detail: formatGrafanaHttpFailure(response, target.config),
+    detail: transport.formatHttpFailure(response),
   };
 }
 
@@ -305,12 +269,11 @@ function shouldFetchGrafanaFallbackTarget(target: GrafanaHealthTarget, response:
 
 async function fetchGrafanaFallbackTarget(
   target: GrafanaHealthTarget,
-  fetcher: GrafanaFetch,
-  timeoutMs: number,
+  transport: GrafanaTransportClient,
 ): Promise<Response> {
   const fallbackUrl = target.fallbackUrl;
   if (!fallbackUrl) throw new Error("Grafana datasource fallback health URL is not configured.");
-  return fetchGrafanaTarget({ ...target, url: fallbackUrl, fallbackUrl: undefined }, fetcher, timeoutMs);
+  return transport.fetch(fallbackUrl);
 }
 
 function failedHealthResult(label: string, kind: GrafanaHealthCheckKind, error: unknown): GrafanaHealthCheckResult {
@@ -409,12 +372,10 @@ function isFallbackTraceTemplate(template: string): boolean {
   return template === "" || fallbackTraceTemplateMarkerPattern.test(template);
 }
 
-function resolveQueryTimeoutMs(config: ObservMeConfig): number {
-  const timeoutMs = config.query.timeoutMs;
-  if (!Number.isFinite(timeoutMs) || timeoutMs < minimumTimeoutMs) return minimumTimeoutMs;
-  return Math.trunc(timeoutMs);
+function formatHealthFailure(error: unknown): string {
+  return formatError(error);
 }
 
-function formatHealthFailure(error: unknown): string {
-  return formatGrafanaFetchFailure(error);
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

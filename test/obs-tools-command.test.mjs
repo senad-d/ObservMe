@@ -190,9 +190,9 @@ test("root obs command dispatches tools subcommand", async () => {
     notifications[0].message,
     [
       "Tool calls by tool (last 1h)",
-      "No tool call metrics found.",
+      "No tool call metrics found. Next: run tool activity, then verify the Metrics datasource with /obs health.",
       "Tool failures by tool/error (last 1h)",
-      "No tool failure metrics found.",
+      "No tool failure metrics found. Next: check after a failing tool call, then verify Metrics labels with /obs health.",
     ].join("\n"),
   );
 });

@@ -1,11 +1,6 @@
 import type { ObservMeConfig } from "../config/schema.ts";
-import type { GrafanaFetch } from "./grafana-transport.ts";
-import {
-  createGrafanaHeaders,
-  formatGrafanaFetchFailure,
-  formatGrafanaHttpFailure,
-  resolveGrafanaFetch,
-} from "./grafana-transport.ts";
+import type { GrafanaFetch, GrafanaTransportClient } from "./grafana-transport.ts";
+import { createGrafanaTransport } from "./grafana-transport.ts";
 import { assertGrafanaQueryReady } from "./grafana-readiness.ts";
 
 export type LokiFetch = GrafanaFetch;
@@ -31,7 +26,6 @@ interface NormalizedTimeRange {
   readonly to: Date;
 }
 
-const minimumTimeoutMs = 1;
 const minimumMaxLogs = 1;
 const maxLogQlQueryLength = 4096;
 const unresolvedEnvironmentPlaceholderPattern = /\$\{[A-Z0-9_]+\}/u;
@@ -48,15 +42,15 @@ const sensitiveQueryValuePatterns = [
 
 export class LokiQueryClient {
   readonly #config: ObservMeConfig;
-  readonly #fetcher: LokiFetch;
+  readonly #transport: GrafanaTransportClient;
 
   constructor(config: ObservMeConfig, options: LokiQueryClientOptions = {}) {
     this.#config = config;
-    this.#fetcher = resolveGrafanaFetch(config, options.fetch);
+    this.#transport = createGrafanaTransport(config, options);
   }
 
   async queryLoki(query: string, range: TimeRange): Promise<LogResult[]> {
-    return queryLoki(this.#config, query, range, { fetch: this.#fetcher });
+    return queryLokiWithTransport(this.#config, this.#transport, query, range);
   }
 }
 
@@ -73,16 +67,25 @@ export async function queryLoki(
   range: TimeRange,
   options: LokiQueryClientOptions = {},
 ): Promise<LogResult[]> {
+  return queryLokiWithTransport(config, createGrafanaTransport(config, options), query, range);
+}
+
+async function queryLokiWithTransport(
+  config: ObservMeConfig,
+  transport: GrafanaTransportClient,
+  query: string,
+  range: TimeRange,
+): Promise<LogResult[]> {
   if (!config.query.enabled) return [];
 
   assertGrafanaQueryReady(config, "loki");
   const normalizedQuery = normalizeLokiQuery(query);
   const timeRange = normalizeTimeRange(range);
   const maxLogs = resolveMaxLogs(config);
-  const url = createLokiQueryRangeUrl(config, normalizedQuery, timeRange, maxLogs);
-  const response = await fetchLokiQuery(url, config, resolveGrafanaFetch(config, options.fetch));
+  const url = createLokiQueryRangeUrl(config, transport, normalizedQuery, timeRange, maxLogs);
+  const response = await transport.fetch(url, { timeoutMessage: "Loki query timed out." });
 
-  return readLokiLogResults(response, config, maxLogs);
+  return readLokiLogResults(response, transport, maxLogs);
 }
 
 export function normalizeLokiAttributeName(attributeName: string): string {
@@ -195,30 +198,18 @@ function normalizeDate(value: Date, label: string): Date {
 
 function createLokiQueryRangeUrl(
   config: ObservMeConfig,
+  transport: GrafanaTransportClient,
   query: string,
   range: NormalizedTimeRange,
   maxLogs: number,
-): string {
-  const url = buildGrafanaApiUrl(
-    config.query.grafana.url,
-    `/api/datasources/proxy/uid/${encodeURIComponent(config.query.grafana.datasourceUids.loki)}/loki/api/v1/query_range`,
-  );
+): URL {
+  const url = transport.datasourceProxyUrl(config.query.grafana.datasourceUids.loki, "/loki/api/v1/query_range");
 
   url.searchParams.set("query", query);
   url.searchParams.set("start", formatEpochNanoseconds(range.from));
   url.searchParams.set("end", formatEpochNanoseconds(range.to));
   url.searchParams.set("limit", String(maxLogs));
   url.searchParams.set("direction", "backward");
-  return url.toString();
-}
-
-function buildGrafanaApiUrl(baseUrl: string, apiPath: string): URL {
-  const url = new URL(baseUrl);
-  const basePath = url.pathname.replace(/\/+$/u, "");
-  const path = apiPath.replace(/^\/+/, "");
-  url.pathname = `${basePath}/${path}`;
-  url.search = "";
-  url.hash = "";
   return url;
 }
 
@@ -226,31 +217,12 @@ function formatEpochNanoseconds(date: Date): string {
   return (BigInt(date.getTime()) * 1_000_000n).toString();
 }
 
-async function fetchLokiQuery(url: string, config: ObservMeConfig, fetcher: LokiFetch): Promise<Response> {
-  const timeoutMs = resolveQueryTimeoutMs(config);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    return await fetcher(url, {
-      method: "GET",
-      headers: createGrafanaHeaders(config),
-      signal: controller.signal,
-    });
-  } catch (error) {
-    throw normalizeLokiFetchError(error);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function normalizeLokiFetchError(error: unknown): Error {
-  if (isAbortError(error)) return new Error("Loki query timed out.");
-  return new Error(formatGrafanaFetchFailure(error));
-}
-
-async function readLokiLogResults(response: Response, config: ObservMeConfig, maxLogs: number): Promise<LogResult[]> {
-  if (!response.ok) throw new Error(`Loki query failed: ${formatGrafanaHttpFailure(response, config)}`);
+async function readLokiLogResults(
+  response: Response,
+  transport: GrafanaTransportClient,
+  maxLogs: number,
+): Promise<LogResult[]> {
+  if (!response.ok) throw new Error(`Loki query failed: ${transport.formatHttpFailure(response)}`);
 
   const payload = (await response.json()) as unknown;
   const logs = extractLokiLogResults(payload);
@@ -318,22 +290,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function resolveQueryTimeoutMs(config: ObservMeConfig): number {
-  const timeoutMs = config.query.timeoutMs;
-  if (!Number.isFinite(timeoutMs) || timeoutMs < minimumTimeoutMs) return minimumTimeoutMs;
-  return Math.trunc(timeoutMs);
-}
-
 function resolveMaxLogs(config: ObservMeConfig): number {
   const maxLogs = config.query.maxLogs;
   if (!Number.isFinite(maxLogs) || maxLogs < minimumMaxLogs) return minimumMaxLogs;
   return Math.trunc(maxLogs);
-}
-
-function isAbortError(error: unknown): boolean {
-  return isNamedError(error) && error.name === "AbortError";
-}
-
-function isNamedError(error: unknown): error is { name: string } {
-  return typeof error === "object" && error !== null && "name" in error && typeof error.name === "string";
 }

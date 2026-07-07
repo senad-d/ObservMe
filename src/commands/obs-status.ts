@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { LoadSessionConfigOptions } from "../config/load-config.ts";
-import { loadSessionConfig } from "../config/load-config.ts";
+import type { LoadSessionConfigOptions, SessionConfigDiagnostics, SessionConfigEffectiveSource } from "../config/load-config.ts";
+import { loadSessionConfigWithDiagnostics } from "../config/load-config.ts";
 import type { CaptureConfig, ObservMeConfig } from "../config/schema.ts";
+import { getGrafanaQueryReadiness } from "../query/grafana-readiness.ts";
 
 export interface ObsStatusCommandContext {
   readonly cwd?: string;
@@ -15,18 +16,21 @@ export interface ObsStatusSnapshot {
   readonly config: ObservMeConfig;
   readonly queueDrops: number;
   readonly lastExportError?: string;
+  readonly configDiagnostics?: SessionConfigDiagnostics;
 }
 
 export interface ObsStatusRuntimeStatePatch {
   readonly config?: ObservMeConfig;
   readonly queueDrops?: number;
   readonly lastExportError?: string;
+  readonly configDiagnostics?: SessionConfigDiagnostics;
 }
 
 export interface ObsStatusRuntimeState {
   readonly config?: ObservMeConfig;
   readonly queueDrops: number;
   readonly lastExportError?: string;
+  readonly configDiagnostics?: SessionConfigDiagnostics;
 }
 
 export interface ObsStatusOperationResult {
@@ -43,6 +47,11 @@ export interface ObsStatusSnapshotOptions {
   readonly loadConfig?: ObsStatusConfigLoader;
   readonly env?: NodeJS.ProcessEnv;
   readonly configDirName?: string;
+  readonly globalConfigPath?: string;
+  readonly projectConfigPath?: string;
+  readonly readText?: LoadSessionConfigOptions["readText"];
+  readonly runtimeOptions?: LoadSessionConfigOptions["runtimeOptions"];
+  readonly logger?: LoadSessionConfigOptions["logger"];
 }
 
 export interface RegisterObsStatusCommandOptions extends ObsStatusSnapshotOptions {
@@ -56,6 +65,7 @@ interface MutableObsStatusRuntimeState {
   config?: ObservMeConfig;
   queueDrops: number;
   lastExportError?: string;
+  configDiagnostics?: SessionConfigDiagnostics;
 }
 
 const runtimeStatusState: MutableObsStatusRuntimeState = {
@@ -101,12 +111,13 @@ export async function getLocalObsStatusSnapshot(
   options: ObsStatusSnapshotOptions = {},
 ): Promise<ObsStatusSnapshot> {
   const state = getObsStatusRuntimeState();
-  const config = state.config ?? (await loadObsStatusConfig(ctx, options));
+  const loaded = state.config ? { config: state.config, diagnostics: state.configDiagnostics } : await loadObsStatusConfig(ctx, options);
 
   return {
-    config,
+    config: loaded.config,
     queueDrops: normalizeQueueDrops(state.queueDrops),
     lastExportError: normalizeLastExportError(state.lastExportError),
+    configDiagnostics: loaded.diagnostics,
   };
 }
 
@@ -115,6 +126,9 @@ export function renderObsStatus(snapshot: ObsStatusSnapshot): string {
   const lines = [
     `ObservMe: ${formatEnabled(config.enabled)}`,
     `OTLP endpoint: ${config.otlp.endpoint}`,
+    ...formatConfigDiagnosticsLines(snapshot.configDiagnostics),
+    `Grafana URL: ${formatSafeConfiguredUrl(config.query.grafana.url)}`,
+    `Grafana query readiness: ${formatGrafanaQueryReadiness(config)}`,
     `Traces: ${formatEnabled(signalEnabled(config, config.traces.enabled))}`,
     `Metrics: ${formatEnabled(signalEnabled(config, config.metrics.enabled))}`,
     `Logs: ${formatEnabled(signalEnabled(config, config.logs.enabled))}`,
@@ -127,7 +141,11 @@ export function renderObsStatus(snapshot: ObsStatusSnapshot): string {
 }
 
 export function updateObsStatusRuntimeState(patch: ObsStatusRuntimeStatePatch): void {
-  if (patch.config) runtimeStatusState.config = structuredClone(patch.config);
+  if (patch.config) {
+    runtimeStatusState.config = structuredClone(patch.config);
+    delete runtimeStatusState.configDiagnostics;
+  }
+  if (patch.configDiagnostics) runtimeStatusState.configDiagnostics = structuredClone(patch.configDiagnostics);
   if (patch.queueDrops !== undefined) runtimeStatusState.queueDrops = normalizeQueueDrops(patch.queueDrops);
   if (patch.lastExportError !== undefined) runtimeStatusState.lastExportError = normalizeLastExportError(patch.lastExportError);
 }
@@ -135,6 +153,7 @@ export function updateObsStatusRuntimeState(patch: ObsStatusRuntimeStatePatch): 
 export function resetObsStatusRuntimeState(): void {
   delete runtimeStatusState.config;
   delete runtimeStatusState.lastExportError;
+  delete runtimeStatusState.configDiagnostics;
   runtimeStatusState.queueDrops = 0;
 }
 
@@ -143,6 +162,7 @@ export function getObsStatusRuntimeState(): ObsStatusRuntimeState {
     config: runtimeStatusState.config ? structuredClone(runtimeStatusState.config) : undefined,
     queueDrops: normalizeQueueDrops(runtimeStatusState.queueDrops),
     lastExportError: normalizeLastExportError(runtimeStatusState.lastExportError),
+    configDiagnostics: runtimeStatusState.configDiagnostics ? structuredClone(runtimeStatusState.configDiagnostics) : undefined,
   };
 }
 
@@ -186,9 +206,28 @@ async function resolveObsStatusSnapshot(
 async function loadObsStatusConfig(
   ctx: ObsStatusCommandContext,
   options: ObsStatusSnapshotOptions,
-): Promise<ObservMeConfig> {
-  const loadConfig = options.loadConfig ?? loadSessionConfig;
-  return loadConfig({ ctx, cwd: ctx.cwd, configDirName: options.configDirName, env: options.env });
+): Promise<{ config: ObservMeConfig; diagnostics?: SessionConfigDiagnostics }> {
+  const loadOptions = createObsStatusLoadOptions(ctx, options);
+
+  if (options.loadConfig) return { config: await options.loadConfig(loadOptions) };
+  return loadSessionConfigWithDiagnostics(loadOptions);
+}
+
+function createObsStatusLoadOptions(
+  ctx: ObsStatusCommandContext,
+  options: ObsStatusSnapshotOptions,
+): LoadSessionConfigOptions {
+  return {
+    ctx,
+    cwd: ctx.cwd,
+    configDirName: options.configDirName,
+    env: options.env,
+    globalConfigPath: options.globalConfigPath,
+    projectConfigPath: options.projectConfigPath,
+    readText: options.readText,
+    runtimeOptions: options.runtimeOptions,
+    logger: options.logger,
+  };
 }
 
 function isObsStatusRequest(args: string): boolean {
@@ -211,6 +250,54 @@ function formatCaptureLines(capture: CaptureConfig): string[] {
     `Bash output capture: ${formatEnabled(capture.bashOutput)}`,
     `File path capture: ${formatEnabled(capture.filePaths)}`,
   ];
+}
+
+function formatConfigDiagnosticsLines(diagnostics: SessionConfigDiagnostics | undefined): string[] {
+  if (!diagnostics) return [];
+
+  return [
+    `Config source: ${formatConfigEffectiveSource(diagnostics.effectiveSource)}`,
+    `Project config: ${formatProjectConfigStatus(diagnostics)}`,
+  ];
+}
+
+function formatConfigEffectiveSource(source: SessionConfigEffectiveSource): string {
+  if (source === "runtime_options") return "runtime options";
+  if (source === "environment") return "environment overrides";
+  if (source === "trusted_project") return "trusted project config (.pi/observme.yaml)";
+  if (source === "global") return "global config";
+  return "defaults";
+}
+
+function formatProjectConfigStatus(diagnostics: SessionConfigDiagnostics): string {
+  if (diagnostics.projectConfigStatus === "loaded") return "loaded (trusted .pi/observme.yaml)";
+  if (diagnostics.projectConfigStatus === "skipped_untrusted") {
+    return "skipped (project is untrusted; safe defaults/global/env only)";
+  }
+
+  return "missing (trusted project has no .pi/observme.yaml)";
+}
+
+function formatGrafanaQueryReadiness(config: ObservMeConfig): string {
+  const readiness = getGrafanaQueryReadiness(config);
+  const issueCodes = readiness.issues.map(issue => issue.code).join(", ");
+  return issueCodes ? `${readiness.status} (${issueCodes})` : readiness.status;
+}
+
+function formatSafeConfiguredUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "not configured";
+
+  try {
+    const parsed = new URL(trimmed);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch (_error) {
+    return "invalid configured URL";
+  }
 }
 
 function signalEnabled(config: ObservMeConfig, enabled: boolean): boolean {

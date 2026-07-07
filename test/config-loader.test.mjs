@@ -112,6 +112,9 @@ test("session loader maps Grafana auth and local transport environment variables
       OBSERVME_GRAFANA_URL: "https://observability.local",
       OBSERVME_GRAFANA_USERNAME: "admin",
       OBSERVME_GRAFANA_PASSWORD: "local-password",
+      OBSERVME_GRAFANA_TEMPO_DATASOURCE_UID: "tempo-custom",
+      OBSERVME_GRAFANA_LOKI_DATASOURCE_UID: "loki-custom",
+      OBSERVME_GRAFANA_PROMETHEUS_DATASOURCE_UID: "prometheus-custom",
       OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY: "true",
       OBSERVME_GRAFANA_PREFER_IPV4: "true",
     },
@@ -120,6 +123,49 @@ test("session loader maps Grafana auth and local transport environment variables
   assert.equal(config.query.grafana.url, "https://observability.local");
   assert.equal(config.query.grafana.username, "admin");
   assert.equal(config.query.grafana.password, "local-password");
+  assert.deepEqual(config.query.grafana.datasourceUids, {
+    tempo: "tempo-custom",
+    loki: "loki-custom",
+    prometheus: "prometheus-custom",
+  });
+  assert.equal(config.query.grafana.tls.insecureSkipVerify, true);
+  assert.equal(config.query.grafana.transport.preferIPv4, true);
+});
+
+const envFileText = `
+# Trusted project-local extension variables.
+OBSERVME_GRAFANA_URL=https://env-file.local
+OBSERVME_GRAFANA_USERNAME=admin
+OBSERVME_GRAFANA_PASSWORD="local password"
+OBSERVME_GRAFANA_TEMPO_DATASOURCE_UID=tempo-file
+OBSERVME_GRAFANA_LOKI_DATASOURCE_UID=loki-file
+OBSERVME_GRAFANA_PROMETHEUS_DATASOURCE_UID=prometheus-file
+OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY=true
+OBSERVME_GRAFANA_PREFER_IPV4=true
+`;
+
+test("session loader reads trusted project .env and lets system env override it", async () => {
+  const calls = [];
+  const config = await loadSessionConfig({
+    globalConfigPath: "missing-global.yaml",
+    projectConfigPath: "missing-project.yaml",
+    envFilePath: "project.env",
+    isProjectTrusted: true,
+    readText: createReader({ "project.env": envFileText }, calls),
+    env: {
+      OBSERVME_GRAFANA_PASSWORD: "system-password",
+    },
+  });
+
+  assert.deepEqual(calls, ["missing-global.yaml", "missing-project.yaml", "project.env"]);
+  assert.equal(config.query.grafana.url, "https://env-file.local");
+  assert.equal(config.query.grafana.username, "admin");
+  assert.equal(config.query.grafana.password, "system-password");
+  assert.deepEqual(config.query.grafana.datasourceUids, {
+    tempo: "tempo-file",
+    loki: "loki-file",
+    prometheus: "prometheus-file",
+  });
   assert.equal(config.query.grafana.tls.insecureSkipVerify, true);
   assert.equal(config.query.grafana.transport.preferIPv4, true);
 });
@@ -166,6 +212,7 @@ test("session loader accepts ctx.isProjectTrusted as the Pi trust boundary", asy
     },
     readText: createReader({ "global.yaml": globalConfigYaml, "project.yaml": projectConfigYaml }, calls),
     env: {},
+    loadEnvFile: false,
   });
 
   assert.deepEqual(calls, ["global.yaml", "project.yaml"]);

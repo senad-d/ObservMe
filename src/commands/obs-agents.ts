@@ -8,6 +8,7 @@ import { createPrometheusQueryClient } from "../query/prometheus.ts";
 import type { TimeRange, TraceSummary } from "../query/tempo.ts";
 import { createTempoQueryClient } from "../query/tempo.ts";
 import { COMMON_SPAN_ATTRIBUTES } from "../semconv/attributes.ts";
+import { formatObsCommandFailure, readObsDiagnosticMessage, type ObsCommandRecoveryHint } from "./obs-diagnostics.ts";
 import type { ObsAgentWaitJoinHint, ObsAgentsRuntimeSnapshot } from "./obs-agents-runtime.ts";
 import { getLocalObsAgentsRuntimeSnapshot } from "./obs-agents-runtime.ts";
 
@@ -102,6 +103,9 @@ const OBS_COMMAND_NAME = "obs";
 const OBS_AGENTS_SUBCOMMAND = "agents";
 const OBS_AGENTS_USAGE = "Usage: /obs agents";
 const OBS_AGENTS_WINDOW = "1h";
+const OBS_AGENTS_ERROR_NEXT_ACTION = "run /obs health and verify Grafana credentials, the Metrics datasource, and the Tempo datasource.";
+const OBS_AGENTS_PROMETHEUS_NEXT_ACTION = "verify the Metrics datasource with /obs health, then rerun /obs agents.";
+const OBS_AGENTS_TEMPO_NEXT_ACTION = "verify the Tempo datasource with /obs health, then rerun /obs agents.";
 const DEFAULT_TRACE_SEARCH_RANGE_HOURS = 24;
 const millisecondsPerHour = 60 * 60 * 1000;
 const emptyAgentTreeSummary = {
@@ -150,7 +154,11 @@ export async function handleObsAgentsCommand(
     const snapshot = await resolveObsAgentsSnapshot(ctx, options);
     await notifyAgents(ctx, renderObsAgents(snapshot), "info");
   } catch (error) {
-    await notifyAgents(ctx, `ObservMe agents unavailable: ${formatError(error)}`, "error");
+    await notifyAgents(
+      ctx,
+      formatObsCommandFailure("ObservMe agents unavailable", error, resolveObsAgentsDiagnostic(error)),
+      "error",
+    );
   }
 }
 
@@ -454,6 +462,10 @@ function trimTrailingFractionZeros(value: string): string {
   return value.replace(/\.0+$/u, "").replace(/(\.\d*?)0+$/u, "$1");
 }
 
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function resolveObsAgentsDiagnostic(error: unknown): ObsCommandRecoveryHint {
+  const message = readObsDiagnosticMessage(error);
+
+  if (message.includes("Prometheus")) return { subsystem: "Prometheus", nextAction: OBS_AGENTS_PROMETHEUS_NEXT_ACTION };
+  if (message.includes("Tempo")) return { subsystem: "Tempo", nextAction: OBS_AGENTS_TEMPO_NEXT_ACTION };
+  return { subsystem: "Agent telemetry", nextAction: OBS_AGENTS_ERROR_NEXT_ACTION };
 }
