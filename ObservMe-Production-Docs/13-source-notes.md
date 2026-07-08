@@ -22,7 +22,7 @@ This document captures external technical assumptions referenced by the design a
 - Current GenAI attributes include `gen_ai.agent.id`, `gen_ai.agent.name`, `gen_ai.agent.version`, `gen_ai.tool.*`, `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.*`, and metrics such as `gen_ai.client.operation.duration` and `gen_ai.client.token.usage`.
 - W3C trace context (`traceparent`/`tracestate`) is the standard way to propagate parent trace identity across subagent process boundaries; if propagation is unavailable, ObservMe should record span links or equivalent log attributes. ObservMe's `pi.workflow.*` attributes are extension-defined correlation fields for orchestrator/agent-tree drill-down and are not official OTEL semantic conventions.
 - `deployment.environment.name` is the official OpenTelemetry deployment-environment resource attribute; `observme.environment` is only a compatibility alias.
-- `service.instance.id` and `observme.instance.id` identify a process/extension instance; they do not replace `pi.workflow.id` or `pi.agent.id` for logical workflow and parent/child agent lineage.
+- `service.instance.id` and `observme.instance.id` identify an ObservMe telemetry session/process startup; they do not replace `pi.workflow.id` or `pi.agent.id` for logical workflow and parent/child agent lineage.
 
 ## Grafana Stack
 

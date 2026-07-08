@@ -43,10 +43,10 @@ Set once at SDK initialization.
 service.name                       = observme-pi-extension
 service.namespace                  = pi
 service.version                    = <extension version>
-service.instance.id                = <uuid per process>
+service.instance.id                = <uuid per ObservMe telemetry session/process startup>
 telemetry.sdk.name                 = opentelemetry          # normally set by SDK
 observme.version                   = <extension version>
-observme.instance.id               = <uuid per process>
+observme.instance.id               = <uuid per ObservMe telemetry session/process startup>
 pi.agent.id                        = <uuid or trusted propagated id per logical agent runtime>
 pi.agent.parent_id                 = <parent agent id>, optional high-cardinality resource attribute
 pi.agent.root_id                   = <root agent id>, optional high-cardinality resource attribute
@@ -489,7 +489,44 @@ observme_active_spans
 observme_active_agents
 ```
 
-### 12.5 Optional official GenAI metrics
+### 12.5 Export Health self-observability contract
+
+The `ObservMe Export Health` dashboard is a self-observability contract for the ObservMe runtime, not a replacement for `/obs status` or `/obs health`. A healthy local session should still produce positive liveness signals while failure-only signals remain at zero or no matching log rows.
+
+Dashboard-driving signals:
+
+```text
+observme_events_observed_total              # counter; one handled Pi event observed by a live telemetry session
+observme_handler_duration_ms                # histogram; handler lifecycle latency
+observme_handler_errors_total               # counter; safe-handler failures
+observme_active_spans                       # gauge; active SDK spans by bounded operation
+observme_telemetry_dropped_total            # counter; local queue/registry drops by bounded reason
+observme_export_errors_total                # counter; exporter failures by bounded reason/error class
+observme_redaction_failures_total           # counter; dropped fields caused by redaction exceptions
+```
+
+Export Health Loki events:
+
+```text
+telemetry.dropped                           # emitted with telemetry-drop counter updates
+redaction.failed                            # emitted with redaction-failure counter updates
+export.failed                               # emitted with export-error counter updates
+trace_context.propagation_failed            # emitted when subagent trace propagation fails
+handler.failed                              # emitted when safe handler isolation catches an exception
+```
+
+Healthy-state semantics:
+
+- `observme_events_observed_total` is the primary liveness denominator for the dashboard and Observability Export SLO.
+- Failure counters should be queryable as zero when no matching failures happened in the selected range.
+- Failure log tables can be empty in a healthy range; empty `telemetry.dropped`, `redaction.failed`, `export.failed`, and `trace_context.propagation_failed` tables mean no matching failures were observed, not that ingestion is broken.
+- Collector/export health is considered healthy when events are observed and local drop/export-error rates remain zero.
+
+Metric labels for these signals are restricted to the low-cardinality allowlist below. In practice, Export Health metrics may use only `operation`, `reason`, `error_class`, and `status` as needed. High-cardinality identifiers such as session, workflow, agent, trace, span, entry, prompt, raw path, raw command, and raw error-message values must stay out of Prometheus labels.
+
+This telemetry contract must not require changing project trust behavior, `/obs status`, `/obs health`, the configured local OTLP endpoint, Grafana authentication/profile, or intentionally enabled local debug capture settings.
+
+### 12.6 Optional official GenAI metrics
 
 Emit these in addition to ObservMe metrics only when the SDK/backend path handles dotted OTEL metric names correctly:
 
@@ -544,7 +581,7 @@ raw_path
 raw_error_message
 ```
 
-High-cardinality values belong in span attributes or logs, not metrics. If a backend/exporter converts resource attributes into metric labels, drop `pi.workflow.*`, `pi.agent.*`, `pi.session.id`, trace IDs, span IDs, and spawn IDs from the metrics pipeline first.
+High-cardinality values belong in span attributes or logs, not metrics. If a backend/exporter converts resource attributes into metric labels, drop `pi.workflow.*`, `pi.agent.*`, `pi.session.id`, trace IDs, span IDs, and spawn IDs from the metrics pipeline first. Generated `service.instance.id` / `observme.instance.id` may remain as backend labels when needed to keep concurrent metric streams distinct; dashboard PromQL must aggregate over them instead of grouping by them.
 
 ## 14. Logs
 

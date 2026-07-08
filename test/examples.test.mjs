@@ -37,6 +37,7 @@ const requiredContentDrops = [
   "pi.tool.arguments.redacted",
   "pi.tool.result.redacted",
 ];
+const resourceToTelemetryConversionPattern = /resource_to_telemetry_conversion:\s*\n\s*enabled: true/u;
 
 async function readText(path) {
   return readFile(path, "utf8");
@@ -127,6 +128,11 @@ async function observmeExampleMatchesSupportedLocalQueryProfile() {
   assert.equal(stackDatasourceUids.prometheus, config.query.grafana.datasourceUids.prometheus);
   assert.equal(config.resource.attributes["service.name"], "observme-pi-extension");
   assert.ok(lokiResourceLabels.includes("service.name"), "Loki resource labels should include service.name");
+  assert.match(
+    collector,
+    resourceToTelemetryConversionPattern,
+    "local Prometheus exporter should preserve safe resource labels for concurrent session metrics",
+  );
 
   for (const label of requiredLocalLokiAttributeLabels) {
     assert.ok(lokiAttributeLabels.includes(label), `Loki attribute labels should include ${label}`);
@@ -166,6 +172,7 @@ async function collectorExampleIncludesCardinalityAndContentDropProcessors() {
 
   assert.match(collector, /resource\/drop_high_cardinality_metric_attrs:/u);
   assert.match(collector, /attributes\/drop_content_attributes:/u);
+  assert.match(collector, resourceToTelemetryConversionPattern);
   assert.match(
     collector,
     /processors: \[memory_limiter, resource\/observme, resource\/drop_high_cardinality_metric_attrs, batch\]/u,

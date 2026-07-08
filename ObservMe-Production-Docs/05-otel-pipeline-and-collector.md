@@ -217,6 +217,8 @@ exporters:
 
   prometheusremotewrite/mimir:
     endpoint: http://mimir:9009/api/v1/push
+    resource_to_telemetry_conversion:
+      enabled: true
     sending_queue:
       enabled: true
     retry_on_failure:
@@ -246,7 +248,7 @@ service:
 
 The Collector attribute processor is defense in depth for log attributes only. It must not be the only redaction layer, and it does not sanitize arbitrary log bodies; ObservMe must redact or drop sensitive content before export. The traces pipeline intentionally keeps `pi.llm.prompt.redacted`, `pi.llm.response.redacted`, and `pi.llm.thinking.redacted` so Tempo can display redacted content after explicit capture is enabled. Old telemetry that an earlier Collector dropped cannot be recovered; generate new LLM events after updating the Collector.
 
-Keep high-cardinality lineage attributes on traces/logs, but remove them from the metrics pipeline unless the organization explicitly accepts the cardinality. The bundled local Loki pipeline promotes `pi.agent.id` and `pi.agent.run.id` as log labels so the LLM Conversations dashboard can filter captured chat content by agent and run. Do not enable Prometheus resource-to-telemetry conversion for `pi.workflow.id`, `pi.agent.id`, `pi.session.id`, trace IDs, or spawn IDs.
+Keep high-cardinality lineage attributes on traces/logs, but remove them from the metrics pipeline unless the organization explicitly accepts the cardinality. The bundled local Loki pipeline promotes `pi.agent.id` and `pi.agent.run.id` as log labels so the LLM Conversations dashboard can filter captured chat content by agent and run. Prometheus resource-to-telemetry conversion is safe only after the metrics pipeline drops `pi.workflow.id`, `pi.agent.id`, `pi.session.id`, trace IDs, and spawn IDs; the remaining generated `service.instance.id`/`observme.instance.id` labels keep concurrent ObservMe metric streams distinct so session counters can be summed accurately.
 
 ## 7. Direct-to-Backend Development Mode
 

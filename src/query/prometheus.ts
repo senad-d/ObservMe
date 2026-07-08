@@ -6,6 +6,7 @@ import { assertGrafanaQueryReady } from "./grafana-readiness.ts";
 export type PrometheusFetch = GrafanaFetch;
 export type PrometheusResultLimit = "metricSeries" | "agents";
 export type PrometheusResultType = "vector" | "matrix" | "scalar" | "string" | "unknown";
+type SuccessfulPrometheusResultType = Exclude<PrometheusResultType, "unknown">;
 
 export interface PrometheusSample {
   readonly timestampUnixSeconds: string;
@@ -227,66 +228,87 @@ function readPrometheusApiError(payload: unknown): string | undefined {
   return [errorType, errorMessage].filter(isNonEmptyString).join(": ") || "unknown Prometheus API error";
 }
 
+function createPrometheusSchemaError(reason: string): Error {
+  return new Error(`Prometheus query failed: backend schema error: ${reason}.`);
+}
+
 function extractPrometheusQueryResult(payload: unknown, resultLimit: number): QueryResult {
-  const data = readPrometheusData(payload);
-  const resultType = readPrometheusResultType(data?.resultType);
+  const data = readPrometheusSuccessData(payload);
+  const resultType = readPrometheusResultType(data.resultType);
 
-  if (resultType === "scalar") return extractPrometheusScalarResult(data?.result, resultType);
-  if (resultType === "string") return extractPrometheusStringResult(data?.result, resultType);
+  if (resultType === "scalar") return extractPrometheusScalarResult(data.result, resultType);
+  if (resultType === "string") return extractPrometheusStringResult(data.result, resultType);
 
-  const series = extractPrometheusMetricSeries(data?.result).slice(0, resultLimit);
+  const series = extractPrometheusMetricSeries(data.result, resultType).slice(0, resultLimit);
   return { resultType, series };
 }
 
-function readPrometheusData(payload: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(payload) || !isRecord(payload.data)) return undefined;
+function readPrometheusSuccessData(payload: unknown): Record<string, unknown> {
+  if (!isRecord(payload)) throw createPrometheusSchemaError("response must be a JSON object");
+  if (payload.status !== "success") throw createPrometheusSchemaError("status must be success");
+  if (!isRecord(payload.data)) throw createPrometheusSchemaError("data must be an object");
   return payload.data;
 }
 
-function readPrometheusResultType(value: unknown): PrometheusResultType {
+function readPrometheusResultType(value: unknown): SuccessfulPrometheusResultType {
   if (value === "vector" || value === "matrix" || value === "scalar" || value === "string") return value;
-  return "unknown";
+  throw createPrometheusSchemaError("data.resultType must be vector, matrix, scalar, or string");
 }
 
 function extractPrometheusScalarResult(result: unknown, resultType: "scalar"): QueryResult {
   const scalar = toPrometheusSample(result);
-  return scalar ? { resultType, series: [], scalar } : { resultType, series: [] };
+  if (!scalar) throw createPrometheusSchemaError("data.result must be a valid scalar sample");
+  return { resultType, series: [], scalar };
 }
 
 function extractPrometheusStringResult(result: unknown, resultType: "string"): QueryResult {
   const stringValue = toPrometheusSample(result);
-  return stringValue ? { resultType, series: [], stringValue } : { resultType, series: [] };
+  if (!stringValue) throw createPrometheusSchemaError("data.result must be a valid string sample");
+  return { resultType, series: [], stringValue };
 }
 
-function extractPrometheusMetricSeries(result: unknown): PrometheusMetricSeries[] {
-  if (!Array.isArray(result)) return [];
-  return result.map(toPrometheusMetricSeries).filter(isPrometheusMetricSeries);
+function extractPrometheusMetricSeries(
+  result: unknown,
+  resultType: "vector" | "matrix",
+): PrometheusMetricSeries[] {
+  if (!Array.isArray(result)) throw createPrometheusSchemaError("data.result must be an array for vector or matrix results");
+  return result.map(item => toPrometheusMetricSeries(item, resultType));
 }
 
-function toPrometheusMetricSeries(item: unknown): PrometheusMetricSeries | undefined {
-  if (!isRecord(item)) return undefined;
+function toPrometheusMetricSeries(item: unknown, resultType: "vector" | "matrix"): PrometheusMetricSeries {
+  if (!isRecord(item)) throw createPrometheusSchemaError("each data.result item must be an object");
 
-  const metric = readStringRecord(item.metric);
-  const value = toPrometheusSample(item.value);
-  const values = toPrometheusSamples(item.values);
-  if (!value && values.length === 0) return undefined;
-
-  return createPrometheusMetricSeries(metric, value, values);
+  const metric = readPrometheusMetricLabels(item.metric);
+  if (resultType === "vector") return createPrometheusVectorSeries(metric, item.value);
+  return createPrometheusMatrixSeries(metric, item.values);
 }
 
-function createPrometheusMetricSeries(
-  metric: Record<string, string>,
-  value: PrometheusSample | undefined,
-  values: readonly PrometheusSample[],
-): PrometheusMetricSeries {
-  const result: PrometheusMetricSeries = { metric };
-  if (value) return { ...result, value };
-  return values.length > 0 ? { ...result, values } : result;
+function readPrometheusMetricLabels(value: unknown): Record<string, string> {
+  if (!isRecord(value)) throw createPrometheusSchemaError("each data.result item metric must be an object");
+  return readStringRecord(value);
+}
+
+function createPrometheusVectorSeries(metric: Record<string, string>, value: unknown): PrometheusMetricSeries {
+  const sample = toPrometheusSample(value);
+  if (!sample) throw createPrometheusSchemaError("each vector data.result item must include a valid value sample");
+  return { metric, value: sample };
+}
+
+function createPrometheusMatrixSeries(metric: Record<string, string>, values: unknown): PrometheusMetricSeries {
+  const samples = toPrometheusSamples(values);
+  if (samples.length === 0) throw createPrometheusSchemaError("each matrix data.result item must include valid values samples");
+  return { metric, values: samples };
 }
 
 function toPrometheusSamples(values: unknown): PrometheusSample[] {
-  if (!Array.isArray(values)) return [];
-  return values.map(toPrometheusSample).filter(isPrometheusSample);
+  if (!Array.isArray(values)) throw createPrometheusSchemaError("matrix data.result item values must be an array");
+  return values.map(toPrometheusSampleStrict);
+}
+
+function toPrometheusSampleStrict(value: unknown): PrometheusSample {
+  const sample = toPrometheusSample(value);
+  if (!sample) throw createPrometheusSchemaError("Prometheus samples must be [timestamp, value] pairs");
+  return sample;
 }
 
 function toPrometheusSample(value: unknown): PrometheusSample | undefined {
@@ -323,14 +345,6 @@ function readStringOrNumber(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return undefined;
-}
-
-function isPrometheusMetricSeries(value: PrometheusMetricSeries | undefined): value is PrometheusMetricSeries {
-  return value !== undefined;
-}
-
-function isPrometheusSample(value: PrometheusSample | undefined): value is PrometheusSample {
-  return value !== undefined;
 }
 
 function isNonEmptyString(value: string | undefined): value is string {

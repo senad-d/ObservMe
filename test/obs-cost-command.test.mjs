@@ -54,6 +54,29 @@ function createCostResponse() {
   );
 }
 
+function createMalformedCostResponse() {
+  return new Response(
+    JSON.stringify({
+      status: "success",
+      data: {
+        resultType: "vector",
+        result: { token: "super-secret-token", body: "Bearer backend-secret" },
+      },
+    }),
+    { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
+  );
+}
+
+function createEmptyCostResponse() {
+  return new Response(
+    JSON.stringify({
+      status: "success",
+      data: { resultType: "vector", result: [] },
+    }),
+    { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
+  );
+}
+
 test("renderObsCost reports aggregate cost rows and total", () => {
   const output = renderObsCost({
     window: "24h",
@@ -114,6 +137,47 @@ test("/obs cost queries aggregate model/provider PromQL with configured timeout 
     costUsd: 1.42,
     timestampUnixSeconds: "1783422000.25",
   });
+});
+
+test("/obs cost reports malformed Prometheus payloads as backend schema errors, not no-data hints", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const notifications = [];
+
+  await handleObsCostCommand("cost", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: async () => createMalformedCostResponse(),
+  });
+
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].type, "error");
+  assert.match(notifications[0].message, /ObservMe cost unavailable: Prometheus: Prometheus query failed: backend schema error/u);
+  assert.match(notifications[0].message, /data\.result must be an array/u);
+  assert.doesNotMatch(notifications[0].message, /No cost metrics found/u);
+  assert.doesNotMatch(notifications[0].message, /super-secret-token|Bearer backend-secret/u);
+});
+
+test("/obs cost keeps no-data recovery hints for legitimate empty Prometheus responses", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const notifications = [];
+
+  await handleObsCostCommand("cost", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: async () => createEmptyCostResponse(),
+  });
+
+  assert.deepEqual(notifications, [
+    {
+      message: [
+        "Cost by model/provider (last 24h)",
+        "No cost metrics found. Next: generate LLM usage, then verify the Metrics datasource with /obs health.",
+      ].join("\n"),
+      type: "info",
+    },
+  ]);
 });
 
 test("/obs cost rejects session-scoped Prometheus cost queries by default before fetching", async () => {

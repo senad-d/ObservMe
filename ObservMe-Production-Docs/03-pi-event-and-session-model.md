@@ -188,7 +188,7 @@ The root `pi.session` span is intentionally long-lived and remains open until `s
 ObservMe must maintain the following IDs:
 
 ```text
-observme.instance.id       # unique per extension process startup
+observme.instance.id       # unique per ObservMe telemetry session/process startup
 observme.export.session_id # same as pi.session.id if available
 pi.session.id
 pi.workflow.id             # generated workflow/root execution id, high-cardinality trace/log attribute

@@ -52,7 +52,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Telemetry drops grouped by bounded drop reason.",
+      "description": "Recent ObservMe handler activity from observme_events_observed_total. A zero value means no matching events were observed in the selected range rather than a dashboard import failure.",
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -62,10 +62,6 @@
               {
                 "color": "green",
                 "value": null
-              },
-              {
-                "color": "red",
-                "value": 0
               }
             ]
           },
@@ -79,17 +75,22 @@
         "x": 0,
         "y": 0
       },
-      "id": 1,
+      "id": 10,
       "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
       },
       "targets": [
         {
@@ -98,141 +99,21 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_telemetry_dropped_total[$__rate_interval])) by (reason)",
-          "legendFormat": "{{reason}}",
+          "expr": "(sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0))",
+          "legendFormat": "observed events",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Telemetry drops",
-      "type": "timeseries"
+      "title": "Observed event liveness",
+      "type": "stat"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Redaction failure rate; investigate immediately when content capture is enabled.",
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 0
-              }
-            ]
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 0
-      },
-      "id": 2,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(observme_redaction_failures_total[$__rate_interval]))",
-          "legendFormat": "redaction failures",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Redaction failures",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Exporter/backend failures grouped by bounded reason.",
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 0
-              }
-            ]
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 0
-      },
-      "id": 3,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(observme_export_errors_total[$__rate_interval])) by (reason)",
-          "legendFormat": "{{reason}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Export failures",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Active spans by operation as a bounded SDK pressure signal when exposed.",
+      "description": "Sessions started and shut down in the selected time range. Zero means no matching session lifecycle samples exist for the range.",
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -252,20 +133,25 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 0,
-        "y": 8
+        "x": 8,
+        "y": 0
       },
-      "id": 4,
+      "id": 11,
       "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
       },
       "targets": [
         {
@@ -274,21 +160,32 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(observme_active_spans) by (operation)",
-          "legendFormat": "{{operation}}",
+          "expr": "(sum(increase(observme_sessions_started_total[$__range])) or vector(0))",
+          "legendFormat": "sessions started",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(increase(observme_sessions_shutdown_total[$__range])) or vector(0))",
+          "legendFormat": "sessions shutdown",
+          "range": true,
+          "refId": "B"
         }
       ],
-      "title": "SDK queue saturation signal",
-      "type": "timeseries"
+      "title": "Session lifecycle",
+      "type": "stat"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Short-window export success indicator based on observed events minus local drops.",
+      "description": "Short-window export health score: 1 when ObservMe events are being observed and no local drops are recorded; 0 when no activity exists in range or local drops consume all observed activity.",
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -312,8 +209,8 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 8,
-        "y": 8
+        "x": 16,
+        "y": 0
       },
       "id": 5,
       "options": {
@@ -339,7 +236,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "1 - (sum(rate(observme_telemetry_dropped_total[$__rate_interval])) / clamp_min(sum(rate(observme_events_observed_total[$__rate_interval])), 1e-9))",
+          "expr": "(((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)) > bool 0) * clamp_min(1 - ((sum(rate(observme_telemetry_dropped_total[$__rate_interval])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)), 1e-9)), 0))",
           "legendFormat": "not dropped",
           "range": true,
           "refId": "A"
@@ -353,7 +250,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Handler errors grouped by operation and error class.",
+      "description": "Telemetry drop rate grouped by bounded drop reason. The zero fallback means no local drops were observed in the selected range.",
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -366,7 +263,127 @@
               },
               {
                 "color": "red",
-                "value": 0
+                "value": 1e-9
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum by (reason) (rate(observme_telemetry_dropped_total[$__rate_interval])) or on() vector(0))",
+          "legendFormat": "{{reason}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Telemetry drops",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Redaction failure rate. The zero fallback means no redaction failures were observed in the selected range.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1e-9
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 8
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(rate(observme_redaction_failures_total[$__rate_interval])) or vector(0))",
+          "legendFormat": "redaction failures",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Redaction failures",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Exporter/backend failure rate grouped by bounded reason. The zero fallback means no export failures were observed in the selected range.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1e-9
               }
             ]
           },
@@ -379,6 +396,122 @@
         "w": 8,
         "x": 16,
         "y": 8
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum by (reason) (rate(observme_export_errors_total[$__rate_interval])) or on() vector(0))",
+          "legendFormat": "{{reason}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Export failures",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Active spans by bounded operation as an SDK pressure signal. Zero means no active spans are currently exposed for the selected range.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 16
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum by (operation) (observme_active_spans) or on() vector(0))",
+          "legendFormat": "{{operation}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Active spans by operation",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Handler error rate grouped by operation and error class. The zero fallback means no handler errors were observed in the selected range.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1e-9
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 16
       },
       "id": 6,
       "options": {
@@ -399,7 +532,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_handler_errors_total[$__rate_interval])) by (operation, error_class)",
+          "expr": "(sum by (operation, error_class) (rate(observme_handler_errors_total[$__rate_interval])) or on() vector(0))",
           "legendFormat": "{{operation}} / {{error_class}}",
           "range": true,
           "refId": "A"
@@ -413,7 +546,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Redaction failure logs using normalized event_name.",
+      "description": "Redaction failure logs using normalized event_name. Empty means no matching failure logs in the selected time range.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -422,7 +555,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 16
+        "y": 24
       },
       "id": 7,
       "options": {
@@ -447,7 +580,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Telemetry drop logs using normalized event_name.",
+      "description": "Telemetry drop logs using normalized event_name. Empty means no matching failure logs in the selected time range.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -456,7 +589,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 16
+        "y": 24
       },
       "id": 8,
       "options": {
@@ -481,7 +614,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Trace-context propagation failures from the documented Loki query examples.",
+      "description": "Trace-context propagation failures from the documented Loki query examples. Empty means no matching failure logs in the selected time range.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -490,7 +623,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 16
+        "y": 24
       },
       "id": 9,
       "options": {
@@ -528,6 +661,6 @@
   "timezone": "browser",
   "title": "ObservMe Export Health",
   "uid": "observme-export-health",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

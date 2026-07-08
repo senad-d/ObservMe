@@ -16,6 +16,7 @@ import {
 import { AGENT_SPAWN_ATTRIBUTES, AGENT_WAIT_JOIN_ATTRIBUTES } from "../src/semconv/attributes.ts";
 import {
   OBSERVME_COUNTER_METRIC_NAMES,
+  OBSERVME_GAUGE_METRIC_NAMES,
   OBSERVME_HISTOGRAM_METRIC_NAMES,
 } from "../src/semconv/metrics.ts";
 import { SPAN_NAMES } from "../src/semconv/spans.ts";
@@ -87,6 +88,7 @@ function createRecordingMetrics(records) {
       records,
       OBSERVME_COUNTER_METRIC_NAMES.TRACE_CONTEXT_PROPAGATION_FAILURES_TOTAL,
     ),
+    activeSpans: createUpDownCounter(records, OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_SPANS),
     agentFanoutCount: createHistogram(records, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_FANOUT_COUNT),
     agentTreeDepth: createHistogram(records, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_TREE_DEPTH),
     agentTreeWidth: createHistogram(records, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_TREE_WIDTH),
@@ -98,6 +100,12 @@ function createRecordingMetrics(records) {
 function createCounter(records, name) {
   return {
     add: (value, attributes = {}) => records.push({ type: "counter", name, value, attributes }),
+  };
+}
+
+function createUpDownCounter(records, name) {
+  return {
+    add: (value, attributes = {}) => records.push({ type: "upDownCounter", name, value, attributes }),
   };
 }
 

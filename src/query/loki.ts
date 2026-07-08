@@ -225,38 +225,78 @@ async function readLokiLogResults(
   if (!response.ok) throw new Error(`Loki query failed: ${transport.formatHttpFailure(response)}`);
 
   const payload = (await response.json()) as unknown;
+  const apiError = readLokiApiError(payload);
+  if (apiError) throw new Error(`Loki query failed: ${apiError}`);
+
   const logs = extractLokiLogResults(payload);
   return logs.slice(0, maxLogs);
 }
 
-function extractLokiLogResults(payload: unknown): LogResult[] {
-  return extractLokiStreams(payload).flatMap(toLogResultsFromStream);
+function readLokiApiError(payload: unknown): string | undefined {
+  if (!isRecord(payload) || payload.status !== "error") return undefined;
+
+  const errorType = readOptionalString(payload, "errorType");
+  const errorMessage = readOptionalString(payload, "error");
+  return [errorType, errorMessage].filter(isNonEmptyString).join(": ") || "unknown Loki API error";
 }
 
-function extractLokiStreams(payload: unknown): unknown[] {
-  if (!isRecord(payload)) return [];
-  if (!isRecord(payload.data)) return [];
-  return Array.isArray(payload.data.result) ? payload.data.result : [];
+function createLokiSchemaError(reason: string): Error {
+  return new Error(`Loki query failed: backend schema error: ${reason}.`);
+}
+
+function extractLokiLogResults(payload: unknown): LogResult[] {
+  const data = readLokiSuccessData(payload);
+  return extractLokiStreams(data.result).flatMap(toLogResultsFromStream);
+}
+
+function readLokiSuccessData(payload: unknown): Record<string, unknown> {
+  if (!isRecord(payload)) throw createLokiSchemaError("response must be a JSON object");
+  if (payload.status !== "success") throw createLokiSchemaError("status must be success");
+  if (!isRecord(payload.data)) throw createLokiSchemaError("data must be an object");
+  if (payload.data.resultType !== "streams") throw createLokiSchemaError("data.resultType must be streams");
+  return payload.data;
+}
+
+function extractLokiStreams(result: unknown): unknown[] {
+  if (!Array.isArray(result)) throw createLokiSchemaError("data.result must be an array of streams");
+  return result;
 }
 
 function toLogResultsFromStream(stream: unknown): LogResult[] {
-  if (!isRecord(stream)) return [];
+  if (!isRecord(stream)) throw createLokiSchemaError("each data.result stream must be an object");
 
-  const labels = readStringRecord(stream.stream);
-  const values = Array.isArray(stream.values) ? stream.values : [];
-  return values.map(value => toLogResult(value, labels)).filter(isLogResult);
+  const labels = readLokiStreamLabels(stream.stream);
+  const values = readLokiStreamValues(stream.values);
+  return values.map(value => toLogResult(value, labels));
 }
 
-function toLogResult(value: unknown, labels: Record<string, string>): LogResult | undefined {
-  if (!Array.isArray(value) || value.length < 2) return undefined;
+function readLokiStreamLabels(value: unknown): Record<string, string> {
+  if (!isRecord(value)) throw createLokiSchemaError("each data.result stream labels must be an object");
+  return readStringRecord(value);
+}
+
+function readLokiStreamValues(value: unknown): unknown[] {
+  if (!Array.isArray(value)) throw createLokiSchemaError("each data.result stream values must be an array");
+  if (value.length === 0) throw createLokiSchemaError("each data.result stream values array must include at least one log entry");
+  return value;
+}
+
+function toLogResult(value: unknown, labels: Record<string, string>): LogResult {
+  if (!Array.isArray(value) || value.length < 2) throw createLokiSchemaError("Loki log values must be [timestamp, line] pairs");
 
   const timestampUnixNano = readNonEmptyStringOrNumber(value[0]);
   const line = readStringOrNumber(value[1]);
-  if (!timestampUnixNano || line === undefined) return undefined;
+  if (!timestampUnixNano || line === undefined) throw createLokiSchemaError("Loki log values must include timestamp and line strings");
 
-  const metadata = readStringRecord(value[2]);
+  const metadata = readLokiMetadata(value[2]);
   const result = { timestampUnixNano, line, labels: { ...labels } };
   return Object.keys(metadata).length > 0 ? { ...result, metadata } : result;
+}
+
+function readLokiMetadata(value: unknown): Record<string, string> {
+  if (value === undefined) return {};
+  if (!isRecord(value)) throw createLokiSchemaError("Loki log metadata must be an object when present");
+  return readStringRecord(value);
 }
 
 function readStringRecord(value: unknown): Record<string, string> {
@@ -271,6 +311,14 @@ function readStringRecord(value: unknown): Record<string, string> {
   return record;
 }
 
+function readOptionalString(item: Record<string, unknown>, key: string): string | undefined {
+  const value = item[key];
+  if (typeof value !== "string") return undefined;
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function readNonEmptyStringOrNumber(value: unknown): string | undefined {
   const text = readStringOrNumber(value)?.trim();
   return text ? text : undefined;
@@ -282,7 +330,7 @@ function readStringOrNumber(value: unknown): string | undefined {
   return undefined;
 }
 
-function isLogResult(value: LogResult | undefined): value is LogResult {
+function isNonEmptyString(value: string | undefined): value is string {
   return value !== undefined;
 }
 

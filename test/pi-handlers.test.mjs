@@ -4,8 +4,20 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { trace } from "@opentelemetry/api";
-import { handleObsSessionCommand, clearObsSessionRuntimeState } from "../src/commands/obs-session.ts";
-import { handleObsStatusCommand, resetObsStatusRuntimeState } from "../src/commands/obs-status.ts";
+import {
+  clearObsSessionRuntimeState,
+  getLocalObsSessionSnapshot,
+  handleObsSessionCommand,
+} from "../src/commands/obs-session.ts";
+import {
+  getObsStatusRuntimeState,
+  handleObsStatusCommand,
+  resetObsStatusRuntimeState,
+} from "../src/commands/obs-status.ts";
+import {
+  clearObsAgentsRuntimeState,
+  getLocalObsAgentsRuntimeSnapshot,
+} from "../src/commands/obs-agents-runtime.ts";
 import { handleObsTraceCommand } from "../src/commands/obs-trace.ts";
 import { EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE } from "../src/constants.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
@@ -23,8 +35,9 @@ import {
   readSessionHeaderFromFile,
   registerHandlers,
   safeHandler,
+  withTelemetrySessionResourceAttributes,
 } from "../src/pi/handlers.ts";
-import { completeSubagentSpawn, startSubagentSpawn } from "../src/pi/subagent-spawn.ts";
+import { completeSubagentSpawn, recordAgentJoin, recordAgentWait, startSubagentSpawn } from "../src/pi/subagent-spawn.ts";
 
 function createFakePi() {
   const handlers = new Map();
@@ -143,6 +156,79 @@ function createFakeTelemetry(lineage) {
 function loadConfig() {
   return Promise.resolve(defaultObservMeConfig);
 }
+
+test("registerHandlers validates Pi event API shape before registration", () => {
+  const pi = { handlers: new Map(), on: "not-a-function" };
+
+  assert.throws(
+    () => registerHandlers(pi),
+    /ObservMe\/Pi API compatibility error: expected Pi ExtensionAPI with on\(eventName, handler\) before registering ObservMe handlers\./u,
+  );
+  assert.equal(pi.handlers.size, 0);
+  assert.throws(() => registerHandlers(undefined), /ObservMe\/Pi API compatibility error/u);
+});
+
+test("registerHandlers propagates Pi event registration failures", () => {
+  const registrationError = new Error("Pi registration failed");
+
+  assert.throws(
+    () => registerHandlers({ on: () => { throw registrationError; } }),
+    registrationError,
+  );
+});
+
+test("registerHandlers registers expected lifecycle handlers with valid Pi event API", () => {
+  const pi = createFakePi();
+
+  registerHandlers(pi, { loadConfig });
+
+  assert.deepEqual([...pi.handlers.keys()], [
+    "session_start",
+    "agent_start",
+    "turn_start",
+    "before_provider_request",
+    "after_provider_response",
+    "message_end",
+    "tool_execution_start",
+    "tool_call",
+    "tool_result",
+    "tool_execution_end",
+    "user_bash",
+    "bashExecution",
+    "model_select",
+    "model_change",
+    "thinking_level_select",
+    "thinking_level_change",
+    "session_before_tree",
+    "session_tree",
+    "session_compact",
+    "turn_end",
+    "agent_end",
+    "session_shutdown",
+  ]);
+  assert.equal([...pi.handlers.values()].every(handler => typeof handler === "function"), true);
+});
+
+test("telemetry session resource attributes include a unique instance id without mutating config", () => {
+  const config = structuredClone(defaultObservMeConfig);
+  const lineage = {
+    workflowId: "workflow-resource-test",
+    workflowRootAgentId: "agent-root-resource-test",
+    agentId: "agent-resource-test",
+    rootAgentId: "agent-root-resource-test",
+    depth: 0,
+    role: "root",
+    orphaned: false,
+  };
+
+  config.resource.attributes["service.instance.id"] = "stale-instance";
+  const merged = withTelemetrySessionResourceAttributes(config, lineage, "session-instance-test");
+
+  assert.equal(config.resource.attributes["service.instance.id"], "stale-instance");
+  assert.equal(merged.resource.attributes["service.instance.id"], "session-instance-test");
+  assert.equal(merged.resource.attributes["observme.instance.id"], "session-instance-test");
+  assert.equal(merged.resource.attributes["pi.agent.id"], "agent-resource-test");
+});
 
 function createNotificationContext(notifications) {
   return {
@@ -382,6 +468,74 @@ test("duplicate session_start flushes and shuts down the previous telemetry sess
 
   assert.deepEqual(secondSession.controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
   assert.deepEqual(secondSession.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+});
+
+test("final lifecycle regression keeps runtime state consistent after duplicate session_start cleanup", async t => {
+  clearObsSessionRuntimeState();
+  resetObsStatusRuntimeState();
+  clearObsAgentsRuntimeState();
+  t.after(() => {
+    clearObsSessionRuntimeState();
+    resetObsStatusRuntimeState();
+    clearObsAgentsRuntimeState();
+  });
+
+  const pi = createFakePi();
+  const sessions = [];
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      const telemetry = createFakeTelemetry(lineage);
+      sessions.push(telemetry);
+      return telemetry;
+    },
+  });
+
+  // Regression for specs/spec-review-pi-extension-first-pass-tasks-3.md:
+  // duplicate starts must clean up the prior controller before replacing public runtime state.
+  await pi.handlers.get("session_start")({ sessionId: "session-final-first" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("agent_start")({ source: "user" }, {});
+  await pi.handlers.get("turn_start")({ turnIndex: 1 }, {});
+
+  const firstSession = sessions[0];
+  firstSession.controller.flush = async timeoutMs => {
+    firstSession.controller.flushCalls.push(timeoutMs);
+    return { operation: "flush", completed: false, timedOut: true };
+  };
+
+  assert.equal(getLocalObsSessionSnapshot().sessionId, "session-final-first");
+  assert.equal(getLocalObsSessionSnapshot().turns, 1);
+  assert.equal(getLocalObsAgentsRuntimeSnapshot().sessionId, "session-final-first");
+
+  await pi.handlers.get("session_start")({ sessionId: "session-final-second" }, { cwd: "/workspace/demo" });
+
+  const secondSession = sessions[1];
+  const sessionSnapshot = getLocalObsSessionSnapshot();
+  const agentsSnapshot = getLocalObsAgentsRuntimeSnapshot();
+  const statusState = getObsStatusRuntimeState();
+
+  assert.equal(sessions.length, 2);
+  assert.equal(firstSession.tracer.spans.every(span => span.ended), true);
+  assert.deepEqual(firstSession.controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.deepEqual(firstSession.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.equal(secondSession.tracer.spans[0].ended, false);
+  assert.deepEqual(secondSession.controller.flushCalls, []);
+  assert.deepEqual(secondSession.controller.shutdownCalls, []);
+  assert.equal(sessionSnapshot.sessionId, "session-final-second");
+  assert.equal(sessionSnapshot.traceId, "11111111111111111111111111111111");
+  assert.equal(sessionSnapshot.turns, 0);
+  assert.equal(sessionSnapshot.llmCalls, 0);
+  assert.equal(sessionSnapshot.toolCalls, 0);
+  assert.equal(sessionSnapshot.costUsd, 0);
+  assert.equal(agentsSnapshot.sessionId, "session-final-second");
+  assert.equal(agentsSnapshot.traceId, "11111111111111111111111111111111");
+  assert.equal(agentsSnapshot.lineage?.agentId, secondSession.lineage.agentId);
+  assert.notEqual(agentsSnapshot.lineage?.agentId, firstSession.lineage.agentId);
+  assert.deepEqual(agentsSnapshot.children, []);
+  assert.deepEqual(agentsSnapshot.waitJoinHints, []);
+  assert.equal(statusState.config?.enabled, defaultObservMeConfig.enabled);
+  assert.equal(statusState.lastExportError, undefined);
+  assert.equal(statusState.queueDrops, 0);
 });
 
 test("active traces can contain ended child spans before the pi.session root is exported", async () => {
@@ -1152,6 +1306,185 @@ test("agent-run and turn metrics increment without high-cardinality ids as label
   assert.equal(telemetry.tracer.spans.find(span => span.name === SPAN_NAMES.PI_TURN).ended, true);
   assert.equal(telemetry.tracer.spans.find(span => span.name === SPAN_NAMES.PI_AGENT_RUN).ended, true);
 });
+
+test("active span metrics increment and decrement for normal span lifecycles", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-active-spans" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("agent_start")({ source: "user", prompt: "hello" }, {});
+  await pi.handlers.get("turn_start")({ turnIndex: 1, message: "hello" }, {});
+  await pi.handlers.get("before_provider_request")({ payload: { messages: [{ role: "user", content: "hello" }] } }, { model: { provider: "anthropic", model: "claude-test" } });
+  await pi.handlers.get("message_end")({ message: { role: "assistant", provider: "anthropic", model: "claude-test", stopReason: "stop", usage: { input: 1, output: 1, totalTokens: 2 }, content: [{ type: "text", text: "done" }] } }, {});
+  await pi.handlers.get("tool_execution_start")({ toolCallId: "tool-active", toolName: "read" }, {});
+  await pi.handlers.get("tool_execution_end")({ toolCallId: "tool-active", success: true, result: "contents" }, {});
+  await pi.handlers.get("user_bash")({ command: "npm test", exitCode: 0, output: "ok" }, {});
+  await pi.handlers.get("session_tree")({ oldLeafId: "entry-old", newLeafId: "entry-new", branchPath: ["entry-old", "entry-new"] }, {});
+  await pi.handlers.get("session_compact")({ reason: "manual", compactionEntry: { id: "compact-active", firstKeptEntryId: "entry-new", tokensBefore: 100, summary: "summary" } }, {});
+
+  const startedSubagent = startSubagentSpawn(telemetry, { spawnId: "spawn-active", childAgentId: "child-active", spawnType: "command" });
+  recordAgentWait(telemetry, { spawnId: startedSubagent.spawnId, childAgentId: startedSubagent.childAgentId, childStatus: "active", joinStatus: "waiting", durationMs: 5 });
+  recordAgentJoin(telemetry, { spawnId: startedSubagent.spawnId, childAgentId: startedSubagent.childAgentId, childStatus: "completed", joinStatus: "completed", durationMs: 7 });
+  completeSubagentSpawn(telemetry, startedSubagent.spawnId, { childAgentId: startedSubagent.childAgentId, childStatus: "completed" });
+
+  await pi.handlers.get("turn_end")({ turnIndex: 1 }, {});
+  await pi.handlers.get("agent_end")({}, {});
+  await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
+
+  const operations = [
+    "session",
+    "agent_run",
+    "turn",
+    "llm_request",
+    "tool_call",
+    "bash_execution",
+    "branch",
+    "compaction",
+    "subagent_spawn",
+    "agent_wait",
+    "agent_join",
+  ];
+
+  for (const operation of operations) assertActiveSpanValues(telemetry.meter.records, operation, [1, -1]);
+});
+
+test("export health dashboard-driving lifecycle signals are emitted by session handlers", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-export-health" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
+
+  assertMetricIncrementedWithoutIds(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.SESSIONS_STARTED_TOTAL);
+  assertMetricIncrementedWithoutIds(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.SESSIONS_SHUTDOWN_TOTAL);
+  assertObservedOperation(telemetry.meter.records, "session_start");
+  assertObservedOperation(telemetry.meter.records, "session_shutdown");
+  assertHandlerDuration(telemetry.meter.records, "session_start", "ok");
+  assertHandlerDuration(telemetry.meter.records, "session_shutdown", "ok");
+  assertActiveSpanValues(telemetry.meter.records, "session", [1, -1]);
+});
+
+test("registered Pi handlers emit observation and duration metrics with bounded labels", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-observed" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("agent_start")({ source: "user", prompt: "hello" }, {});
+  await pi.handlers.get("turn_start")({ turnIndex: 1, message: "hello" }, {});
+  await pi.handlers.get("before_provider_request")({ payload: { messages: [{ role: "user", content: "hello" }] } }, { model: { provider: "anthropic", model: "claude-test" } });
+  await pi.handlers.get("after_provider_response")({ status: 200 }, {});
+  await pi.handlers.get("message_end")({ message: { role: "assistant", provider: "anthropic", model: "claude-test", stopReason: "stop", usage: { input: 1, output: 1, totalTokens: 2 }, content: [{ type: "text", text: "done" }] } }, {});
+  await pi.handlers.get("tool_execution_start")({ toolCallId: "tool-observed", toolName: "read" }, {});
+  await pi.handlers.get("tool_call")({ toolCallId: "tool-observed", toolName: "read" }, {});
+  await pi.handlers.get("tool_result")({ toolCallId: "tool-observed", result: "contents" }, {});
+  await pi.handlers.get("tool_execution_end")({ toolCallId: "tool-observed", success: true, result: "contents" }, {});
+  await pi.handlers.get("user_bash")({ command: "npm test", exitCode: 0, output: "ok" }, {});
+  await pi.handlers.get("session_before_tree")({ oldLeafId: "entry-old", newLeafId: "entry-new" }, {});
+  await pi.handlers.get("session_tree")({ oldLeafId: "entry-old", newLeafId: "entry-new", branchPath: ["entry-old", "entry-new"] }, {});
+  await pi.handlers.get("session_compact")({ reason: "manual", compactionEntry: { id: "compact-observed", firstKeptEntryId: "entry-new", tokensBefore: 100, summary: "summary" } }, {});
+  await pi.handlers.get("turn_end")({ turnIndex: 1 }, {});
+  await pi.handlers.get("agent_end")({}, {});
+  await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
+
+  const expectedOperations = [
+    "session_start",
+    "agent_start",
+    "turn_start",
+    "before_provider_request",
+    "after_provider_response",
+    "message_end",
+    "tool_execution_start",
+    "tool_call",
+    "tool_result",
+    "tool_execution_end",
+    "user_bash",
+    "session_before_tree",
+    "session_tree",
+    "session_compact",
+    "turn_end",
+    "agent_end",
+    "session_shutdown",
+  ];
+
+  for (const operation of expectedOperations) {
+    assertObservedOperation(telemetry.meter.records, operation);
+    assertHandlerDuration(telemetry.meter.records, operation, "ok");
+  }
+});
+
+test("handler observation preserves safe handler errors and records failed duration status", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-handler-error" }, { cwd: "/workspace/demo" });
+  telemetry.tracer.startSpan = () => {
+    throw new Error("span start failed");
+  };
+
+  await assert.doesNotReject(() => pi.handlers.get("agent_start")({ source: "user" }, {}));
+
+  assertObservedOperation(telemetry.meter.records, "agent_start");
+  assertHandlerDuration(telemetry.meter.records, "agent_start", "error");
+  assert.ok(
+    telemetry.meter.records.some(
+      record => record.name === OBSERVME_COUNTER_METRIC_NAMES.HANDLER_ERRORS_TOTAL && record.attributes.operation === "agent_start",
+    ),
+  );
+  assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.HANDLER_FAILED));
+});
+
+function assertActiveSpanValues(records, operation, expectedValues) {
+  const values = records
+    .filter(record => record.name === OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_SPANS && record.attributes.operation === operation)
+    .map(record => record.value);
+  assert.deepEqual(values, expectedValues, `${OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_SPANS} should record ${expectedValues.join(",")} for ${operation}`);
+}
+
+function assertObservedOperation(records, operation) {
+  const record = records.find(
+    candidate => candidate.name === OBSERVME_COUNTER_METRIC_NAMES.EVENTS_OBSERVED_TOTAL && candidate.value === 1 && candidate.attributes.operation === operation,
+  );
+  assert.ok(record, `${OBSERVME_COUNTER_METRIC_NAMES.EVENTS_OBSERVED_TOTAL} should increment for ${operation}`);
+  assert.deepEqual(Object.keys(record.attributes).sort(), ["operation"]);
+}
+
+function assertHandlerDuration(records, operation, status) {
+  const record = records.find(
+    candidate => candidate.name === OBSERVME_HISTOGRAM_METRIC_NAMES.HANDLER_DURATION_MS && candidate.attributes.operation === operation && candidate.attributes.status === status,
+  );
+  assert.ok(record, `${OBSERVME_HISTOGRAM_METRIC_NAMES.HANDLER_DURATION_MS} should record ${status} for ${operation}`);
+  assert.equal(Number.isFinite(record.value), true);
+  assert.equal(record.value >= 0, true);
+  assert.deepEqual(Object.keys(record.attributes).sort(), ["operation", "status"]);
+}
 
 function assertMetricIncrementedWithoutIds(records, metricName) {
   const record = records.find(candidate => candidate.name === metricName && candidate.value === 1);

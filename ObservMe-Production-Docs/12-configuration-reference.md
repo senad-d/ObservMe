@@ -208,6 +208,15 @@ Rules:
 
 Copy `.env.example` to `.env` for project-local extension variables, or export the same `OBSERVME_*` names in the shell before starting Pi. System environment variables override `.env` values, and `.env` must never be committed.
 
+Automatic project starter file:
+
+- On `session_start`, the extension creates `<cwd>/.pi/observme.yaml` when the project is trusted and the file is missing.
+- Existing project config is never overwritten.
+- Edit `<cwd>/.pi/observme.yaml` for custom setup: `otlp.endpoint` / signal-specific endpoints for the Collector, `resource.attributes` for service/project/tenant/environment labels, `capture` and `privacy` for content capture and redaction, and `query.grafana` / `query.links.traceUrlTemplate` for `/obs` query commands.
+- The generated starter mirrors the local debug profile, including content-capture settings; review `capture` and `privacy` before production use.
+- Keep credentials out of YAML. Reference environment variables in YAML and set secrets through the shell or a trusted project `.env`.
+- Use `~/.pi/agent/observme.yaml` only for global defaults that should apply across projects; project `.pi/observme.yaml` overrides it after trust.
+
 ## 5. Safe Production Defaults
 
 ```yaml

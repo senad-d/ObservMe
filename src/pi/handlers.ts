@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { open } from "node:fs/promises";
 import type { Counter, Histogram, Meter, Span, Tracer, UpDownCounter } from "@opentelemetry/api";
 import { SpanStatusCode, trace } from "@opentelemetry/api";
@@ -12,7 +13,9 @@ import {
   recordObsSessionTurn,
   startObsSessionRuntimeState,
 } from "../commands/obs-session.ts";
-import { clearObsStatusExportError, recordObsStatusExportResult, recordObsStatusQueueDrop, updateObsStatusRuntimeState } from "../commands/obs-status.ts";
+import { clearObsStatusExportError, recordObsStatusExportResult, updateObsStatusRuntimeState } from "../commands/obs-status.ts";
+import type { EnsureProjectConfigOptions, ProjectConfigBootstrapResult } from "../config/bootstrap-project-config.ts";
+import { ensureProjectObservMeConfig } from "../config/bootstrap-project-config.ts";
 import type { LoadSessionConfigOptions, SessionConfigDiagnostics } from "../config/load-config.ts";
 import { loadSessionConfig, loadSessionConfigWithDiagnostics } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
@@ -29,6 +32,7 @@ import {
   COMMON_SPAN_ATTRIBUTES,
   COMPACTION_ATTRIBUTES,
   LOG_ATTRIBUTES,
+  RESOURCE_ATTRIBUTES,
   TOOL_ATTRIBUTES,
   TURN_ATTRIBUTES,
 } from "../semconv/attributes.ts";
@@ -70,6 +74,7 @@ import {
   deleteCurrentLlmRequest,
   deleteCurrentToolCall,
   deriveTurnId,
+  endActiveSpan,
   endAllActiveSpans,
   errorClass,
   evictSpan,
@@ -107,6 +112,7 @@ import {
   recordOptionalToolResult,
   recordPromptSizeMetric,
   recordSpanDurationMs,
+  recordTelemetryDrop,
   resolveCurrentLlmSpan,
   resolveCurrentToolCallId,
   resolveLlmParentSpan,
@@ -118,12 +124,14 @@ import {
   resolveThinkingLevel,
   resolveToolCallState,
   resolveToolParentSpan,
-  startChildSpan,
+  startActiveChildSpan,
+  startActiveRootSpan,
   startToolCallState,
   stringifyAttributes,
   thinkingLevelChangeMetricLabels,
   updateCurrentSessionAttributes,
   withoutUndefinedAttributes,
+  type TelemetryDropTarget,
 } from "./handler-internals.ts";
 export { deriveTurnId };
 
@@ -137,6 +145,7 @@ export type HandlerErrorRecorder = (name: string, error: unknown) => void;
 export type LoadSessionConfig = (options: LoadSessionConfigOptions) => Promise<ObservMeConfig>;
 export type StartSessionTelemetry = (options: StartSessionTelemetryOptions) => Promise<ObservMeTelemetrySession>;
 export type ReadSessionHeader = (sessionFile: string) => Promise<SessionRecoveryHeader | undefined>;
+export type EnsureProjectConfig = (options: EnsureProjectConfigOptions) => Promise<ProjectConfigBootstrapResult>;
 
 export interface MinimalSessionCorrelation {
   readonly workflowId?: string;
@@ -193,6 +202,7 @@ export interface RegisterHandlersOptions {
   readonly configDirName?: string;
   readonly trustedParentContext?: boolean;
   readonly readSessionHeader?: ReadSessionHeader;
+  readonly ensureProjectConfig?: EnsureProjectConfig;
   readonly onHandlerError?: HandlerErrorRecorder;
 }
 
@@ -336,50 +346,127 @@ const sessionAttributeKeys = {
 } as const;
 
 const duplicateSessionStartEventName = "session.duplicate_start";
+const piApiCompatibilityErrorMessage =
+  "ObservMe/Pi API compatibility error: expected Pi ExtensionAPI with on(eventName, handler) before registering ObservMe handlers.";
 
 let defaultHandlerErrorRecorder: HandlerErrorRecorder = recordInternalErrorFallback;
 
 export function registerHandlers(pi: unknown, options: RegisterHandlersOptions = {}): void {
-  const api = pi as ObservMePiApi;
+  const api = resolveObservMePiApi(pi);
   let session: ObservMeTelemetrySession | undefined;
   const loadConfigFn = options.loadConfig ?? loadSessionConfig;
   const startTelemetryFn = options.startTelemetry ?? startSessionTelemetry;
   const errorRecorder = createStatefulHandlerErrorRecorder(() => session, options.onHandlerError);
 
   defaultHandlerErrorRecorder = errorRecorder;
-  api.on(
+  registerSerializedObservedHandler(
+    api,
     "session_start",
-    safeHandler(
-      "session_start",
-      createSerializedHandler(createSessionStartHandler(() => session, loadConfigFn, startTelemetryFn, options, value => {
-        session = value;
-      })),
-      errorRecorder,
-    ),
+    createSessionStartHandler(() => session, loadConfigFn, startTelemetryFn, options, value => {
+      session = value;
+    }),
+    () => session,
+    errorRecorder,
   );
-  api.on("agent_start", safeHandler("agent_start", createAgentStartHandler(() => session), errorRecorder));
-  api.on("turn_start", safeHandler("turn_start", createTurnStartHandler(() => session), errorRecorder));
-  api.on("before_provider_request", safeHandler("before_provider_request", createBeforeProviderRequestHandler(() => session), errorRecorder));
-  api.on("after_provider_response", safeHandler("after_provider_response", createAfterProviderResponseHandler(() => session), errorRecorder));
-  api.on("message_end", safeHandler("message_end", createMessageEndHandler(() => session), errorRecorder));
-  api.on("tool_execution_start", safeHandler("tool_execution_start", createToolExecutionStartHandler(() => session), errorRecorder));
-  api.on("tool_call", safeHandler("tool_call", createToolCallHandler(() => session), errorRecorder));
-  api.on("tool_result", safeHandler("tool_result", createToolResultHandler(() => session), errorRecorder));
-  api.on("tool_execution_end", safeHandler("tool_execution_end", createToolExecutionEndHandler(() => session), errorRecorder));
-  api.on("user_bash", safeHandler("user_bash", createBashExecutionHandler(() => session), errorRecorder));
-  api.on("bashExecution", safeHandler("bashExecution", createBashExecutionHandler(() => session), errorRecorder));
-  api.on("model_select", safeHandler("model_select", createModelChangeHandler(() => session), errorRecorder));
-  api.on("model_change", safeHandler("model_change", createModelChangeHandler(() => session), errorRecorder));
-  api.on("thinking_level_select", safeHandler("thinking_level_select", createThinkingLevelChangeHandler(() => session), errorRecorder));
-  api.on("thinking_level_change", safeHandler("thinking_level_change", createThinkingLevelChangeHandler(() => session), errorRecorder));
-  api.on("session_before_tree", safeHandler("session_before_tree", createSessionBeforeTreeHandler(() => session), errorRecorder));
-  api.on("session_tree", safeHandler("session_tree", createBranchHandler(() => session), errorRecorder));
-  api.on("session_compact", safeHandler("session_compact", createCompactionHandler(() => session), errorRecorder));
-  api.on("turn_end", safeHandler("turn_end", createTurnEndHandler(() => session), errorRecorder));
-  api.on("agent_end", safeHandler("agent_end", createAgentEndHandler(() => session), errorRecorder));
-  api.on("session_shutdown", safeHandler("session_shutdown", createSessionShutdownHandler(() => session, value => {
+  registerObservedHandler(api, "agent_start", createAgentStartHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "turn_start", createTurnStartHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "before_provider_request", createBeforeProviderRequestHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "after_provider_response", createAfterProviderResponseHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "message_end", createMessageEndHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "tool_execution_start", createToolExecutionStartHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "tool_call", createToolCallHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "tool_result", createToolResultHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "tool_execution_end", createToolExecutionEndHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "user_bash", createBashExecutionHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "bashExecution", createBashExecutionHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "model_select", createModelChangeHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "model_change", createModelChangeHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "thinking_level_select", createThinkingLevelChangeHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "thinking_level_change", createThinkingLevelChangeHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "session_before_tree", createSessionBeforeTreeHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "session_tree", createBranchHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "session_compact", createCompactionHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "turn_end", createTurnEndHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "agent_end", createAgentEndHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "session_shutdown", createSessionShutdownHandler(() => session, value => {
     session = value;
-  }), errorRecorder));
+  }), () => session, errorRecorder);
+}
+
+function resolveObservMePiApi(pi: unknown): ObservMePiApi {
+  if (!isRecord(pi)) throw new TypeError(piApiCompatibilityErrorMessage);
+
+  const on = pi.on;
+  if (typeof on !== "function") throw new TypeError(piApiCompatibilityErrorMessage);
+
+  return {
+    on: (eventName, handler) => {
+      on.call(pi, eventName, handler);
+    },
+  };
+}
+
+function registerSerializedObservedHandler(
+  api: ObservMePiApi,
+  name: string,
+  handler: Handler,
+  getSession: () => ObservMeTelemetrySession | undefined,
+  errorRecorder: HandlerErrorRecorder,
+): void {
+  registerObservedHandler(api, name, createSerializedHandler(handler), getSession, errorRecorder);
+}
+
+function registerObservedHandler(
+  api: ObservMePiApi,
+  name: string,
+  handler: Handler,
+  getSession: () => ObservMeTelemetrySession | undefined,
+  errorRecorder: HandlerErrorRecorder,
+): void {
+  api.on(name, safeHandler(name, observeHandler(name, handler, getSession), errorRecorder));
+}
+
+function observeHandler(
+  name: string,
+  fn: Handler,
+  getSession: () => ObservMeTelemetrySession | undefined,
+): Handler {
+  return async (event, ctx) => {
+    const startedAtMs = Date.now();
+    const sessionBefore = getSession();
+    let status = "ok";
+
+    try {
+      await fn(event, ctx);
+    } catch (error) {
+      status = "error";
+      throw error;
+    } finally {
+      recordHandlerObservation(resolveObservationSession(name, sessionBefore, getSession()), name, startedAtMs, status);
+    }
+  };
+}
+
+function resolveObservationSession(
+  name: string,
+  sessionBefore: ObservMeTelemetrySession | undefined,
+  sessionAfter: ObservMeTelemetrySession | undefined,
+): ObservMeTelemetrySession | undefined {
+  if (name === "session_start") return sessionAfter ?? sessionBefore;
+  return sessionBefore ?? sessionAfter;
+}
+
+function recordHandlerObservation(
+  session: ObservMeTelemetrySession | undefined,
+  name: string,
+  startedAtMs: number,
+  status: string,
+): void {
+  if (!session) return;
+
+  const operation = normalizeMetricValue(name, "handler");
+  session.metrics.eventsObserved.add(1, { operation });
+  session.metrics.handlerDurationMs.record(Math.max(0, Date.now() - startedAtMs), { operation, status });
 }
 
 export function safeHandler(name: string, fn: Handler, recorder: HandlerErrorRecorder = defaultHandlerErrorRecorder): Handler {
@@ -403,7 +490,7 @@ function createSerializedHandler(fn: Handler): Handler {
 }
 
 export async function startSessionTelemetry(options: StartSessionTelemetryOptions): Promise<ObservMeTelemetrySession> {
-  const config = withLineageResourceAttributes(options.config, options.lineage);
+  const config = withTelemetrySessionResourceAttributes(options.config, options.lineage);
   const traceSdk = new ObservMeTraceSdk({ config });
   const metricSdk = new ObservMeMetricSdk({ config });
   const logSdk = new ObservMeLogSdk({ config });
@@ -412,8 +499,7 @@ export async function startSessionTelemetry(options: StartSessionTelemetryOption
   const tracer = traceSdk.tracer ?? trace.getTracer("@senad-d/observme");
 
   const metrics = createObservMeMetrics(metricSdk.meter);
-
-  return {
+  const session: ObservMeTelemetrySession = {
     config,
     lineage: options.lineage,
     controller,
@@ -421,14 +507,16 @@ export async function startSessionTelemetry(options: StartSessionTelemetryOption
     meter: metricSdk.meter,
     logger: logSdk.logger,
     metrics,
-    spans: createSpanRegistry(config, metrics),
-    agentTree: createAgentTreeTracker(config, options.lineage, metrics),
+    spans: createSpanRegistry(config, metrics, () => session),
+    agentTree: createAgentTreeTracker(config, options.lineage, metrics, () => session),
     activeAgentRecorded: false,
     agentRunSequence: 0,
     llmRequestSequence: 0,
     toolCallSequence: 0,
     turnSequences: new Map(),
   };
+
+  return session;
 }
 
 export function createCompositeOtelSignalSdk(
@@ -514,50 +602,59 @@ export function createAgentTreeTracker(
   config: ObservMeConfig,
   lineage: AgentLineageContext,
   metrics: ObservMeMetrics,
+  getTelemetryDropTarget?: () => TelemetryDropTarget,
 ): AgentTreeTracker {
   const tracker = new AgentTreeTracker({
     maxAgents: Math.max(2, config.limits.maxActiveSubagentSpawns + 1),
-    onEvict: () => {
-      metrics.telemetryDropped.add(1, { reason: "agent_tree_full" });
-      recordObsStatusQueueDrop();
-    },
+    onEvict: () => recordTelemetryDrop(resolveTelemetryDropTarget(metrics, getTelemetryDropTarget), "agent_tree_full", { operation: "agent_tree" }),
   });
 
   tracker.registerAgent(lineage);
   return tracker;
 }
 
-export function createSpanRegistry(config: ObservMeConfig, metrics: ObservMeMetrics): SpanRegistry {
+export function createSpanRegistry(
+  config: ObservMeConfig,
+  metrics: ObservMeMetrics,
+  getTelemetryDropTarget?: () => TelemetryDropTarget,
+): SpanRegistry {
   return {
     activeAgentRuns: new BoundedMap({
       maxSize: config.limits.maxActiveAgentRuns,
-      onEvict: eviction => evictSpan(eviction.value, metrics),
+      onEvict: eviction => evictSpan(eviction.value, resolveTelemetryDropTarget(metrics, getTelemetryDropTarget)),
     }),
     activeTurns: new BoundedMap({
       maxSize: config.limits.maxActiveTurns,
-      onEvict: eviction => evictSpan(eviction.value, metrics),
+      onEvict: eviction => evictSpan(eviction.value, resolveTelemetryDropTarget(metrics, getTelemetryDropTarget)),
     }),
     activeLlmRequests: new BoundedMap({
       maxSize: config.limits.maxActiveLlmRequests,
-      onEvict: eviction => evictSpan(eviction.value, metrics),
+      onEvict: eviction => evictSpan(eviction.value, resolveTelemetryDropTarget(metrics, getTelemetryDropTarget)),
     }),
     activeToolCalls: new BoundedMap({
       maxSize: config.limits.maxActiveToolCalls,
-      onEvict: eviction => evictToolCallState(eviction.value, metrics),
+      onEvict: eviction => evictToolCallState(eviction.value, resolveTelemetryDropTarget(metrics, getTelemetryDropTarget)),
     }),
     activeSubagentSpawns: new BoundedMap({
       maxSize: config.limits.maxActiveSubagentSpawns,
-      onEvict: eviction => evictSubagentSpawnState(eviction.value, metrics),
+      onEvict: eviction => evictSubagentSpawnState(eviction.value, resolveTelemetryDropTarget(metrics, getTelemetryDropTarget)),
     }),
     activeAgentWaits: new BoundedMap({
       maxSize: config.limits.maxActiveAgentWaits,
-      onEvict: eviction => evictWaitJoinState(eviction.value, metrics),
+      onEvict: eviction => evictWaitJoinState(eviction.value, resolveTelemetryDropTarget(metrics, getTelemetryDropTarget)),
     }),
     activeAgentJoins: new BoundedMap({
       maxSize: config.limits.maxActiveAgentJoins,
-      onEvict: eviction => evictWaitJoinState(eviction.value, metrics),
+      onEvict: eviction => evictWaitJoinState(eviction.value, resolveTelemetryDropTarget(metrics, getTelemetryDropTarget)),
     }),
   };
+}
+
+function resolveTelemetryDropTarget(
+  metrics: ObservMeMetrics,
+  getTelemetryDropTarget: (() => TelemetryDropTarget) | undefined,
+): TelemetryDropTarget {
+  return getTelemetryDropTarget?.() ?? metrics;
 }
 
 export function buildSessionAttributes(
@@ -777,6 +874,41 @@ async function loadSessionConfigForHandler(
   return loadSessionConfigWithDiagnostics(loadOptions);
 }
 
+async function ensureProjectConfigForHandler(
+  options: RegisterHandlersOptions,
+  ctx: ObservMeHandlerContext,
+): Promise<void> {
+  const ensureProjectConfig = options.ensureProjectConfig ?? ensureProjectObservMeConfig;
+
+  try {
+    const result = await ensureProjectConfig({
+      configDirName: options.configDirName,
+      cwd: ctx.cwd,
+      isProjectTrusted: ctx.isProjectTrusted,
+    });
+
+    await notifyProjectConfigCreated(ctx, result);
+  } catch (error) {
+    await notifyProjectConfigCreationFailed(ctx, error);
+  }
+}
+
+async function notifyProjectConfigCreated(
+  ctx: ObservMeHandlerContext,
+  result: ProjectConfigBootstrapResult,
+): Promise<void> {
+  if (result.status !== "created") return;
+  await ctx.ui?.notify?.(`ObservMe created ${result.path}. Edit this file for custom setup.`, "info");
+}
+
+async function notifyProjectConfigCreationFailed(ctx: ObservMeHandlerContext, error: unknown): Promise<void> {
+  await ctx.ui?.notify?.(`ObservMe could not create the project config file: ${formatBootstrapError(error)}`, "warning");
+}
+
+function formatBootstrapError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function shutDownPreviousSessionBeforeDuplicateStart(
   session: ObservMeTelemetrySession,
   ctx: ObservMeHandlerContext,
@@ -833,7 +965,7 @@ async function shutDownTelemetrySession(
   endAllActiveSpans(session);
   session.sessionSpan?.addEvent(LOG_EVENT_NAMES.SESSION_SHUTDOWN, shutdownAttributes);
   if (failed) session.sessionSpan?.setStatus({ code: SpanStatusCode.ERROR });
-  session.sessionSpan?.end();
+  endActiveSpan(session, session.sessionSpan);
   await ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, undefined);
   await recordControllerOperationResult(session, "flush");
   await recordControllerOperationResult(session, "shutdown");
@@ -873,6 +1005,7 @@ function createSessionStartHandler(
     const previousSession = getSession();
     if (previousSession) await shutDownPreviousSessionBeforeDuplicateStart(previousSession, ctx, setSession);
 
+    await ensureProjectConfigForHandler(options, ctx);
     const loadedConfig = await loadSessionConfigForHandler(loadConfigFn, options, ctx);
     const config = loadedConfig.config;
     await emitUnsafeCaptureWarning(config, ctx);
@@ -891,7 +1024,7 @@ function createSessionStartHandler(
     const labels = metricLabels(session.config, lineage);
 
     session.sessionAttributes = attributes;
-    session.sessionSpan = session.tracer.startSpan(SPAN_NAMES.PI_SESSION, { attributes });
+    session.sessionSpan = startActiveRootSpan(session, SPAN_NAMES.PI_SESSION, attributes, "session");
     startObsSessionRuntimeState({
       sessionId: readString(attributes, sessionAttributeKeys.SESSION_ID),
       traceId: readSpanTraceId(session.sessionSpan),
@@ -940,7 +1073,7 @@ function createAgentStartHandler(getSession: () => ObservMeTelemetrySession | un
 
     const runId = nextAgentRunId(session, event);
     const attributes = buildAgentRunAttributes(event, session, runId);
-    const span = startChildSpan(session.tracer, SPAN_NAMES.PI_AGENT_RUN, session.sessionSpan, attributes);
+    const span = startActiveChildSpan(session, SPAN_NAMES.PI_AGENT_RUN, session.sessionSpan, attributes, "agent_run");
 
     session.currentAgentRunId = runId;
     session.spans.activeAgentRuns.set(runId, span);
@@ -960,7 +1093,7 @@ function createAgentEndHandler(getSession: () => ObservMeTelemetrySession | unde
     const span = session.spans.activeAgentRuns.get(runId);
     if (workflowFailed(event)) span?.setStatus({ code: SpanStatusCode.ERROR });
     recordSpanDurationMs(span, session.metrics.agentRunDurationMs, metricLabels(session.config, session.lineage));
-    span?.end();
+    endActiveSpan(session, span);
     session.spans.activeAgentRuns.delete(runId);
     if (session.currentAgentRunId === runId) session.currentAgentRunId = undefined;
     emitLifecycleLog(session.logger, workflowFailed(event) ? LOG_EVENT_NAMES.AGENT_RUN_FAILED : LOG_EVENT_NAMES.AGENT_RUN_COMPLETED, {
@@ -980,7 +1113,7 @@ function createTurnStartHandler(getSession: () => ObservMeTelemetrySession | und
     const turnIndex = nextTurnIndex(session, runId, event);
     const turnId = deriveTurnId(runId, turnIndex);
     const attributes = buildTurnAttributes(event, session, runId, turnId, turnIndex);
-    const span = startChildSpan(session.tracer, SPAN_NAMES.PI_TURN, runSpan, attributes);
+    const span = startActiveChildSpan(session, SPAN_NAMES.PI_TURN, runSpan, attributes, "turn");
 
     session.currentTurnId = turnId;
     session.spans.activeTurns.set(turnId, span);
@@ -998,7 +1131,7 @@ function createBeforeProviderRequestHandler(getSession: () => ObservMeTelemetryS
     const requestId = nextLlmRequestId(session, event);
     const parentSpan = resolveLlmParentSpan(session);
     const attributes = buildLlmRequestAttributes(event, ctx, session, requestId);
-    const span = startChildSpan(session.tracer, SPAN_NAMES.PI_LLM_REQUEST, parentSpan, attributes);
+    const span = startActiveChildSpan(session, SPAN_NAMES.PI_LLM_REQUEST, parentSpan, attributes, "llm_request");
 
     recordPromptSizeMetric(session, event, llmMetricLabels(session, attributes));
     recordOptionalPromptContent(session, span, event);
@@ -1050,7 +1183,7 @@ function createMessageEndHandler(getSession: () => ObservMeTelemetrySession | un
     }
 
     recordSpanDurationMs(span, session.metrics.llmRequestDurationMs, labels);
-    span?.end();
+    endActiveSpan(session, span);
     deleteCurrentLlmRequest(session, event);
   };
 }
@@ -1122,7 +1255,7 @@ function createToolExecutionEndHandler(getSession: () => ObservMeTelemetrySessio
     }
 
     recordSpanDurationMs(state.span, session.metrics.toolDurationMs, state.labels);
-    state.span.end();
+    endActiveSpan(session, state.span);
     deleteCurrentToolCall(session, toolCallId);
   };
 }
@@ -1192,11 +1325,11 @@ function createBranchHandler(getSession: () => ObservMeTelemetrySession | undefi
 function recordBranch(session: ObservMeTelemetrySession, event: unknown): void {
   const attributes = buildBranchAttributes(event, session);
   const labels = metricLabels(session.config, session.lineage);
-  const span = startChildSpan(session.tracer, SPAN_NAMES.PI_BRANCH, resolveOperationParentSpan(session), attributes);
+  const span = startActiveChildSpan(session, SPAN_NAMES.PI_BRANCH, resolveOperationParentSpan(session), attributes, "branch");
 
   span.addEvent(LOG_EVENT_NAMES.BRANCH_CREATED, attributes);
   span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
+  endActiveSpan(session, span);
   session.metrics.branches.add(1, labels);
   emitStructuredLog(session.logger, LOG_EVENT_NAMES.BRANCH_CREATED, "branch", attributes);
 }
@@ -1213,11 +1346,11 @@ function createCompactionHandler(getSession: () => ObservMeTelemetrySession | un
 function recordCompaction(session: ObservMeTelemetrySession, event: unknown): void {
   const attributes = buildCompactionAttributes(event, session);
   const labels = metricLabels(session.config, session.lineage);
-  const span = startChildSpan(session.tracer, SPAN_NAMES.PI_COMPACTION, resolveOperationParentSpan(session), attributes);
+  const span = startActiveChildSpan(session, SPAN_NAMES.PI_COMPACTION, resolveOperationParentSpan(session), attributes, "compaction");
 
   span.addEvent(LOG_EVENT_NAMES.COMPACTION_CREATED, attributes);
   span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
+  endActiveSpan(session, span);
   session.metrics.compactions.add(1, labels);
   recordCompactionTokensBefore(session, attributes, labels);
   emitStructuredLog(session.logger, LOG_EVENT_NAMES.COMPACTION_CREATED, "compaction", attributes);
@@ -1237,7 +1370,7 @@ function recordCompactionTokensBefore(
 function recordBashExecution(session: ObservMeTelemetrySession, event: unknown): void {
   const payload = readBashPayload(event);
   const attributes = buildBashExecutionAttributes(payload, session);
-  const span = startChildSpan(session.tracer, SPAN_NAMES.PI_BASH_EXECUTION, resolveToolParentSpan(session), attributes);
+  const span = startActiveChildSpan(session, SPAN_NAMES.PI_BASH_EXECUTION, resolveToolParentSpan(session), attributes, "bash_execution");
   const failed = bashExecutionFailed(payload);
 
   recordOptionalBashContent(session, span, payload);
@@ -1252,7 +1385,7 @@ function recordBashExecution(session: ObservMeTelemetrySession, event: unknown):
 
   span.addEvent(LOG_EVENT_NAMES.BASH_COMPLETED, attributes);
   recordSpanDurationMs(span, session.metrics.bashDurationMs, bashExecutionMetricLabels(session, payload, failed));
-  span.end();
+  endActiveSpan(session, span);
   emitLifecycleLog(session.logger, LOG_EVENT_NAMES.BASH_COMPLETED, attributes, failed ? "ERROR" : "INFO");
 }
 
@@ -1272,7 +1405,7 @@ function createTurnEndHandler(getSession: () => ObservMeTelemetrySession | undef
 
     if (workflowFailed(event)) span?.setStatus({ code: SpanStatusCode.ERROR });
     recordSpanDurationMs(span, session.metrics.turnDurationMs, metricLabels(session.config, session.lineage));
-    span?.end();
+    endActiveSpan(session, span);
     session.spans.activeTurns.delete(turnId);
     if (session.currentTurnId === turnId) session.currentTurnId = undefined;
     session.metrics.turnsCompleted.add(1, metricLabels(session.config, session.lineage));
@@ -1373,12 +1506,24 @@ function recordInternalErrorFallback(_name: string, _error: unknown): void {
   return undefined;
 }
 
-function withLineageResourceAttributes(config: ObservMeConfig, lineage: AgentLineageContext): ObservMeConfig {
+export function withTelemetrySessionResourceAttributes(
+  config: ObservMeConfig,
+  lineage: AgentLineageContext,
+  instanceId = randomUUID(),
+): ObservMeConfig {
   const merged = structuredClone(config);
   merged.resource.attributes = {
     ...merged.resource.attributes,
+    ...buildTelemetryInstanceResourceAttributes(instanceId),
     ...stringifyAttributes(buildResourceLineageAttributes(lineage)),
   };
   return merged;
+}
+
+export function buildTelemetryInstanceResourceAttributes(instanceId: string): Record<string, string> {
+  return {
+    [RESOURCE_ATTRIBUTES.SERVICE_INSTANCE_ID]: instanceId,
+    [RESOURCE_ATTRIBUTES.OBSERVME_INSTANCE_ID]: instanceId,
+  };
 }
 

@@ -31,7 +31,7 @@ Findings summary by severity and category:
 
 ## Ordered tasks
 
-- [ ] Add atomic extension initialization coverage for partial registration failures
+- [x] Add atomic extension initialization coverage for partial registration failures
 
 #### Why
 
@@ -52,7 +52,7 @@ Findings summary by severity and category:
 - If rollback cannot be implemented, the limitation and exact Pi API blocker are documented in code comments or tests.
 - Relevant validation commands pass.
 
-- [ ] Distinguish malformed query backend payloads from legitimate empty results
+- [x] Distinguish malformed query backend payloads from legitimate empty results
 
 #### Why
 
@@ -73,7 +73,7 @@ Findings summary by severity and category:
 - Diagnostics remain sanitized and do not include tokens, passwords, or raw backend body content.
 - Relevant focused tests and validation commands pass.
 
-- [ ] Add a final lifecycle regression test for duplicate `session_start` handling after the first-pass fix
+- [x] Add a final lifecycle regression test for duplicate `session_start` handling after the first-pass fix
 
 #### Why
 

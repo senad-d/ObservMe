@@ -63,7 +63,7 @@ Not responsible for:
 Each ObservMe runtime has an extension instance identity, a workflow identity, and a logical agent identity:
 
 ```text
-observme.instance.id    # unique ObservMe extension process startup
+observme.instance.id    # unique ObservMe telemetry session/process startup
 pi.workflow.id          # generated root workflow/execution id, high-cardinality trace/log attribute
 pi.workflow.root_agent_id
 pi.agent.id             # logical Pi agent runtime

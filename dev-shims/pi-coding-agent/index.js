@@ -2,6 +2,8 @@
 // The published extension still declares the real pi coding agent as a peer.
 import { Editor } from "@earendil-works/pi-tui";
 
+export const CONFIG_DIR_NAME = ".pi";
+
 export class DynamicBorder {
   constructor(color = (value) => value) {
     this.color = color;

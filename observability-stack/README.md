@@ -100,7 +100,7 @@ The OpenTelemetry Collector listens on:
 - **gRPC:** `otel-collector:4317` inside Compose, published locally as `127.0.0.1:4317` by default
 - **HTTP:** `otel-collector:4318` inside Compose, published locally as `127.0.0.1:4318` by default
 
-Prometheus scrapes the collector’s self-observability metrics at `otel-collector:8888` and the OTLP metrics pipeline's Prometheus exporter at `otel-collector:8889`.
+Prometheus scrapes the collector’s self-observability metrics at `otel-collector:8888` and the OTLP metrics pipeline's Prometheus exporter at `otel-collector:8889`. The Prometheus exporter converts safe resource attributes to metric labels after high-cardinality Pi IDs are dropped, so concurrent ObservMe sessions remain separate series and aggregate session counts sum correctly.
 
 ### Pi agent ingestion path
 Pi agents should not be pointed directly at this stack by default. The supported local path is:

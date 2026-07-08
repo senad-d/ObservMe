@@ -76,11 +76,16 @@ export async function emitUnsafeCaptureWarning(
 ): Promise<boolean> {
   if (!config.privacy.allowUnsafeCapture || !hasContentCaptureEnabled(config)) return false;
 
-  await ctx.ui?.notify?.(
-    "ObservMe unsafe capture is active. Prompt, response, tool, bash, or path content may be exported after configured redaction.",
-    "warning",
-  );
+  await ctx.ui?.notify?.(unsafeCaptureWarningMessage(config), "warning");
   return true;
+}
+
+function unsafeCaptureWarningMessage(config: ObservMeConfig): string {
+  if (config.privacy.redactionEnabled) {
+    return "ObservMe unsafe capture is active. Prompt, response, tool, bash, or path content may be exported after configured redaction.";
+  }
+
+  return "ObservMe unsafe capture is active with redaction disabled. Unredacted sensitive prompt, response, tool, bash, or path content may be exported.";
 }
 
 function validateRedactionBoundary(config: ObservMeConfig): ValidationIssue[] {

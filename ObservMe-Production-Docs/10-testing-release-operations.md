@@ -283,7 +283,28 @@ observme_agent_wait_duration_ms
 observme_agent_join_duration_ms
 ```
 
-## 13. Support Procedure
+## 13. Export Health operational contract
+
+The Export Health dashboard is considered operationally useful when it proves both healthy liveness and induced failure visibility without changing a user's working local setup.
+
+Healthy local validation:
+
+- Keep the existing trusted-project setup and configured local OTLP endpoint; do not change `/obs status`, `/obs health`, Grafana auth/profile, or local debug capture settings to satisfy this contract.
+- Generate representative Pi handler activity and verify `observme_events_observed_total` increases.
+- Verify failure-only stat panels display `0` when no matching series exists for telemetry drops, redaction failures, export failures, or handler failures.
+- Treat empty Loki tables for `telemetry.dropped`, `redaction.failed`, `export.failed`, and `trace_context.propagation_failed` as healthy when no matching failure was induced.
+
+Induced failure validation:
+
+- Queue-full or bounded-registry eviction increments `observme_telemetry_dropped_total` with bounded `reason` labels and emits a `telemetry.dropped` log.
+- Redaction exceptions increment `observme_redaction_failures_total` with bounded `operation`/`error_class` labels and emit a `redaction.failed` log without raw content.
+- Export failures increment `observme_export_errors_total` with bounded `reason`/`error_class` labels and emit existing `export.failed` logs.
+- Subagent trace-context propagation failures increment the documented counter and emit `trace_context.propagation_failed` logs.
+- Active span pressure is visible through `observme_active_spans` by bounded `operation`; normal completion, eviction, and shutdown must not leave negative or leaked gauge values.
+
+Label validation for Export Health metrics is limited to `operation`, `reason`, `error_class`, and `status` where needed. Session IDs, workflow IDs, agent IDs, trace/span IDs, entry IDs, raw prompts, raw paths, raw commands, and raw error messages remain span/log attributes or are omitted; they are never metric labels.
+
+## 14. Support Procedure
 
 When troubleshooting:
 

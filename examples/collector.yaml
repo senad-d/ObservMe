@@ -94,6 +94,8 @@ exporters:
 
   prometheusremotewrite/mimir:
     endpoint: http://mimir:9009/api/v1/push
+    resource_to_telemetry_conversion:
+      enabled: true
     sending_queue:
       enabled: true
     retry_on_failure:

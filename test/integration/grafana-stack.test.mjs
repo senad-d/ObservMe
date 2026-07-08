@@ -29,12 +29,14 @@ const dashboardFiles = [
   "dashboards/observme-latency.json",
   "dashboards/observme-tools.json",
   "dashboards/observme-agents.json",
+  "dashboards/observme-agent-node-graphs.json",
   "dashboards/observme-models.json",
   "dashboards/observme-errors.json",
   "dashboards/observme-branches-compactions.json",
   "dashboards/observme-export-health.json",
   "dashboards/observme-logs-llm.json",
   "dashboards/observme-llm-conversations.json",
+  "dashboards/observme-trace-journey.json",
 ];
 const grafanaServicePort = 3000;
 const serviceName = "observme-pi-extension";

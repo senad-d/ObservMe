@@ -64,11 +64,14 @@ export interface ExtensionUI {
   setEditorComponent(factory: EditorComponentFactory): void;
 }
 
+export const CONFIG_DIR_NAME: string;
+
 export interface ExtensionContext {
   cwd: string;
   mode: string;
   ui: ExtensionUI;
   isIdle(): boolean;
+  isProjectTrusted?(): boolean | Promise<boolean>;
 }
 
 export interface ExtensionCommandOptions {

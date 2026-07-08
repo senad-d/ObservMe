@@ -145,7 +145,7 @@ test("validation rejects queue sizes that exceed memory guardrails", () => {
   );
 });
 
-test("unsafe capture warning is visible only when explicit unsafe capture and capture flags are active", async () => {
+test("unsafe capture warning describes redaction state only when unsafe capture is active", async () => {
   const notifications = [];
   const ctx = {
     ui: {
@@ -159,8 +159,20 @@ test("unsafe capture warning is visible only when explicit unsafe capture and ca
     await emitUnsafeCaptureWarning(cloneDefault({ capture: { prompts: true }, privacy: { allowUnsafeCapture: true } }), ctx),
     true,
   );
-  assert.equal(notifications[0].level, "warning");
-  assert.match(notifications[0].message, /unsafe capture/i);
+  assert.equal(
+    await emitUnsafeCaptureWarning(
+      cloneDefault({ capture: { responses: true }, privacy: { allowUnsafeCapture: true, redactionEnabled: false } }),
+      ctx,
+    ),
+    true,
+  );
+
+  assert.deepEqual(notifications.map(notification => notification.level), ["warning", "warning"]);
+  assert.match(notifications[0].message, /after configured redaction/u);
+  assert.doesNotMatch(notifications[0].message, /unredacted sensitive/u);
+  assert.match(notifications[1].message, /redaction disabled/u);
+  assert.match(notifications[1].message, /Unredacted sensitive prompt, response, tool, bash, or path content may be exported\./u);
+  assert.doesNotMatch(JSON.stringify(notifications), /secret-token|password|api_key/u);
 });
 
 test("invalid loaded config falls back to safe defaults and logs rejection reasons", async () => {

@@ -42,6 +42,12 @@ interface CapturedLlmContent {
   readonly originalLength?: number;
 }
 
+export type SelfObservabilitySession = Pick<
+  ObservMeTelemetrySession,
+  "lineage" | "logger" | "metrics" | "sessionAttributes" | "currentAgentRunId" | "currentTurnId"
+>;
+export type TelemetryDropTarget = ObservMeMetrics | SelfObservabilitySession;
+
 const sessionAttributeKeys = {
   SESSION_ID: "pi.session.id",
   SESSION_NAME: "pi.session.name",
@@ -80,6 +86,75 @@ function emitStructuredLog(
       ...attributes,
     },
   });
+}
+
+export function recordTelemetryDrop(target: TelemetryDropTarget, reason: string, attributes: AttributeMap = {}): void {
+  const normalizedReason = normalizeMetricValue(reason, "telemetry_drop");
+  const session = resolveSelfObservabilitySession(target);
+
+  resolveSelfObservabilityMetrics(target).telemetryDropped.add(1, { reason: normalizedReason });
+  if (session) emitSelfObservabilityLog(session, LOG_EVENT_NAMES.TELEMETRY_DROPPED, "telemetry", buildTelemetryDropLogAttributes(normalizedReason, attributes));
+  recordObsStatusQueueDrop();
+}
+
+export function recordRedactionFailure(
+  session: SelfObservabilitySession,
+  operation: string,
+  count = 1,
+  attributes: AttributeMap = {},
+): void {
+  const normalizedOperation = normalizeMetricValue(operation, "redaction");
+  const errorClass = normalizeMetricValue(readString(attributes, LOG_ATTRIBUTES.ERROR_TYPE) ?? readString(attributes, "error_class") ?? "redaction_error", "redaction_error");
+  const logAttributes = { operation: normalizedOperation, [LOG_ATTRIBUTES.ERROR_TYPE]: errorClass };
+
+  session.metrics.redactionFailures.add(normalizeFailureCount(count), { operation: normalizedOperation, error_class: errorClass });
+  emitSelfObservabilityLog(session, LOG_EVENT_NAMES.REDACTION_FAILED, "redaction", logAttributes);
+}
+
+function buildTelemetryDropLogAttributes(reason: string, attributes: AttributeMap): AttributeMap {
+  return withoutUndefinedAttributes({
+    operation: normalizeMetricValue(readString(attributes, "operation") ?? reason, "telemetry"),
+    reason,
+  });
+}
+
+function emitSelfObservabilityLog(
+  session: SelfObservabilitySession,
+  eventName: string,
+  category: string,
+  attributes: AttributeMap,
+): void {
+  emitStructuredLog(session.logger, eventName, category, buildSelfObservabilityLogAttributes(session, attributes), "ERROR");
+}
+
+function buildSelfObservabilityLogAttributes(session: SelfObservabilitySession, attributes: AttributeMap): AttributeMap {
+  return withoutUndefinedAttributes({
+    ...buildLineageMetricSafeLogAttributes(session),
+    [LOG_ATTRIBUTES.PI_AGENT_RUN_ID]: session.currentAgentRunId,
+    [LOG_ATTRIBUTES.PI_TURN_ID]: session.currentTurnId,
+    operation: readString(attributes, "operation"),
+    reason: readString(attributes, "reason"),
+    [LOG_ATTRIBUTES.ERROR_TYPE]: readString(attributes, LOG_ATTRIBUTES.ERROR_TYPE),
+  });
+}
+
+function resolveSelfObservabilityMetrics(target: TelemetryDropTarget): ObservMeMetrics {
+  if (isSelfObservabilitySession(target)) return target.metrics;
+  return target;
+}
+
+function resolveSelfObservabilitySession(target: TelemetryDropTarget): SelfObservabilitySession | undefined {
+  if (isSelfObservabilitySession(target)) return target;
+  return undefined;
+}
+
+function isSelfObservabilitySession(target: TelemetryDropTarget): target is SelfObservabilitySession {
+  return "logger" in target && "metrics" in target;
+}
+
+function normalizeFailureCount(count: number): number {
+  if (!Number.isFinite(count) || count <= 0) return 1;
+  return Math.max(1, Math.floor(count));
 }
 
 export function stringifyAttributes(attributes: AttributeMap): Record<string, string> {
@@ -166,7 +241,7 @@ export function startToolCallState(session: ObservMeTelemetrySession, event: unk
     return existingState;
   }
 
-  const span = startChildSpan(session.tracer, SPAN_NAMES.PI_TOOL_CALL, resolveToolParentSpan(session), attributes);
+  const span = startActiveChildSpan(session, SPAN_NAMES.PI_TOOL_CALL, resolveToolParentSpan(session), attributes, "tool_call");
   const state = { span, labels: toolMetricLabels(attributes) };
 
   session.currentToolCallId = toolCallId;
@@ -263,7 +338,7 @@ export function buildLlmRequestAttributes(
     [LLM_ATTRIBUTES.GEN_AI_CONVERSATION_ID]: resolveCurrentSessionId(session),
     [LLM_ATTRIBUTES.PI_LLM_API]: readString(payload, "api") ?? readString(ctx.model, "api") ?? provider,
     [LLM_ATTRIBUTES.PI_LLM_REQUEST_THINKING_LEVEL]: resolveSessionThinkingLevel(event, ctx, session),
-    [LLM_ATTRIBUTES.PI_LLM_REQUEST_MESSAGE_COUNT]: countPayloadItems(payload, ["messages", "contents"]),
+    [LLM_ATTRIBUTES.PI_LLM_REQUEST_MESSAGE_COUNT]: countPayloadItems(payload, ["messages", "contents", "input", "prompt"]),
     [LLM_ATTRIBUTES.PI_LLM_REQUEST_TOOL_SCHEMA_COUNT]: countPayloadItems(payload, ["tools", "toolSchemas"]),
     [LLM_ATTRIBUTES.PI_LLM_REQUEST_INPUT_CHARS]: safeJsonLength(payload),
     [LLM_ATTRIBUTES.GEN_AI_REQUEST_TEMPERATURE]: readNumber(payload, "temperature"),
@@ -522,7 +597,7 @@ export function recordRedactedBashContent(
   });
 
   if (result.dropped || result.value === undefined) {
-    session.metrics.redactionFailures.add(result.failureMetrics.redactionFailures || 1, { operation: "bash_content_capture" });
+    recordRedactionFailure(session, "bash_content_capture", result.failureMetrics.redactionFailures || 1);
     return;
   }
 
@@ -553,7 +628,7 @@ export function recordRedactedToolContent(
   });
 
   if (result.dropped || result.value === undefined) {
-    session.metrics.redactionFailures.add(result.failureMetrics.redactionFailures || 1, { operation: "tool_content_capture" });
+    recordRedactionFailure(session, "tool_content_capture", result.failureMetrics.redactionFailures || 1);
     return;
   }
 
@@ -576,7 +651,7 @@ export function recordRedactedSpanContent(
   });
 
   if (result.dropped || result.value === undefined) {
-    session.metrics.redactionFailures.add(result.failureMetrics.redactionFailures || 1, { operation: "llm_content_capture" });
+    recordRedactionFailure(session, "llm_content_capture", result.failureMetrics.redactionFailures || 1);
     return undefined;
   }
 
@@ -641,6 +716,57 @@ export function readSpanId(span: Span | undefined): string | undefined {
 }
 
 const spanStartTimesMs = new WeakMap<Span, number>();
+const activeSpanOperations = new WeakMap<Span, string>();
+
+export function startActiveRootSpan(
+  session: ObservMeTelemetrySession,
+  name: string,
+  attributes: AttributeMap,
+  operation: string,
+): Span {
+  const span = session.tracer.startSpan(name, { attributes });
+  spanStartTimesMs.set(span, Date.now());
+  recordActiveSpanStart(session.metrics, span, operation);
+  return span;
+}
+
+export function startActiveChildSpan(
+  session: ObservMeTelemetrySession,
+  name: string,
+  parent: Span | undefined,
+  attributes: AttributeMap,
+  operation: string,
+): Span {
+  const span = startChildSpan(session.tracer, name, parent, attributes);
+  recordActiveSpanStart(session.metrics, span, operation);
+  return span;
+}
+
+export function recordActiveSpanStart(metrics: Pick<ObservMeMetrics, "activeSpans">, span: Span, operation: string): void {
+  if (activeSpanOperations.has(span)) return;
+
+  const normalizedOperation = normalizeMetricValue(operation, "span");
+  activeSpanOperations.set(span, normalizedOperation);
+  metrics.activeSpans.add(1, { operation: normalizedOperation });
+}
+
+export function endActiveSpan(session: ObservMeTelemetrySession, span: Span | undefined): void {
+  if (!span) return;
+
+  recordActiveSpanEnd(session.metrics, span);
+  span.end();
+}
+
+export function recordActiveSpanEnd(metrics: Pick<ObservMeMetrics, "activeSpans">, span: Span | undefined): void {
+  if (!span) return;
+
+  const operation = activeSpanOperations.get(span);
+  if (!operation) return;
+
+  metrics.activeSpans.add(-1, { operation });
+  activeSpanOperations.delete(span);
+  spanStartTimesMs.delete(span);
+}
 
 export function startChildSpan(tracer: TelemetryTracer, name: string, parent: Span | undefined, attributes: AttributeMap): Span {
   const parentContext = parent ? trace.setSpan(otelContext.active(), parent) : otelContext.active();
@@ -659,34 +785,37 @@ export function recordSpanDurationMs(span: Span | undefined, histogram: Histogra
   spanStartTimesMs.delete(span);
 }
 
-export function evictSpan(span: Span, metrics: ObservMeMetrics): void {
+export function evictSpan(span: Span, target: TelemetryDropTarget): void {
+  const operation = activeSpanOperations.get(span) ?? "span_registry";
+  const metrics = resolveSelfObservabilityMetrics(target);
+
   span.setAttribute(COMMON_SPAN_ATTRIBUTES.OBSERVME_EVICTED, true);
   span.setStatus({ code: SpanStatusCode.ERROR, message: "span_registry_full" });
+  recordActiveSpanEnd(metrics, span);
   span.end();
-  metrics.telemetryDropped.add(1, { reason: "span_registry_full" });
-  recordObsStatusQueueDrop();
+  recordTelemetryDrop(target, "span_registry_full", { operation });
 }
 
-export function evictToolCallState(state: ToolCallState, metrics: ObservMeMetrics): void {
-  evictSpan(state.span, metrics);
+export function evictToolCallState(state: ToolCallState, target: TelemetryDropTarget): void {
+  evictSpan(state.span, target);
 }
 
-export function evictSubagentSpawnState(state: SubagentSpawnState, metrics: ObservMeMetrics): void {
-  evictSpan(state.span, metrics);
+export function evictSubagentSpawnState(state: SubagentSpawnState, target: TelemetryDropTarget): void {
+  evictSpan(state.span, target);
 }
 
-export function evictWaitJoinState(state: AgentWaitJoinState, metrics: ObservMeMetrics): void {
-  evictSpan(state.span, metrics);
+export function evictWaitJoinState(state: AgentWaitJoinState, target: TelemetryDropTarget): void {
+  evictSpan(state.span, target);
 }
 
 export function endAllActiveSpans(session: ObservMeTelemetrySession): void {
-  for (const state of session.spans.activeAgentJoins.values()) state.span.end();
-  for (const state of session.spans.activeAgentWaits.values()) state.span.end();
-  for (const state of session.spans.activeSubagentSpawns.values()) state.span.end();
-  for (const span of session.spans.activeLlmRequests.values()) span.end();
-  for (const state of session.spans.activeToolCalls.values()) state.span.end();
-  for (const span of session.spans.activeTurns.values()) span.end();
-  for (const span of session.spans.activeAgentRuns.values()) span.end();
+  for (const state of session.spans.activeAgentJoins.values()) endActiveSpan(session, state.span);
+  for (const state of session.spans.activeAgentWaits.values()) endActiveSpan(session, state.span);
+  for (const state of session.spans.activeSubagentSpawns.values()) endActiveSpan(session, state.span);
+  for (const span of session.spans.activeLlmRequests.values()) endActiveSpan(session, span);
+  for (const state of session.spans.activeToolCalls.values()) endActiveSpan(session, state.span);
+  for (const span of session.spans.activeTurns.values()) endActiveSpan(session, span);
+  for (const span of session.spans.activeAgentRuns.values()) endActiveSpan(session, span);
   session.spans.activeAgentJoins.clear();
   session.spans.activeAgentWaits.clear();
   session.spans.activeSubagentSpawns.clear();
@@ -696,11 +825,11 @@ export function endAllActiveSpans(session: ObservMeTelemetrySession): void {
   session.spans.activeAgentRuns.clear();
 }
 
-export function resolveCurrentSessionId(session: ObservMeTelemetrySession): string {
+export function resolveCurrentSessionId(session: SelfObservabilitySession): string {
   return readString(session.sessionAttributes, sessionAttributeKeys.SESSION_ID) ?? `session-${session.lineage.workflowId}`;
 }
 
-export function buildLineageMetricSafeLogAttributes(session: ObservMeTelemetrySession): AttributeMap {
+export function buildLineageMetricSafeLogAttributes(session: SelfObservabilitySession): AttributeMap {
   return {
     [LOG_ATTRIBUTES.PI_SESSION_ID]: resolveCurrentSessionId(session),
     [LOG_ATTRIBUTES.PI_WORKFLOW_ID]: session.lineage.workflowId,
@@ -1411,9 +1540,16 @@ export function mapStopReason(stopReason: string): string {
 }
 
 export function countPayloadItems(payload: unknown, keys: readonly string[]): number | undefined {
-  const counts = keys.map(key => readArray(payload, key)?.length).filter((value): value is number => value !== undefined);
+  const counts = keys.map(key => countPayloadItemSource(readUnknown(payload, key))).filter((value): value is number => value !== undefined);
   if (counts.length === 0) return undefined;
   return counts.reduce((total, value) => total + value, 0);
+}
+
+export function countPayloadItemSource(value: unknown): number | undefined {
+  if (Array.isArray(value)) return value.length;
+  if (typeof value === "string" && value.trim() !== "") return 1;
+  if (isRecord(value)) return 1;
+  return undefined;
 }
 
 export function safeJsonLength(value: unknown): number | undefined {
@@ -1426,12 +1562,15 @@ export function safeJsonLength(value: unknown): number | undefined {
   }
 }
 
-export function extractPayloadPromptText(payload: unknown): string | undefined {
-  const messages = readArray(payload, "messages") ?? readArray(payload, "contents");
-  if (!messages) return undefined;
+const promptPayloadTextKeys = ["messages", "contents", "input", "prompt"] as const;
 
-  const text = messages.flatMap(extractContentText).join("\n").trim();
-  return text.length === 0 ? undefined : text;
+export function extractPayloadPromptText(payload: unknown): string | undefined {
+  for (const key of promptPayloadTextKeys) {
+    const text = extractContentText(readUnknown(payload, key)).join("\n").trim();
+    if (text.length > 0) return text;
+  }
+
+  return undefined;
 }
 
 export function extractAssistantText(message: Record<string, unknown>): string | undefined {

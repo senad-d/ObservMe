@@ -22,7 +22,7 @@ Findings summary by severity and category:
 
 ## Ordered tasks
 
-- [ ] Replace root `/obs` subcommand dispatch duplication with a single typed registry
+- [x] Replace root `/obs` subcommand dispatch duplication with a single typed registry
 
 #### Why
 
@@ -43,7 +43,7 @@ Findings summary by severity and category:
 - Existing command behavior remains covered and tests pass.
 - The task remains scoped to command dispatch structure and does not rewrite individual command implementations.
 
-- [ ] Validate Pi event API shape before registering handlers
+- [x] Validate Pi event API shape before registering handlers
 
 #### Why
 
@@ -64,7 +64,7 @@ Findings summary by severity and category:
 - Tests cover both valid and invalid boundary cases.
 - Relevant validation commands pass.
 
-- [ ] Make unsafe-capture warnings accurately describe redaction state
+- [x] Make unsafe-capture warnings accurately describe redaction state
 
 #### Why
 

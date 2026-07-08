@@ -8,6 +8,7 @@ const dashboardFiles = [
   "dashboards/observme-latency.json",
   "dashboards/observme-tools.json",
   "dashboards/observme-agents.json",
+  "dashboards/observme-agent-node-graphs.json",
   "dashboards/observme-models.json",
   "dashboards/observme-errors.json",
   "dashboards/observme-branches-compactions.json",
@@ -15,7 +16,11 @@ const dashboardFiles = [
   "dashboards/observme-logs-llm.json",
   "dashboards/observme-llm-conversations.json",
 ];
+const traceJourneyDashboardFile = "dashboards/observme-trace-journey.json";
+const sessionLifecycleDashboardFiles = [...dashboardFiles, traceJourneyDashboardFile];
 const agentDashboardFile = "dashboards/observme-agents.json";
+const nodeGraphDashboardFile = "dashboards/observme-agent-node-graphs.json";
+const exportHealthDashboardFile = "dashboards/observme-export-health.json";
 const localCollectorConfigFile = "observability-stack/config/otel/otel-collector.yaml";
 const datasourceInputVariablePattern = /\$\{DS_[A-Z_]+\}/u;
 const lokiAttributePattern = /\b(?:event\.name|event\.category|pi\.session\.id|pi\.workflow\.id|pi\.agent\.id)\b/u;
@@ -29,6 +34,26 @@ const lokiJsonParserPattern = /\|\s*json\b/u;
 const incorrectErrorCategoryPattern = /event_category\s*=\s*"error"/u;
 const lokiLabelsHintPattern = /key: loki\.(?:attribute|resource)\.labels\s*\n\s*value: ([^\n]+)/gu;
 const localServiceNameInsertPattern = /key: service\.name\s*\n\s*value: observme-pi-extension\s*\n\s*action: insert/u;
+const zeroVectorFallbackPattern = /\bor\s+(?:on\(\)\s+)?vector\(0\)/u;
+const sessionLifecycleMetricPattern = /\bobservme_sessions_(?:started|shutdown)_total\b/u;
+const emptyFailureLogsDescriptionPattern = /empty means no matching failure logs in the selected time range/i;
+const exportHealthZeroStatePanels = [
+  { title: "Observed event liveness", metricName: "observme_events_observed_total" },
+  { title: "Session lifecycle", metricName: "observme_sessions_started_total" },
+  { title: "Session lifecycle", metricName: "observme_sessions_shutdown_total" },
+  { title: "Collector/export health", metricName: "observme_events_observed_total" },
+  { title: "Collector/export health", metricName: "observme_telemetry_dropped_total" },
+  { title: "Telemetry drops", metricName: "observme_telemetry_dropped_total" },
+  { title: "Redaction failures", metricName: "observme_redaction_failures_total" },
+  { title: "Export failures", metricName: "observme_export_errors_total" },
+  { title: "Handler error pressure", metricName: "observme_handler_errors_total" },
+  { title: "Active spans by operation", metricName: "observme_active_spans" },
+];
+const exportHealthFailureLogPanels = [
+  "Redaction failure logs",
+  "Telemetry drop logs",
+  "Trace-context propagation failure logs",
+];
 const provisionedDatasourceUidsByType = new Map([
   ["loki", "loki"],
   ["prometheus", "prometheus"],
@@ -153,13 +178,56 @@ function targetsForDashboard(dashboard, type) {
   const targets = [];
 
   for (const panel of dashboard.panels) {
-    for (const target of panel.targets) {
+    for (const target of panel.targets ?? []) {
       const datasourceType = target.datasource?.type ?? panel.datasource?.type;
       if (datasourceType === type) targets.push({ panel, target });
     }
   }
 
   return targets;
+}
+
+function panelByTitle(dashboard, title) {
+  for (const panel of dashboard.panels) {
+    if (panel.title === title) return panel;
+  }
+
+  return undefined;
+}
+
+function assertPanelExists(dashboard, title) {
+  const panel = panelByTitle(dashboard, title);
+  assert.ok(panel, `${exportHealthDashboardFile}: ${title} panel is required`);
+  return panel;
+}
+
+function expressionsForPanel(panel) {
+  return panel.targets.map((target) => target.expr);
+}
+
+function hasZeroVectorFallback(expression) {
+  return zeroVectorFallbackPattern.test(expression);
+}
+
+function assertPanelTargetUsesMetricWithZeroFallback(dashboard, title, metricName) {
+  const panel = assertPanelExists(dashboard, title);
+  const expressions = expressionsForPanel(panel).filter((expression) => expression.includes(metricName));
+
+  assert.ok(expressions.length > 0, `${exportHealthDashboardFile}: ${title} must query ${metricName}`);
+  assert.ok(
+    expressions.some(hasZeroVectorFallback),
+    `${exportHealthDashboardFile}: ${title} must provide an or vector(0) fallback for ${metricName}`,
+  );
+}
+
+function assertPanelDescriptionMentionsEmptyLogRows(dashboard, title) {
+  const panel = assertPanelExists(dashboard, title);
+
+  assert.match(
+    panel.description ?? "",
+    emptyFailureLogsDescriptionPattern,
+    `${exportHealthDashboardFile}: ${title} must document that empty log tables are healthy when no failures match`,
+  );
 }
 
 function metricNamesForExpression(expression) {
@@ -294,6 +362,73 @@ async function lokiDashboardTargetsUseProvisionedLabels() {
   }
 }
 
+async function nodeGraphDashboardUsesGrafanaFrameTargets() {
+  const dashboard = await readJsonFile(nodeGraphDashboardFile);
+  const panels = dashboard.panels.filter(panel => panel.type === "nodeGraph");
+
+  assert.ok(panels.length > 0, `${nodeGraphDashboardFile}: at least one Node Graph panel is required`);
+
+  for (const panel of panels) {
+    const refIds = panel.targets.map(target => target.refId).sort();
+
+    assert.deepEqual(refIds, ["edges", "nodes"], `${nodeGraphDashboardFile}: ${panel.title} must expose nodes and edges frames`);
+
+    for (const target of panel.targets) {
+      assert.equal(target.format, "table", `${nodeGraphDashboardFile}: ${panel.title} ${target.refId} must use table format`);
+      assert.equal(target.instant, true, `${nodeGraphDashboardFile}: ${panel.title} ${target.refId} must be instant`);
+      assert.equal(target.range, false, `${nodeGraphDashboardFile}: ${panel.title} ${target.refId} must not be a range query`);
+
+      if (target.refId === "nodes") assert.match(target.expr, /"id".*"title"/u, `${nodeGraphDashboardFile}: nodes query must expose id and title fields`);
+      if (target.refId === "edges") assert.match(target.expr, /"source".*"target"/u, `${nodeGraphDashboardFile}: edges query must expose source and target fields`);
+    }
+  }
+}
+
+async function exportHealthDashboardUsesHealthyZeroStateQueries() {
+  const dashboard = await readJsonFile(exportHealthDashboardFile);
+
+  for (const { title, metricName } of exportHealthZeroStatePanels) {
+    assertPanelTargetUsesMetricWithZeroFallback(dashboard, title, metricName);
+  }
+
+  for (const title of exportHealthFailureLogPanels) {
+    assertPanelDescriptionMentionsEmptyLogRows(dashboard, title);
+  }
+}
+
+async function sessionLifecycleDashboardQueriesUseZeroFallbacks() {
+  for (const path of sessionLifecycleDashboardFiles) {
+    const dashboard = await readJsonFile(path);
+    const targets = prometheusTargetsForDashboard(dashboard);
+
+    for (const { panel, target } of targets) {
+      if (!sessionLifecycleMetricPattern.test(target.expr)) continue;
+
+      assert.ok(
+        hasZeroVectorFallback(target.expr),
+        `${path}: ${panel.title} session lifecycle query must treat missing start/shutdown series as zero`,
+      );
+    }
+  }
+}
+
+async function traceJourneyUsesActiveGaugeForSessionStat() {
+  const dashboard = await readJsonFile(traceJourneyDashboardFile);
+  const panel = panelByTitle(dashboard, "Active sessions");
+  const expressions = panel?.targets?.map(target => target.expr) ?? [];
+
+  assert.ok(panel, `${traceJourneyDashboardFile}: Active sessions stat panel is required`);
+  assert.ok(
+    expressions.some(expression => expression.includes("observme_active_agents")),
+    `${traceJourneyDashboardFile}: Active sessions stat must use the active runtime gauge`,
+  );
+  assert.equal(
+    expressions.some(expression => sessionLifecycleMetricPattern.test(expression)),
+    false,
+    `${traceJourneyDashboardFile}: Active sessions stat must not count only sessions started during the range`,
+  );
+}
+
 test("dashboard JSON files are valid Grafana dashboard documents", dashboardFilesAreValidGrafanaDashboards);
 test("dashboard PromQL queries only use documented ObservMe metric names", dashboardPromqlQueriesUseDocumentedMetrics);
 test(
@@ -302,3 +437,7 @@ test(
 );
 test("dashboard Loki targets use normalized OTLP attribute names", lokiDashboardTargetsUseNormalizedAttributeNames);
 test("dashboard Loki targets use labels provisioned by the local Collector", lokiDashboardTargetsUseProvisionedLabels);
+test("node graph dashboard uses Grafana nodes and edges frame targets", nodeGraphDashboardUsesGrafanaFrameTargets);
+test("export health dashboard uses healthy zero-state queries", exportHealthDashboardUsesHealthyZeroStateQueries);
+test("session lifecycle dashboard queries use zero fallbacks", sessionLifecycleDashboardQueriesUseZeroFallbacks);
+test("trace journey uses active gauge for session stat", traceJourneyUsesActiveGaugeForSessionStat);

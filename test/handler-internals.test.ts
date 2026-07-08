@@ -197,7 +197,21 @@ test("LLM parser and attribute helpers isolate message, prompt, usage, and cost 
   assert.equal(requestAttributes[LLM_ATTRIBUTES.GEN_AI_REQUEST_MODEL], "claude-3");
   assert.equal(requestAttributes[LLM_ATTRIBUTES.PI_LLM_REQUEST_MESSAGE_COUNT], 2);
   assert.equal(requestAttributes[LLM_ATTRIBUTES.PI_LLM_REQUEST_TOOL_SCHEMA_COUNT], 2);
+
+  const responsesRequestAttributes = buildLlmRequestAttributes(
+    { payload: { input: [{ role: "user", content: [{ type: "input_text", text: "responses api prompt" }] }] } },
+    {},
+    session,
+    "llm-2",
+  );
+
+  assert.equal(responsesRequestAttributes[LLM_ATTRIBUTES.PI_LLM_REQUEST_MESSAGE_COUNT], 1);
   assert.equal(extractPayloadPromptText({ messages: [{ content: ["hello", { text: "world" }] }] }), "hello\nworld");
+  assert.equal(
+    extractPayloadPromptText({ input: [{ role: "user", content: [{ type: "input_text", text: "responses api prompt" }] }] }),
+    "responses api prompt",
+  );
+  assert.equal(extractPayloadPromptText({ input: "plain completion prompt" }), "plain completion prompt");
   assert.equal(safeJsonLength(undefined), undefined);
 });
 
@@ -363,6 +377,17 @@ test("optional content capture redacts values and metric labels stay low-cardina
   assert.equal(promptLog?.attributes?.[LLM_ATTRIBUTES.PI_LLM_CONTENT_KIND], "prompt");
   assert.equal(promptLog?.attributes?.[LOG_ATTRIBUTES.TRACE_ID], "11111111111111111111111111111111");
   assert.equal(promptLog?.attributes?.[LOG_ATTRIBUTES.SPAN_ID], "2222222222222222");
+
+  const responsesPromptSpan = createFakeSpan();
+  recordOptionalPromptContent(session, responsesPromptSpan as never, {
+    payload: { input: [{ role: "user", content: [{ type: "input_text", text: "responses api prompt" }] }] },
+  });
+  const responsesPromptLog = (session.logger as ReturnType<typeof createFakeLogger>).records.find(
+    record => record.body === responsesPromptSpan.attributes[LLM_ATTRIBUTES.PI_LLM_PROMPT_REDACTED],
+  );
+
+  assert.equal(responsesPromptSpan.attributes[LLM_ATTRIBUTES.PI_LLM_PROMPT_REDACTED], "responses api prompt");
+  assert.equal(responsesPromptLog?.attributes?.[LOG_ATTRIBUTES.EVENT_NAME], LOG_EVENT_NAMES.LLM_PROMPT_CAPTURED);
 
   assert.deepEqual(Object.keys(metricLabels(session.config, session.lineage)).sort(), lowCardinalityLabelKeys.sort());
   assert.deepEqual(llmMetricLabels(session, { [LLM_ATTRIBUTES.GEN_AI_PROVIDER_NAME]: "anthropic", [LLM_ATTRIBUTES.GEN_AI_REQUEST_MODEL]: "claude" }), {

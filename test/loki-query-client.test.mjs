@@ -55,6 +55,29 @@ function createLokiQueryResponse() {
   );
 }
 
+function createEmptyLokiQueryResponse() {
+  return new Response(
+    JSON.stringify({
+      status: "success",
+      data: { resultType: "streams", result: [] },
+    }),
+    { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
+  );
+}
+
+function createMalformedLokiSuccessResponse() {
+  return new Response(
+    JSON.stringify({
+      status: "success",
+      data: {
+        resultType: "streams",
+        result: { token: "super-secret-token", body: "Bearer backend-secret" },
+      },
+    }),
+    { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
+  );
+}
+
 function createAbortError() {
   return new DOMException("The operation was aborted.", "AbortError");
 }
@@ -116,6 +139,36 @@ test("LokiQueryClient queries logs through the Grafana Loki datasource proxy wit
   assert.equal(logs[0].timestampUnixNano, "1783422000000000000");
   assert.equal(logs[0].labels.pi_session_id, "session-1");
   assert.equal(logs[0].metadata.event_name, "llm.request.failed");
+});
+
+test("queryLoki reports malformed success payloads as backend schema errors without raw body content", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+
+  await assert.rejects(
+    queryLoki(config, '{service_name="observme-pi-extension"}', defaultRange, {
+      fetch: async () => createMalformedLokiSuccessResponse(),
+    }),
+    error => {
+      assert.match(error.message, /Loki query failed: backend schema error/u);
+      assert.match(error.message, /data\.result must be an array/u);
+      assert.doesNotMatch(error.message, /super-secret-token|Bearer backend-secret/u);
+      return true;
+    },
+  );
+});
+
+test("queryLoki preserves legitimate empty stream responses", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+
+  const logs = await queryLoki(config, '{service_name="observme-pi-extension"}', defaultRange, {
+    fetch: async () => createEmptyLokiQueryResponse(),
+  });
+
+  assert.deepEqual(logs, []);
 });
 
 test("Loki attribute normalization converts dotted OTEL attribute names to Loki query names", () => {

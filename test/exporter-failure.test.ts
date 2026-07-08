@@ -6,7 +6,7 @@ import { getObsStatusRuntimeState, resetObsStatusRuntimeState } from "../src/com
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import type { AgentLineageContext } from "../src/pi/agent-lineage.ts";
 import { runBoundedOtelOperation } from "../src/otel/shutdown.ts";
-import { COMMON_SPAN_ATTRIBUTES } from "../src/semconv/attributes.ts";
+import { COMMON_SPAN_ATTRIBUTES, LOG_ATTRIBUTES } from "../src/semconv/attributes.ts";
 import { LOG_EVENT_NAMES, OBSERVME_COUNTER_METRIC_NAMES } from "../src/semconv/metrics.ts";
 import { SPAN_NAMES } from "../src/semconv/spans.ts";
 import { createAgentTreeTracker, createObservMeMetrics, createSpanRegistry, registerHandlers } from "../src/pi/handlers.ts";
@@ -192,8 +192,7 @@ function createFakeTelemetry(options: FakeTelemetryOptions = {}) {
   const tracer = createFakeTracer();
   const logger = createFakeLogger();
   const metrics = createObservMeMetrics(meter);
-
-  return {
+  const telemetry = {
     config,
     lineage,
     controller: options.controller ?? createCompletedController(),
@@ -201,14 +200,16 @@ function createFakeTelemetry(options: FakeTelemetryOptions = {}) {
     meter,
     logger,
     metrics,
-    spans: createSpanRegistry(config, metrics),
-    agentTree: createAgentTreeTracker(config, lineage, metrics),
+    spans: createSpanRegistry(config, metrics, () => telemetry),
+    agentTree: createAgentTreeTracker(config, lineage, metrics, () => telemetry),
     activeAgentRecorded: false,
     agentRunSequence: 0,
     llmRequestSequence: 0,
     toolCallSequence: 0,
     turnSequences: new Map(),
   };
+
+  return telemetry;
 }
 
 function createHandlerHarness(config, controller) {
@@ -323,4 +324,14 @@ test("exporter failure: queue-full eviction increments drop counters and keeps a
   assert.equal(dropCount, 1);
   assert.equal(getObsStatusRuntimeState().queueDrops, 1);
   assert.ok(evictedTurn?.ended, "expected the oldest turn span to end when the bounded queue evicts it");
+  assert.ok(telemetry.logger.records.some(record => isTelemetryDroppedLog(record, "turn")));
 });
+
+function isTelemetryDroppedLog(record, operation: string): boolean {
+  return (
+    record.body === LOG_EVENT_NAMES.TELEMETRY_DROPPED &&
+    record.attributes?.[LOG_ATTRIBUTES.EVENT_CATEGORY] === "telemetry" &&
+    record.attributes?.operation === operation &&
+    record.attributes?.reason === "span_registry_full"
+  );
+}

@@ -81,6 +81,28 @@ A passing run ends with:
 Result: PASS — Grafana has data and representative /obs commands work with the configured stack.
 ```
 
+## 4. Verify the Export Health dashboard
+
+Use this after representative telemetry has been emitted by the active local Pi session.
+
+1. Open Grafana and select the `ObservMe Export Health` dashboard.
+2. Confirm the healthy quiet state:
+   - `Observed event liveness` or `Session lifecycle` shows recent activity for the selected range.
+   - Telemetry drops, redaction failures, export failures, and handler error pressure render `0` when no failure series exists.
+   - Active spans is zero or low after the session settles.
+   - Failure log tables may be empty; empty means no matching failure logs in the selected range.
+3. In a throwaway trusted local project, induce one safe failure mode at a time, then refresh the dashboard:
+   - queue/span pressure should increment `observme_telemetry_dropped_total` and show `telemetry.dropped` rows;
+   - redaction exceptions should increment `observme_redaction_failures_total` and show `redaction.failed` rows;
+   - Collector/export failures should increment `observme_export_errors_total` and show `export.failed` rows.
+4. Re-run `/obs status` and `/obs health` after each scenario. They should remain available, secret-safe, and pointed at the same local OTLP/Grafana configuration.
+
+For deterministic, secret-safe signal-contract coverage without mutating the live stack, run:
+
+```bash
+node --test test/dashboards.test.mjs test/exporter-failure.test.ts test/chaos-failure.test.mjs test/pi-handlers.test.mjs
+```
+
 ## Failure signatures
 
 | Failed step | Likely class | Next check |

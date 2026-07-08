@@ -124,7 +124,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_sessions_started_total[$__rate_interval]))",
+          "expr": "(sum(rate(observme_sessions_started_total[$__rate_interval])) or vector(0))",
           "legendFormat": "sessions/s",
           "range": true,
           "refId": "A"
@@ -138,7 +138,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Estimated active sessions from started minus shutdown counters.",
+      "description": "Estimated active sessions from started minus shutdown counters. Missing shutdown/startup series are treated as zero so fresh active sessions do not render as no data.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -220,7 +220,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_min(sum(observme_sessions_started_total) - sum(observme_sessions_shutdown_total), 0)",
+          "expr": "clamp_min((sum(observme_sessions_started_total) or vector(0)) - (sum(observme_sessions_shutdown_total) or vector(0)), 0)",
           "legendFormat": "active sessions",
           "range": true,
           "refId": "A"

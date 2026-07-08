@@ -94,7 +94,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_branches_total[1h])) / clamp_min(sum(rate(observme_sessions_started_total[1h])), 1e-9)",
+          "expr": "(sum(rate(observme_branches_total[1h])) or vector(0)) / clamp_min((sum(rate(observme_sessions_started_total[1h])) or vector(0)), 1e-9)",
           "legendFormat": "branches/session",
           "range": true,
           "refId": "A"

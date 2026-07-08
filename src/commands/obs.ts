@@ -50,31 +50,85 @@ export interface RegisterObsCommandOptions {
 }
 
 const OBS_COMMAND_NAME = "obs";
-const OBS_STATUS_SUBCOMMAND = "status";
-const OBS_HEALTH_SUBCOMMAND = "health";
-const OBS_SESSION_SUBCOMMAND = "session";
-const OBS_COST_SUBCOMMAND = "cost";
-const OBS_TRACE_SUBCOMMAND = "trace";
-const OBS_TOOLS_SUBCOMMAND = "tools";
-const OBS_AGENTS_SUBCOMMAND = "agents";
-const OBS_BACKFILL_SUBCOMMAND = "backfill";
-const OBS_ERRORS_SUBCOMMAND = "errors";
-const OBS_LOGS_SUBCOMMAND = "logs";
-const OBS_LINK_SUBCOMMAND = "link";
-const OBS_ROOT_USAGE = "Usage: /obs <status|health|session|cost|trace|tools|agents|backfill|errors|logs|link>";
-const obsSubcommands = [
-  OBS_STATUS_SUBCOMMAND,
-  OBS_HEALTH_SUBCOMMAND,
-  OBS_SESSION_SUBCOMMAND,
-  OBS_COST_SUBCOMMAND,
-  OBS_TRACE_SUBCOMMAND,
-  OBS_TOOLS_SUBCOMMAND,
-  OBS_AGENTS_SUBCOMMAND,
-  OBS_BACKFILL_SUBCOMMAND,
-  OBS_ERRORS_SUBCOMMAND,
-  OBS_LOGS_SUBCOMMAND,
-  OBS_LINK_SUBCOMMAND,
-] as const;
+const OBS_DEFAULT_SUBCOMMAND = "status" satisfies ObsRootSubcommandName;
+
+type ObsRootArgsMode = "raw" | "subcommand";
+export type ObsRootSubcommandName = keyof RegisterObsCommandOptions;
+
+type ObsSubcommandHandler<Options> = (
+  args: string,
+  ctx: ObsCommandContext,
+  options?: Options,
+) => Promise<void>;
+
+type ObsSubcommandRegistry = {
+  readonly [Name in ObsRootSubcommandName]: {
+    readonly rootArgs: ObsRootArgsMode;
+    readonly handle: ObsSubcommandHandler<RegisterObsCommandOptions[Name]>;
+    readonly selectOptions: (options: RegisterObsCommandOptions) => RegisterObsCommandOptions[Name];
+  };
+};
+
+const obsSubcommandRegistry = {
+  status: {
+    rootArgs: "subcommand",
+    handle: handleObsStatusCommand,
+    selectOptions: options => options.status,
+  },
+  health: {
+    rootArgs: "subcommand",
+    handle: handleObsHealthCommand,
+    selectOptions: options => options.health,
+  },
+  session: {
+    rootArgs: "subcommand",
+    handle: handleObsSessionCommand,
+    selectOptions: options => options.session,
+  },
+  cost: {
+    rootArgs: "raw",
+    handle: handleObsCostCommand,
+    selectOptions: options => options.cost,
+  },
+  trace: {
+    rootArgs: "raw",
+    handle: handleObsTraceCommand,
+    selectOptions: options => options.trace,
+  },
+  tools: {
+    rootArgs: "raw",
+    handle: handleObsToolsCommand,
+    selectOptions: options => options.tools,
+  },
+  agents: {
+    rootArgs: "raw",
+    handle: handleObsAgentsCommand,
+    selectOptions: options => options.agents,
+  },
+  backfill: {
+    rootArgs: "raw",
+    handle: handleObsBackfillCommand,
+    selectOptions: options => options.backfill,
+  },
+  errors: {
+    rootArgs: "raw",
+    handle: handleObsErrorsCommand,
+    selectOptions: options => options.errors,
+  },
+  logs: {
+    rootArgs: "raw",
+    handle: handleObsLogsCommand,
+    selectOptions: options => options.logs,
+  },
+  link: {
+    rootArgs: "raw",
+    handle: handleObsLinkCommand,
+    selectOptions: options => options.link,
+  },
+} as const satisfies ObsSubcommandRegistry;
+
+const obsSubcommands = Object.keys(obsSubcommandRegistry) as ObsRootSubcommandName[];
+const OBS_ROOT_USAGE = buildObsRootUsage(obsSubcommands);
 
 export function registerObsCommand(pi: ExtensionAPI, options: RegisterObsCommandOptions = {}): void {
   const command = new ObsCommand(options);
@@ -92,59 +146,10 @@ export async function handleObsCommand(
   options: RegisterObsCommandOptions = {},
 ): Promise<void> {
   const subcommand = firstObsCommandToken(args);
+  const rootSubcommand = resolveObsRootSubcommand(subcommand);
 
-  if (!subcommand || subcommand === OBS_STATUS_SUBCOMMAND) {
-    await handleObsStatusCommand(OBS_STATUS_SUBCOMMAND, ctx, options.status);
-    return;
-  }
-
-  if (subcommand === OBS_HEALTH_SUBCOMMAND) {
-    await handleObsHealthCommand(OBS_HEALTH_SUBCOMMAND, ctx, options.health);
-    return;
-  }
-
-  if (subcommand === OBS_SESSION_SUBCOMMAND) {
-    await handleObsSessionCommand(OBS_SESSION_SUBCOMMAND, ctx, options.session);
-    return;
-  }
-
-  if (subcommand === OBS_COST_SUBCOMMAND) {
-    await handleObsCostCommand(args, ctx, options.cost);
-    return;
-  }
-
-  if (subcommand === OBS_TRACE_SUBCOMMAND) {
-    await handleObsTraceCommand(args, ctx, options.trace);
-    return;
-  }
-
-  if (subcommand === OBS_TOOLS_SUBCOMMAND) {
-    await handleObsToolsCommand(args, ctx, options.tools);
-    return;
-  }
-
-  if (subcommand === OBS_AGENTS_SUBCOMMAND) {
-    await handleObsAgentsCommand(args, ctx, options.agents);
-    return;
-  }
-
-  if (subcommand === OBS_BACKFILL_SUBCOMMAND) {
-    await handleObsBackfillCommand(args, ctx, options.backfill);
-    return;
-  }
-
-  if (subcommand === OBS_ERRORS_SUBCOMMAND) {
-    await handleObsErrorsCommand(args, ctx, options.errors);
-    return;
-  }
-
-  if (subcommand === OBS_LOGS_SUBCOMMAND) {
-    await handleObsLogsCommand(args, ctx, options.logs);
-    return;
-  }
-
-  if (subcommand === OBS_LINK_SUBCOMMAND) {
-    await handleObsLinkCommand(args, ctx, options.link);
+  if (rootSubcommand) {
+    await dispatchObsRootSubcommand(rootSubcommand, args, ctx, options);
     return;
   }
 
@@ -153,6 +158,44 @@ export async function handleObsCommand(
 
 export function getObsRootCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {
   return completeObsSubcommands(prefix, obsSubcommands);
+}
+
+export function getObsRootSubcommands(): readonly ObsRootSubcommandName[] {
+  return [...obsSubcommands];
+}
+
+export function getObsRootUsage(): string {
+  return OBS_ROOT_USAGE;
+}
+
+function buildObsRootUsage(subcommands: readonly ObsRootSubcommandName[]): string {
+  return `Usage: /obs <${subcommands.join("|")}>`;
+}
+
+function resolveObsRootSubcommand(subcommand: string | undefined): ObsRootSubcommandName | undefined {
+  if (!subcommand) return OBS_DEFAULT_SUBCOMMAND;
+  if (isObsRootSubcommandName(subcommand)) return subcommand;
+  return undefined;
+}
+
+function isObsRootSubcommandName(value: string): value is ObsRootSubcommandName {
+  return Object.hasOwn(obsSubcommandRegistry, value);
+}
+
+async function dispatchObsRootSubcommand<Name extends ObsRootSubcommandName>(
+  subcommand: Name,
+  args: string,
+  ctx: ObsCommandContext,
+  options: RegisterObsCommandOptions,
+): Promise<void> {
+  const registration: ObsSubcommandRegistry[Name] = obsSubcommandRegistry[subcommand];
+  const handlerArgs = getObsRootHandlerArgs(subcommand, args, registration.rootArgs);
+  await registration.handle(handlerArgs, ctx, registration.selectOptions(options));
+}
+
+function getObsRootHandlerArgs(subcommand: ObsRootSubcommandName, args: string, rootArgs: ObsRootArgsMode): string {
+  if (rootArgs === "subcommand") return subcommand;
+  return args;
 }
 
 class ObsCommand {

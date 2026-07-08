@@ -5,10 +5,11 @@ import { trace } from "@opentelemetry/api";
 import { getObsStatusRuntimeState, resetObsStatusRuntimeState } from "../src/commands/obs-status.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { runBoundedOtelOperation } from "../src/otel/shutdown.ts";
-import { COMMON_SPAN_ATTRIBUTES } from "../src/semconv/attributes.ts";
+import { COMMON_SPAN_ATTRIBUTES, LOG_ATTRIBUTES } from "../src/semconv/attributes.ts";
 import {
   LOG_EVENT_NAMES,
   OBSERVME_COUNTER_METRIC_NAMES,
+  OBSERVME_GAUGE_METRIC_NAMES,
   OBSERVME_HISTOGRAM_METRIC_NAMES,
 } from "../src/semconv/metrics.ts";
 import { SPAN_NAMES } from "../src/semconv/spans.ts";
@@ -186,8 +187,7 @@ function createFakeTelemetry(options = {}) {
   const tracer = createFakeTracer(options.spanContext ?? validSpanContext);
   const logger = createFakeLogger();
   const metrics = createObservMeMetrics(meter);
-
-  return {
+  const telemetry = {
     config,
     lineage,
     controller: options.controller ?? createCompletedController(),
@@ -195,8 +195,8 @@ function createFakeTelemetry(options = {}) {
     meter,
     logger,
     metrics,
-    spans: createSpanRegistry(config, metrics),
-    agentTree: createAgentTreeTracker(config, lineage, metrics),
+    spans: createSpanRegistry(config, metrics, () => telemetry),
+    agentTree: createAgentTreeTracker(config, lineage, metrics, () => telemetry),
     sessionAttributes: options.sessionAttributes,
     sessionSpan: options.sessionSpan,
     activeAgentRecorded: false,
@@ -205,6 +205,8 @@ function createFakeTelemetry(options = {}) {
     toolCallSequence: 0,
     turnSequences: new Map(),
   };
+
+  return telemetry;
 }
 
 function createHandlerHarness(config, controller) {
@@ -396,6 +398,40 @@ test("chaos: runaway fan-out and depth update bounded agent-tree metrics without
   assertNoForbiddenMetricLabels(telemetry.meter.records);
 });
 
+test("chaos: agent-tree eviction increments drop counters and emits a telemetry-dropped log", () => {
+  resetObsStatusRuntimeState();
+  const config = cloneConfig({ limits: { maxActiveSubagentSpawns: 1 } });
+  const telemetry = createFakeTelemetry({ config });
+
+  observeTrustedSubagentLineage(
+    telemetry,
+    {
+      OBSERVME_WORKFLOW_ID: "workflow-chaos",
+      OBSERVME_PARENT_AGENT_ID: "agent-root",
+      OBSERVME_ROOT_AGENT_ID: "agent-root",
+    },
+    { generateId: () => "child-one" },
+  );
+  observeTrustedSubagentLineage(
+    telemetry,
+    {
+      OBSERVME_WORKFLOW_ID: "workflow-chaos",
+      OBSERVME_PARENT_AGENT_ID: "agent-root",
+      OBSERVME_ROOT_AGENT_ID: "agent-root",
+    },
+    { generateId: () => "child-two" },
+  );
+
+  assertMetricValue(
+    telemetry.meter.records,
+    OBSERVME_COUNTER_METRIC_NAMES.TELEMETRY_DROPPED_TOTAL,
+    1,
+    record => record.attributes.reason === "agent_tree_full",
+  );
+  assert.equal(getObsStatusRuntimeState().queueDrops, 1);
+  assert.ok(telemetry.logger.records.some(record => isTelemetryDroppedLog(record, "agent_tree", "agent_tree_full")));
+});
+
 test("chaos: queue full evicts spans, increments drop counters, and keeps memory bounded", async () => {
   resetObsStatusRuntimeState();
   const config = cloneConfig({ limits: { maxActiveTurns: 1 } });
@@ -420,7 +456,31 @@ test("chaos: queue full evicts spans, increments drop counters, and keeps memory
     record => record.attributes.reason === "span_registry_full",
   );
   assert.equal(getObsStatusRuntimeState().queueDrops, 1);
+  assert.ok(telemetry.logger.records.some(record => isTelemetryDroppedLog(record, "turn")));
+  assert.equal(activeSpanValueCount(telemetry.meter.records, "turn", 1), 2);
+  assert.equal(activeSpanValueCount(telemetry.meter.records, "turn", -1), 1);
+  assert.equal(activeSpanNetValue(telemetry.meter.records, "turn"), 1);
+
+  await harness.pi.handlers.get("session_shutdown")({ status: "ok" }, {});
+
+  assert.equal(activeSpanValueCount(telemetry.meter.records, "turn", 1), 2);
+  assert.equal(activeSpanValueCount(telemetry.meter.records, "turn", -1), 2);
+  assert.equal(activeSpanNetValue(telemetry.meter.records, "turn"), 0);
 });
+
+function activeSpanValues(records, operation) {
+  return metricRecords(records, OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_SPANS)
+    .filter(record => record.attributes.operation === operation)
+    .map(record => record.value);
+}
+
+function activeSpanNetValue(records, operation) {
+  return activeSpanValues(records, operation).reduce((total, value) => total + value, 0);
+}
+
+function activeSpanValueCount(records, operation, value) {
+  return activeSpanValues(records, operation).filter(recordedValue => recordedValue === value).length;
+}
 
 test("chaos: redaction exception drops the field, increments failure metric, and exports no raw value", async () => {
   const rawValue = "raw secret value must never export";
@@ -444,7 +504,27 @@ test("chaos: redaction exception drops the field, increments failure metric, and
     telemetry.meter.records,
     OBSERVME_COUNTER_METRIC_NAMES.REDACTION_FAILURES_TOTAL,
     1,
-    record => record.attributes.operation === "tool_content_capture",
+    record => record.attributes.operation === "tool_content_capture" && record.attributes.error_class === "redaction_error",
   );
+  assert.ok(telemetry.logger.records.some(record => isRedactionFailedLog(record, "tool_content_capture")));
   assert.doesNotMatch(JSON.stringify(serializableSpanTelemetry(telemetry.tracer.spans)), /raw secret value/u);
+  assert.doesNotMatch(JSON.stringify(telemetry.logger.records), /raw secret value/u);
 });
+
+function isTelemetryDroppedLog(record, operation, reason = "span_registry_full") {
+  return (
+    record.body === LOG_EVENT_NAMES.TELEMETRY_DROPPED &&
+    record.attributes?.[LOG_ATTRIBUTES.EVENT_CATEGORY] === "telemetry" &&
+    record.attributes?.operation === operation &&
+    record.attributes?.reason === reason
+  );
+}
+
+function isRedactionFailedLog(record, operation) {
+  return (
+    record.body === LOG_EVENT_NAMES.REDACTION_FAILED &&
+    record.attributes?.[LOG_ATTRIBUTES.EVENT_CATEGORY] === "redaction" &&
+    record.attributes?.operation === operation &&
+    record.attributes?.[LOG_ATTRIBUTES.ERROR_TYPE] === "redaction_error"
+  );
+}

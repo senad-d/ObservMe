@@ -1,7 +1,30 @@
 # Changelog
 
+## Unreleased
+
+- Added an ObservMe Agent Node Graphs dashboard for visualizing aggregate Pi root, agent-role, spawn-reason, and subagent-depth connections with Grafana-compatible Node Graph nodes/edges frames.
+- Fixed prompt capture for OpenAI Responses-style `before_provider_request` payloads that use `input`, restoring data for the LLM Conversations dashboard Prompts panel.
+- Added final duplicate `session_start` lifecycle regression coverage for previous-session cleanup and runtime state replacement.
+- Added backend schema validation for Prometheus and Loki query success payloads so malformed responses produce sanitized diagnostics instead of no-data hints.
+- Added an actionable partial-initialization diagnostic when `/obs` command registration fails after Pi handler registration.
+- Updated unsafe-capture warnings to distinguish redacted export from explicitly unredacted sensitive-content export.
+- Added ObservMe/Pi event API compatibility validation before lifecycle handler registration, with focused invalid/valid registration tests.
+- Refactored the root `/obs` command to use a typed subcommand registry that derives usage, completions, option selection, and dispatch from one source of truth.
+- Fixed session-count dashboard PromQL and Prometheus metric stream identity so fresh and concurrent running sessions are counted instead of rendering as zero/no data; the Trace Journey session stat now uses the active runtime gauge.
+- Updated the ObservMe Export Health dashboard with liveness/session panels, zero-state PromQL fallbacks, clearer active-span naming, and dashboard tests for healthy quiet ranges.
+- Added deterministic Export Health signal tests covering session liveness, handler observation/duration, active spans, telemetry drops, redaction failures, export failures, and zero-state dashboard queries.
+- Documented the Export Health manual validation flow for healthy zero-state panels, induced failure panels, failure log rows, and `/obs status`/`/obs health` checks.
+- Added telemetry-drop and redaction-failure helpers so drop/failure counters emit matching `telemetry.dropped` and `redaction.failed` structured logs without raw content.
+- Added active span accounting for `observme_active_spans` across session, handler child, subagent, eviction, and shutdown lifecycles.
+- Added handler self-observability instrumentation so registered Pi handlers emit `observme_events_observed_total` and `observme_handler_duration_ms` with bounded labels.
+- Documented the Export Health telemetry contract, including healthy zero-state behavior, dashboard-driving signals, low-cardinality labels, and induced-failure expectations.
+- Added a task spec for fixing the ObservMe Export Health dashboard by emitting missing self-observability metrics/logs and improving healthy zero-state panels.
+
 ## 0.1.0 - 2026-07-07
 
+- Added a documentation-only agent/subagent orchestration observability requirements guide covering tmux-managed child Pi processes, child ObservMe loading, lineage propagation, dashboard metric contracts, management commands, and current implementation gaps.
+- Added automatic trusted-project `.pi/observme.yaml` creation on extension startup, using the local starter config and documenting where to edit custom setup values.
+- Added an ObservMe Trace Journey dashboard that combines Prometheus journey rates/stage latencies, Loki execution timelines and handoff logs, and Tempo TraceQL drill-downs for visualizing how requests travel through agents, LLM calls, tools, bash executions, and subagents.
 - Changed the Pi TUI ObservMe status text from `ObservMe loaded` to the compact `🧿` indicator.
 - Capped custom Node Grafana transport response bodies and return sanitized actionable diagnostics when a backend response is oversized.
 - Hardened custom redaction regex handling with count/length bounds, unsafe-pattern rejection, fail-closed redaction behavior, and validation coverage.

@@ -16,7 +16,8 @@ dashboards/
 ├── observme-branches-compactions.json
 ├── observme-export-health.json
 ├── observme-logs-llm.json
-└── observme-llm-conversations.json
+├── observme-llm-conversations.json
+└── observme-trace-journey.json
 ```
 
 ## 2. Overview Dashboard
@@ -42,7 +43,7 @@ Panels:
 PromQL examples:
 
 ```promql
-sum(rate(observme_sessions_started_total[5m]))
+(sum(rate(observme_sessions_started_total[5m])) or vector(0))
 ```
 
 ```promql
@@ -56,8 +57,10 @@ histogram_quantile(0.95, sum(rate(observme_turn_duration_ms_bucket[5m])) by (le)
 Active sessions estimate:
 
 ```promql
-clamp_min(sum(observme_sessions_started_total) - sum(observme_sessions_shutdown_total), 0)
+clamp_min((sum(observme_sessions_started_total) or vector(0)) - (sum(observme_sessions_shutdown_total) or vector(0)), 0)
 ```
+
+Use the `or vector(0)` fallbacks for session lifecycle panels because fresh active sessions can exist before any shutdown counter series has been exported.
 
 Subagent spawn rate:
 
@@ -176,6 +179,22 @@ histogram_quantile(0.95, sum(rate(observme_agent_run_duration_ms_bucket[5m])) by
 
 Use Tempo or Loki for per-agent/per-workflow drill-down with attributes normalized by the backend, for example `pi_workflow_id`, `pi_agent_id`, `pi_agent_parent_id`, `pi_agent_root_id`, and `pi_agent_spawn_id`.
 
+## 5.1 Trace Journey Dashboard
+
+Panels:
+
+- Trace journey map explaining the `session → agent run → turn → LLM → tool/bash → subagent spawn → wait/join → branch/compaction` flow.
+- Summary stats for active sessions, completed workflows, subagent spawns, LLM requests, tool calls, and trace-context propagation failures.
+- Journey flow rate over time for turns, LLM requests, tool calls, bash executions, subagent spawns, and compactions.
+- p95 stage-latency bar gauge for agent-run, turn, LLM, tool, bash, wait, and join spans.
+- Agent-tree shape over time using active agents, p95 depth, p95 width, and p95 fan-out.
+- Subagent handoffs by depth and spawn reason.
+- Loki-backed execution journey timeline and ordered journey log, filterable by `pi_session_id`, `pi_agent_id`, and `pi_agent_run_id`.
+- Parent/child handoff table from `event_category="agent-tree"` logs.
+- Tempo TraceQL table for recent `observme-pi-extension` traces so users can open the full waterfall.
+
+The dashboard uses high-cardinality IDs only for Loki/Tempo drill-down filters. Prometheus panels continue to use low-cardinality aggregate labels only.
+
 ## 6. Model Dashboard
 
 Panels:
@@ -218,22 +237,60 @@ histogram_quantile(0.95, sum(rate(observme_compaction_tokens_before_bucket[1h]))
 
 ## 8. Export Health Dashboard
 
-Panels:
+Purpose: show whether ObservMe is observing Pi handler activity and whether the local telemetry/export path is dropping, redacting, or failing. This dashboard intentionally combines liveness panels with failure-only panels; failure-only panels can be quiet in a healthy range and should not make the whole dashboard appear blank.
 
-- Telemetry drops
-- Redaction failures
-- Export failures
-- SDK queue saturation if exposed
-- Collector health
+Healthy local-session behavior:
 
-PromQL:
+- A trusted local project where `/obs status` and `/obs health` succeed should show recent ObservMe activity from `observme_events_observed_total` after representative Pi events occur.
+- Failure counters render as `0` when no failure series exists in the selected time range.
+- Collector/export health renders healthy when events are observed and local drops/export errors remain zero.
+- Loki failure tables remain empty unless matching failure logs occur; empty `redaction.failed`, `telemetry.dropped`, `export.failed`, and `trace_context.propagation_failed` tables mean no matching failures were observed in the selected range.
+- The dashboard contract does not require changing project trust, `/obs status`, `/obs health`, local OTLP endpoint selection, Grafana auth/profile, or local debug capture policy.
+
+Panels and signals:
+
+- Recent observed event rate: `observme_events_observed_total`.
+- Handler latency and pressure: `observme_handler_duration_ms` and `observme_handler_errors_total`.
+- Active SDK spans: `observme_active_spans` by bounded `operation`.
+- Telemetry drops: `observme_telemetry_dropped_total` by bounded `reason`.
+- Redaction failures: `observme_redaction_failures_total` by bounded `operation`/`error_class` where available.
+- Export failures: `observme_export_errors_total` by bounded `reason`/`error_class` where available.
+- Failure logs: Loki `event_name` values `redaction.failed`, `telemetry.dropped`, `export.failed`, and `trace_context.propagation_failed`.
+
+Allowed metric labels for Export Health panels are the low-cardinality labels `operation`, `reason`, `error_class`, and `status`. Dashboard PromQL must not group or filter by session IDs, workflow IDs, agent IDs, trace/span IDs, entry IDs, raw prompts, raw commands, raw paths, or raw error messages.
+
+Zero-safe PromQL examples for stat panels:
 
 ```promql
-sum(rate(observme_telemetry_dropped_total[5m])) by (reason)
+sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)
 ```
 
 ```promql
-sum(rate(observme_redaction_failures_total[5m]))
+sum(rate(observme_telemetry_dropped_total[$__rate_interval])) or vector(0)
+```
+
+```promql
+sum(rate(observme_redaction_failures_total[$__rate_interval])) or vector(0)
+```
+
+```promql
+sum(rate(observme_export_errors_total[$__rate_interval])) or vector(0)
+```
+
+```promql
+sum(rate(observme_handler_errors_total[$__rate_interval])) or vector(0)
+```
+
+Breakdowns can keep low-cardinality grouping while still documenting that an unlabeled zero means no series exists yet:
+
+```promql
+sum(rate(observme_telemetry_dropped_total[$__rate_interval])) by (reason) or vector(0)
+```
+
+Observability Export SLO alignment:
+
+```promql
+1 - (sum(rate(observme_telemetry_dropped_total[$__range])) / clamp_min(sum(rate(observme_events_observed_total[$__range])), 1e-9))
 ```
 
 ## 9. Loki Queries

@@ -95,6 +95,8 @@ pi --no-extensions -e .
 
 ObservMe observes the current Pi session and exports telemetry to the configured OTLP endpoint. It never blocks Pi execution when the backend is unavailable.
 
+On first startup in a trusted project, ObservMe creates `.pi/observme.yaml` if the file is missing. Use that project-local starter file for local-stack setup, then edit the OTLP, resource, capture/privacy, and Grafana query sections for your environment. The starter mirrors the local debug profile, so review capture/privacy before sharing it or using it in production.
+
 ## Installation
 
 | Scope | Command | Notes |
@@ -153,6 +155,8 @@ ObservMe supports layered configuration with this precedence:
 ```text
 defaults → global ~/.pi/agent/observme.yaml → trusted project config → trusted project .env → system environment variables → runtime options
 ```
+
+The extension automatically creates `<project>/.pi/observme.yaml` the first time it starts in a trusted project and the file does not already exist. Edit this file for project-specific setup: `otlp.endpoint` / `otlp.signalEndpoints` for your Collector, `resource.attributes` for service/project/tenant/environment identity, `capture` and `privacy` for content visibility, and `query.grafana` plus `query.links.traceUrlTemplate` for `/obs` Grafana commands. The generated starter mirrors the local debug profile, including content-capture settings, so review it before production use. Keep secrets out of YAML; use environment variables or a trusted project `.env` for values such as `OBSERVME_OTLP_TOKEN`, `OBSERVME_GRAFANA_TOKEN`, `OBSERVME_GRAFANA_PASSWORD`, and `OBSERVME_HASH_SALT`. See [`docs/configuration.md`](docs/configuration.md) for the quick configuration guide.
 
 Factory-safe loading uses defaults/global/system-environment/runtime options only. Session-scoped loading can add trusted project config and a project-local `.env` when Pi marks the project trusted. `/obs status` reports the effective config source, whether project-local `.pi/observme.yaml` was loaded, skipped because the project is untrusted, or missing, plus the configured Grafana URL and query-readiness status without rendering tokens or passwords. In untrusted projects, ObservMe does not read project-local config or `.env` files and uses safe defaults/global/system-environment layers instead.
 
@@ -238,7 +242,7 @@ See [`SECURITY.md`](SECURITY.md) and `ObservMe-Production-Docs/06-security-priva
 
 ## Dashboards and Examples
 
-- Grafana dashboards: `dashboards/observme-*.json`.
+- Grafana dashboards: `dashboards/observme-*.json`, including `dashboards/observme-trace-journey.json` for trace travel and agent lineage drill-downs.
 - Alert rules: `dashboards/observme-alerts.yaml`.
 - SLO definitions: `dashboards/observme-slos.yaml`.
 - Supported local-stack ObservMe config: `examples/observme.yaml`.
@@ -265,7 +269,7 @@ The full production design lives in `ObservMe-Production-Docs/`:
 | `12-configuration-reference.md` | Full configuration schema |
 | `13-source-notes.md` | External documentation cross-check notes |
 
-Implementation specs live in `specs/`: `project-definition-brief.md`, `spec-architecture.md`, `spec-guidelines.md`, `spec-tasks.md`. Review-task validation and current `*-2.md` review-spec ordering are documented in [`docs/review-validation.md`](docs/review-validation.md).
+Implementation specs live in `specs/`: `project-definition-brief.md`, `spec-architecture.md`, `spec-guidelines.md`, `spec-tasks.md`. User-facing configuration guidance is in [`docs/configuration.md`](docs/configuration.md). Review-task validation and current `*-2.md` review-spec ordering are documented in [`docs/review-validation.md`](docs/review-validation.md).
 
 ## Development
 

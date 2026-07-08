@@ -80,6 +80,19 @@ function createEmptyVectorResponse() {
   );
 }
 
+function createMalformedPrometheusSuccessResponse() {
+  return new Response(
+    JSON.stringify({
+      status: "success",
+      data: {
+        resultType: "vector",
+        result: { token: "super-secret-token", body: "Bearer backend-secret" },
+      },
+    }),
+    { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
+  );
+}
+
 function createAbortError() {
   return new DOMException("The operation was aborted.", "AbortError");
 }
@@ -134,6 +147,36 @@ test("PrometheusQueryClient queries metrics through the Grafana Prometheus datas
   assert.equal(result.series.length, 2);
   assert.deepEqual(result.series[0].metric, { model: "claude-sonnet", provider: "anthropic" });
   assert.equal(result.series[0].value.value, "1.42");
+});
+
+test("queryPrometheus reports malformed success payloads as backend schema errors without raw body content", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+
+  await assert.rejects(
+    queryPrometheus(config, "observme_sessions_started_total", undefined, {
+      fetch: async () => createMalformedPrometheusSuccessResponse(),
+    }),
+    error => {
+      assert.match(error.message, /Prometheus query failed: backend schema error/u);
+      assert.match(error.message, /data\.result must be an array/u);
+      assert.doesNotMatch(error.message, /super-secret-token|Bearer backend-secret/u);
+      return true;
+    },
+  );
+});
+
+test("queryPrometheus preserves legitimate empty vector responses", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+
+  const result = await queryPrometheus(config, "observme_sessions_started_total", undefined, {
+    fetch: async () => createEmptyVectorResponse(),
+  });
+
+  assert.deepEqual(result, { resultType: "vector", series: [] });
 });
 
 test("Prometheus queries support local Grafana Basic auth when bearer token is unresolved", async () => {
