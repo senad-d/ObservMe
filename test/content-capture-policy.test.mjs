@@ -71,6 +71,27 @@ test("content-capture policy redacts prompt, tool result, and bash output when r
   assertCapturedSecretIsRedacted("bashOutput");
 });
 
+test("content-capture policy scrubs cross-platform absolute paths while preserving URLs", () => {
+  const paths = [
+    "/workspace/project/file.ts",
+    "/etc/hosts",
+    "C:\\Users\\alice\\secret.txt",
+    "\\\\server\\share\\secret.txt",
+  ];
+  const url = "https://example.invalid/docs/setup";
+  const result = applyContentCapturePolicy({
+    captureEnabled: true,
+    value: `${paths.join(" ")} ${url}`,
+    kind: "prompt",
+    config: cloneConfig({ privacy: { redactionEnabled: true, allowUnsafeCapture: false, pathMode: "hash" } }),
+  });
+
+  assert.equal(result.mode, "redacted");
+  assert.equal(result.captured, true);
+  assert.equal(result.value?.includes(url), true);
+  for (const path of paths) assert.equal(result.value?.includes(path), false);
+});
+
 test("content-capture policy omits prompt, tool result, and bash output when capture is disabled", () => {
   const config = cloneConfig();
 

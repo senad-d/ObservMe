@@ -1,3 +1,4 @@
+import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -65,7 +66,6 @@ interface ParsedYamlLine {
   text: string;
 }
 
-const defaultConfigDirName = ".pi";
 const defaultEnvFileName = ".env";
 const observmeYamlFileName = "observme.yaml";
 const yamlIndentPattern = /^ */u;
@@ -308,14 +308,14 @@ async function readOptionalText(path: string, readText: ReadConfigText): Promise
 }
 
 function resolveGlobalConfigPath(options: LoadConfigOptions): string {
-  return options.globalConfigPath ?? join(homedir(), ".pi", "agent", observmeYamlFileName);
+  return options.globalConfigPath ?? join(homedir(), CONFIG_DIR_NAME, "agent", observmeYamlFileName);
 }
 
 function resolveProjectConfigPath(options: LoadSessionConfigOptions): string {
   return resolveProjectLocalFilePath({
     cwd: options.cwd,
     configDirName: options.configDirName,
-    defaultConfigDirName,
+    defaultConfigDirName: CONFIG_DIR_NAME,
     fileName: observmeYamlFileName,
     overridePath: options.projectConfigPath,
     inputLabel: "project config path",

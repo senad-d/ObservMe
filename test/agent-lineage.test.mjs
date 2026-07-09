@@ -3,6 +3,11 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import {
+  clearObsAgentsRuntimeState,
+  getLocalObsAgentsRuntimeSnapshot,
+  updateObsAgentsRuntimeStateFromTree,
+} from "../src/commands/obs-agents-runtime.ts";
+import {
   buildLineageAttributes,
   createAgentLineageContext,
   createPropagationEnvironment,
@@ -190,6 +195,42 @@ test("agent tree tracker records active children, fan-out, depth, width, orphan 
   assert.equal(summary.childStatuses.completed, 1);
   assert.equal(summary.childStatuses.active, 2);
   assert.equal(tracker.getAgent("agent-orphan").status, "orphaned");
+});
+
+test("agent tree eviction detaches stale child ids while preserving historical fan-out", t => {
+  clearObsAgentsRuntimeState();
+  t.after(clearObsAgentsRuntimeState);
+
+  const evicted = [];
+  const tracker = new AgentTreeTracker({ maxAgents: 3, onEvict: node => evicted.push(node.agentId) });
+  const root = makeLineage({ agentId: "agent-root", rootAgentId: "agent-root", workflowRootAgentId: "agent-root" });
+
+  tracker.registerAgent(root);
+  for (let index = 1; index <= 12; index += 1) {
+    tracker.registerAgent(makeLineage({
+      agentId: `agent-child-${index}`,
+      parentAgentId: "agent-root",
+      rootAgentId: "agent-root",
+      workflowRootAgentId: "agent-root",
+      depth: 1,
+      role: "subagent",
+    }));
+  }
+
+  updateObsAgentsRuntimeStateFromTree(root, tracker);
+  const rootNode = tracker.getAgent("agent-root");
+  const summary = tracker.summarize("agent-root");
+  const runtime = getLocalObsAgentsRuntimeSnapshot();
+
+  assert.equal(tracker.size, 3);
+  assert.deepEqual(evicted, Array.from({ length: 10 }, (_, index) => `agent-child-${index + 1}`));
+  assert.deepEqual(rootNode.childIds, ["agent-child-11", "agent-child-12"]);
+  assert.equal(rootNode.activeChildren, 2);
+  assert.equal(rootNode.fanoutCount, 12);
+  assert.equal(summary.activeChildren, 2);
+  assert.equal(summary.fanoutCount, 12);
+  assert.deepEqual(runtime.currentAgent.childIds, ["agent-child-11", "agent-child-12"]);
+  assert.deepEqual(runtime.children.map(child => child.agentId), ["agent-child-11", "agent-child-12"]);
 });
 
 test("agent tree metric labels exclude lineage identifiers", () => {

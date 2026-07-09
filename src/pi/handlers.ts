@@ -215,6 +215,14 @@ export interface StartSessionTelemetryOptions {
   readonly lineage: AgentLineageContext;
 }
 
+export interface TurnSequenceRegistry {
+  readonly size: number;
+  get: (runId: string) => number | undefined;
+  set: (runId: string, sequence: number) => unknown;
+  delete: (runId: string) => boolean;
+  clear: () => void;
+}
+
 export interface ObservMeTelemetrySession {
   readonly config: ObservMeConfig;
   readonly lineage: AgentLineageContext;
@@ -237,7 +245,7 @@ export interface ObservMeTelemetrySession {
   agentRunSequence: number;
   llmRequestSequence: number;
   toolCallSequence: number;
-  turnSequences: Map<string, number>;
+  turnSequences: TurnSequenceRegistry;
 }
 
 export interface ObservMeMetrics {
@@ -514,7 +522,7 @@ export async function startSessionTelemetry(options: StartSessionTelemetryOption
     agentRunSequence: 0,
     llmRequestSequence: 0,
     toolCallSequence: 0,
-    turnSequences: new Map(),
+    turnSequences: createTurnSequenceRegistry(config, metrics, () => session),
   };
 
   return session;
@@ -599,6 +607,17 @@ export function createHistogram(meter: TelemetryMeter, name: string): Histogram 
   return typeof maybeMeter.createHistogram === "function" ? maybeMeter.createHistogram(name) : noopHistogram;
 }
 
+export function createTurnSequenceRegistry(
+  config: ObservMeConfig,
+  metrics: ObservMeMetrics,
+  getTelemetryDropTarget?: () => TelemetryDropTarget,
+): BoundedMap<string, number> {
+  return new BoundedMap({
+    maxSize: config.limits.maxActiveAgentRuns,
+    onEvict: () => recordTelemetryDrop(resolveTelemetryDropTarget(metrics, getTelemetryDropTarget), "turn_sequence_full", { operation: "turn_sequence" }),
+  });
+}
+
 export function createAgentTreeTracker(
   config: ObservMeConfig,
   lineage: AgentLineageContext,
@@ -622,7 +641,11 @@ export function createSpanRegistry(
   return {
     activeAgentRuns: new BoundedMap({
       maxSize: config.limits.maxActiveAgentRuns,
-      onEvict: eviction => evictSpan(eviction.value, resolveTelemetryDropTarget(metrics, getTelemetryDropTarget)),
+      onEvict: eviction => evictAgentRunState(
+        eviction.key,
+        eviction.value,
+        resolveTelemetryDropTarget(metrics, getTelemetryDropTarget),
+      ),
     }),
     activeTurns: new BoundedMap({
       maxSize: config.limits.maxActiveTurns,
@@ -649,6 +672,19 @@ export function createSpanRegistry(
       onEvict: eviction => evictWaitJoinState(eviction.value, resolveTelemetryDropTarget(metrics, getTelemetryDropTarget)),
     }),
   };
+}
+
+function evictAgentRunState(runId: string, span: Span, target: TelemetryDropTarget): void {
+  evictSpan(span, target);
+
+  const turnSequences = readTurnSequenceRegistry(target);
+  if (!turnSequences?.delete(runId)) return;
+  recordTelemetryDrop(target, "turn_sequence_full", { operation: "turn_sequence" });
+}
+
+function readTurnSequenceRegistry(target: TelemetryDropTarget): TurnSequenceRegistry | undefined {
+  if (!("turnSequences" in target)) return undefined;
+  return target.turnSequences as TurnSequenceRegistry;
 }
 
 function resolveTelemetryDropTarget(
@@ -1073,6 +1109,7 @@ function createAgentEndHandler(getSession: () => ObservMeTelemetrySession | unde
     recordSpanDurationMs(span, session.metrics.agentRunDurationMs, metricLabels(session.config, session.lineage));
     endActiveSpan(session, span);
     session.spans.activeAgentRuns.delete(runId);
+    session.turnSequences.delete(runId);
     if (session.currentAgentRunId === runId) session.currentAgentRunId = undefined;
     emitLifecycleLog(session.logger, workflowFailed(event) ? LOG_EVENT_NAMES.AGENT_RUN_FAILED : LOG_EVENT_NAMES.AGENT_RUN_COMPLETED, {
       [AGENT_RUN_ATTRIBUTES.PI_AGENT_RUN_ID]: runId,

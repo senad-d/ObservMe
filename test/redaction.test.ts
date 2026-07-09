@@ -113,14 +113,28 @@ test("redaction pipeline sanitizes environment variable dumps", () => {
   ]);
 });
 
-test("redaction pipeline scrubs filesystem paths without exporting raw path prefixes", () => {
-  const input = "open /home/alice/projects/customer-x/app.ts and /Users/bob/work/private-repo/README.md";
+test("redaction pipeline scrubs cross-platform filesystem paths without exporting raw prefixes", () => {
+  const paths = [
+    "/home/alice/projects/customer-x/app.ts",
+    "/workspace/project/file.ts",
+    "/etc/hosts",
+    "C:\\Users\\alice\\secret.txt",
+    "\\\\server\\share\\private\\README.md",
+  ];
+  const input = `open ${paths.join(" and ")}`;
   const result = redactValue(input, defaultOptions({ pathMode: "basename" }));
 
   assert.equal(result.dropped, false);
-  assert.equal(result.value, "open app.ts and README.md");
-  assert.doesNotMatch(result.value, /\/home\/alice/u);
-  assert.doesNotMatch(result.value, /\/Users\/bob/u);
+  assert.equal(result.value, "open app.ts and file.ts and hosts and secret.txt and README.md");
+  for (const path of paths) assert.equal(result.value?.includes(path), false);
+});
+
+test("redaction pipeline does not mistake URLs or slash-separated prose for filesystem paths", () => {
+  const input = "read https://example.invalid/docs/setup and compare yes/no with 1/2";
+  const result = redactValue(input, defaultOptions({ pathMode: "drop" }));
+
+  assert.equal(result.dropped, false);
+  assert.equal(result.value, input);
 });
 
 test("redaction pipeline applies PII detection when explicitly enabled", () => {

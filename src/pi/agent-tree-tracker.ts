@@ -56,7 +56,10 @@ export class AgentTreeTracker {
   constructor(options: AgentTreeTrackerOptions) {
     this.#nodes = new BoundedMap({
       maxSize: options.maxAgents,
-      onEvict: eviction => options.onEvict?.(snapshotNode(eviction.value)),
+      onEvict: eviction => {
+        this.detachChildReference(eviction.key);
+        options.onEvict?.(snapshotNode(eviction.value, this.#nodes));
+      },
     });
   }
 
@@ -66,6 +69,7 @@ export class AgentTreeTracker {
 
   registerAgent(lineage: AgentLineageContext, status: AgentChildStatus = "active"): AgentTreeNode {
     const node = createMutableNode(lineage, status, this.isOrphan(lineage));
+    this.retainParentForInsertion(node.parentAgentId);
     this.#nodes.set(lineage.agentId, node);
     this.linkParentToChild(node);
     return snapshotNode(node, this.#nodes);
@@ -103,7 +107,7 @@ export class AgentTreeTracker {
 
     for (const node of nodes) {
       childStatuses[node.status] += 1;
-      activeChildren += countActiveChildren(node, this.#nodes);
+      activeChildren += countActiveChildren(retainedChildIds(node, this.#nodes), this.#nodes);
       fanoutCount += node.fanoutCount;
       treeDepth = Math.max(treeDepth, node.depth);
       orphanCount += node.orphaned ? 1 : 0;
@@ -136,6 +140,16 @@ export class AgentTreeTracker {
     return !this.#nodes.has(lineage.parentAgentId);
   }
 
+  private retainParentForInsertion(parentAgentId: string | undefined): void {
+    if (!parentAgentId) return;
+
+    const parent = this.#nodes.get(parentAgentId);
+    if (!parent) return;
+
+    this.#nodes.delete(parentAgentId);
+    this.#nodes.set(parentAgentId, parent);
+  }
+
   private linkParentToChild(node: MutableAgentTreeNode): void {
     if (!node.parentAgentId) return;
 
@@ -145,6 +159,10 @@ export class AgentTreeTracker {
     const knownChild = parent.childIds.has(node.agentId);
     parent.childIds.add(node.agentId);
     if (!knownChild) parent.fanoutCount += 1;
+  }
+
+  private detachChildReference(agentId: string): void {
+    for (const node of this.#nodes.values()) node.childIds.delete(agentId);
   }
 
   private getExistingChildSnapshot(childId: string): AgentTreeNode[] {
@@ -185,6 +203,8 @@ function createMutableNode(
 }
 
 function snapshotNode(node: MutableAgentTreeNode, nodes?: BoundedMap<string, MutableAgentTreeNode>): AgentTreeNode {
+  const childIds = retainedChildIds(node, nodes);
+
   return {
     agentId: node.agentId,
     workflowId: node.workflowId,
@@ -194,17 +214,25 @@ function snapshotNode(node: MutableAgentTreeNode, nodes?: BoundedMap<string, Mut
     role: node.role,
     capability: node.capability,
     orphaned: node.orphaned,
-    childIds: [...node.childIds],
-    activeChildren: countActiveChildren(node, nodes),
+    childIds,
+    activeChildren: countActiveChildren(childIds, nodes),
     fanoutCount: node.fanoutCount,
     status: node.status,
   };
 }
 
-function countActiveChildren(node: MutableAgentTreeNode, nodes?: BoundedMap<string, MutableAgentTreeNode>): number {
-  if (!nodes) return node.childIds.size;
+function retainedChildIds(
+  node: MutableAgentTreeNode,
+  nodes?: BoundedMap<string, MutableAgentTreeNode>,
+): string[] {
+  if (!nodes) return [...node.childIds];
+  return [...node.childIds].filter(childId => nodes.has(childId));
+}
 
-  return [...node.childIds].filter(childId => isActiveChild(childId, nodes)).length;
+function countActiveChildren(childIds: readonly string[], nodes?: BoundedMap<string, MutableAgentTreeNode>): number {
+  if (!nodes) return childIds.length;
+
+  return childIds.filter(childId => isActiveChild(childId, nodes)).length;
 }
 
 function isActiveChild(childId: string, nodes: BoundedMap<string, MutableAgentTreeNode>): boolean {

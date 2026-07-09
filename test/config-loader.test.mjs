@@ -1,4 +1,7 @@
+import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { PROJECT_OBSERVME_YAML_TEMPLATE } from "../src/config/bootstrap-project-config.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
@@ -108,6 +111,26 @@ test("factory loader falls back for structurally invalid global config", async (
   assert.deepEqual(config, defaultObservMeConfig);
   assert.ok(warnings.some(message => message.includes("invalid_config_shape")));
   assert.doesNotMatch(warnings.join("\n"), /bad/u);
+});
+
+test("config loaders derive global and project defaults from Pi's exported config directory", async () => {
+  const factoryCalls = [];
+  await loadFactoryConfig({ readText: createReader({}, factoryCalls), env: {} });
+
+  assert.deepEqual(factoryCalls, [join(homedir(), CONFIG_DIR_NAME, "agent", "observme.yaml")]);
+
+  const cwd = "/workspace/project";
+  const sessionCalls = [];
+  await loadSessionConfig({
+    cwd,
+    globalConfigPath: "missing-global.yaml",
+    isProjectTrusted: true,
+    readText: createReader({}, sessionCalls),
+    env: {},
+    loadEnvFile: false,
+  });
+
+  assert.deepEqual(sessionCalls, ["missing-global.yaml", join(cwd, CONFIG_DIR_NAME, "observme.yaml")]);
 });
 
 test("session loader keeps normal project config and env paths inside cwd", async () => {

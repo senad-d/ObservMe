@@ -1,3 +1,4 @@
+import { CONFIG_DIR_NAME, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
@@ -38,7 +39,6 @@ interface ProjectConfigBootstrapPiApi {
   on: (eventName: string, handler: ProjectConfigBootstrapHandler) => void;
 }
 
-const defaultConfigDirName = ".pi";
 const observmeYamlFileName = "observme.yaml";
 
 export const PROJECT_OBSERVME_YAML_TEMPLATE = `observme:
@@ -253,6 +253,10 @@ async function notifyProjectConfigBootstrapFailed(ctx: ProjectConfigBootstrapCon
 }
 
 async function createProjectObservMeConfigFile(configPath: string): Promise<ProjectConfigBootstrapResult> {
+  return withFileMutationQueue(configPath, createProjectObservMeConfigFileInQueue.bind(undefined, configPath));
+}
+
+async function createProjectObservMeConfigFileInQueue(configPath: string): Promise<ProjectConfigBootstrapResult> {
   await mkdir(dirname(configPath), { recursive: true });
 
   try {
@@ -268,7 +272,7 @@ function resolveProjectObservMeConfigPath(options: EnsureProjectConfigOptions): 
   return resolveProjectLocalFilePath({
     cwd: options.cwd,
     configDirName: options.configDirName,
-    defaultConfigDirName,
+    defaultConfigDirName: CONFIG_DIR_NAME,
     fileName: observmeYamlFileName,
     inputLabel: "project config path",
   });

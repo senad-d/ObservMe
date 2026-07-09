@@ -1,3 +1,4 @@
+import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -18,6 +19,10 @@ async function createTempProject() {
 
 async function removeTempProject(path) {
   await rm(path, { force: true, recursive: true });
+}
+
+function projectConfigPath(cwd) {
+  return join(cwd, CONFIG_DIR_NAME, "observme.yaml");
 }
 
 function createFakePi() {
@@ -45,7 +50,7 @@ test("ensureProjectObservMeConfig creates the trusted project starter file", asy
 
   try {
     const result = await ensureProjectObservMeConfig({ cwd, isProjectTrusted: true });
-    const configPath = join(cwd, ".pi", "observme.yaml");
+    const configPath = projectConfigPath(cwd);
     const text = await readFile(configPath, "utf8");
 
     assert.deepEqual(result, { path: configPath, status: "created" });
@@ -66,9 +71,37 @@ test("ensureProjectObservMeConfig creates the trusted project starter file", asy
   }
 });
 
+test("concurrent ensureProjectObservMeConfig calls create once and never overwrite", async () => {
+  const cwd = await createTempProject();
+  const configPath = projectConfigPath(cwd);
+  const existing = "observme:\n  tenant: existing\n";
+
+  try {
+    const results = await Promise.all(
+      Array.from({ length: 16 }, () => ensureProjectObservMeConfig({ cwd, isProjectTrusted: true })),
+    );
+    const statuses = results.map(result => result.status);
+
+    assert.equal(statuses.filter(status => status === "created").length, 1);
+    assert.equal(statuses.filter(status => status === "exists").length, 15);
+    assert.ok(results.every(result => result.path === configPath));
+    assert.equal(await readFile(configPath, "utf8"), PROJECT_OBSERVME_YAML_TEMPLATE);
+
+    await writeFile(configPath, existing, "utf8");
+    const existingResults = await Promise.all(
+      Array.from({ length: 16 }, () => ensureProjectObservMeConfig({ cwd, isProjectTrusted: true })),
+    );
+
+    assert.ok(existingResults.every(result => result.status === "exists"));
+    assert.equal(await readFile(configPath, "utf8"), existing);
+  } finally {
+    await removeTempProject(cwd);
+  }
+});
+
 test("ensureProjectObservMeConfig never overwrites an existing project file", async () => {
   const cwd = await createTempProject();
-  const configPath = join(cwd, ".pi", "observme.yaml");
+  const configPath = projectConfigPath(cwd);
   const existing = "observme:\n  tenant: existing\n";
 
   try {
@@ -91,8 +124,8 @@ test("ensureProjectObservMeConfig skips untrusted projects", async () => {
   try {
     const result = await ensureProjectObservMeConfig({ cwd, isProjectTrusted: false });
 
-    assert.deepEqual(result, { path: join(cwd, ".pi", "observme.yaml"), status: "skipped_untrusted" });
-    await assert.rejects(readFile(join(cwd, ".pi", "observme.yaml"), "utf8"), { code: "ENOENT" });
+    assert.deepEqual(result, { path: projectConfigPath(cwd), status: "skipped_untrusted" });
+    await assert.rejects(readFile(projectConfigPath(cwd), "utf8"), { code: "ENOENT" });
   } finally {
     await removeTempProject(cwd);
   }
@@ -159,8 +192,8 @@ test("bootstrapProjectObservMeConfig skips safely without trust or UI capabiliti
   try {
     const result = await bootstrapProjectObservMeConfig({ cwd });
 
-    assert.deepEqual(result, { path: join(cwd, ".pi", "observme.yaml"), status: "skipped_untrusted" });
-    await assert.rejects(readFile(join(cwd, ".pi", "observme.yaml"), "utf8"), { code: "ENOENT" });
+    assert.deepEqual(result, { path: projectConfigPath(cwd), status: "skipped_untrusted" });
+    await assert.rejects(readFile(projectConfigPath(cwd), "utf8"), { code: "ENOENT" });
   } finally {
     await removeTempProject(cwd);
   }
@@ -173,9 +206,9 @@ test("bootstrapProjectObservMeConfig skips untrusted project contexts without cr
     const context = createContext(cwd, false);
     const result = await bootstrapProjectObservMeConfig(context);
 
-    assert.deepEqual(result, { path: join(cwd, ".pi", "observme.yaml"), status: "skipped_untrusted" });
+    assert.deepEqual(result, { path: projectConfigPath(cwd), status: "skipped_untrusted" });
     assert.deepEqual(context.notifications, []);
-    await assert.rejects(readFile(join(cwd, ".pi", "observme.yaml"), "utf8"), { code: "ENOENT" });
+    await assert.rejects(readFile(projectConfigPath(cwd), "utf8"), { code: "ENOENT" });
   } finally {
     await removeTempProject(cwd);
   }
@@ -194,7 +227,7 @@ test("bootstrapProjectObservMeConfig skips automatic creation when Pi context ha
     {
       ensureProjectConfig: async options => {
         calls.push(options);
-        return { path: "/workspace/demo/.pi/observme.yaml", status: "created" };
+        return { path: projectConfigPath("/workspace/demo"), status: "created" };
       },
     },
   );
@@ -231,7 +264,7 @@ test("registerHandlers creates the project file before loading session config", 
   registerHandlers(pi, {
     ensureProjectConfig: async () => {
       order.push("ensure");
-      return { path: "/workspace/demo/.pi/observme.yaml", status: "created" };
+      return { path: projectConfigPath("/workspace/demo"), status: "created" };
     },
     loadConfig: async () => {
       order.push("load");
@@ -252,7 +285,7 @@ test("registerHandlers creates the project file before loading session config", 
   assert.deepEqual(order, ["ensure", "load", "start"]);
   assert.deepEqual(context.notifications, [
     {
-      message: "ObservMe created /workspace/demo/.pi/observme.yaml. Edit this file for custom setup.",
+      message: `ObservMe created ${projectConfigPath("/workspace/demo")}. Edit this file for custom setup.`,
       level: "info",
     },
   ]);
@@ -269,7 +302,7 @@ test("registerHandlers bootstraps trusted project config on every Pi session_sta
       const trusted = await options.isProjectTrusted();
       calls.push({ reason: currentReason, cwd: options.cwd, trusted });
       return {
-        path: "/workspace/demo/.pi/observme.yaml",
+        path: projectConfigPath("/workspace/demo"),
         status: calls.length === 1 ? "created" : "exists",
       };
     },
@@ -291,7 +324,7 @@ test("registerHandlers bootstraps trusted project config on every Pi session_sta
   assert.deepEqual(calls, reasons.map(reason => ({ reason, cwd: "/workspace/demo", trusted: true })));
   assert.deepEqual(context.notifications, [
     {
-      message: "ObservMe created /workspace/demo/.pi/observme.yaml. Edit this file for custom setup.",
+      message: `ObservMe created ${projectConfigPath("/workspace/demo")}. Edit this file for custom setup.`,
       level: "info",
     },
   ]);
@@ -305,7 +338,7 @@ test("registerProjectConfigBootstrap creates the file before later session_start
   try {
     registerProjectConfigBootstrap(pi);
     pi.on("session_start", async () => {
-      observed.push(await readFile(join(cwd, ".pi", "observme.yaml"), "utf8"));
+      observed.push(await readFile(projectConfigPath(cwd), "utf8"));
     });
 
     const context = createContext(cwd, true);
@@ -316,7 +349,7 @@ test("registerProjectConfigBootstrap creates the file before later session_start
     assert.equal(observed[0], PROJECT_OBSERVME_YAML_TEMPLATE);
     assert.deepEqual(context.notifications, [
       {
-        message: `ObservMe created ${join(cwd, ".pi", "observme.yaml")}. Edit this file for custom setup.`,
+        message: `ObservMe created ${projectConfigPath(cwd)}. Edit this file for custom setup.`,
         level: "info",
       },
     ]);

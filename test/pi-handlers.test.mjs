@@ -34,6 +34,7 @@ import { SPAN_NAMES } from "../src/semconv/spans.ts";
 import {
   createObservMeMetrics,
   createSpanRegistry,
+  createTurnSequenceRegistry,
   readSessionHeaderFromFile,
   registerHandlers,
   safeHandler,
@@ -1719,6 +1720,75 @@ test("agent-run and turn metrics increment without high-cardinality ids as label
   assert.equal(telemetry.tracer.spans.find(span => span.name === SPAN_NAMES.PI_AGENT_RUN).ended, true);
 });
 
+test("turn sequences stay bounded and clean up on normal and out-of-order agent completion", async () => {
+  const pi = createFakePi();
+  const config = structuredClone(defaultObservMeConfig);
+  config.limits.maxActiveAgentRuns = 2;
+  config.limits.maxActiveTurns = 2;
+  let telemetry;
+
+  registerHandlers(pi, {
+    loadConfig: () => Promise.resolve(config),
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      telemetry.config = config;
+      telemetry.spans = createSpanRegistry(config, telemetry.metrics, () => telemetry);
+      telemetry.turnSequences = createTurnSequenceRegistry(config, telemetry.metrics, () => telemetry);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-bounded-turn-sequences" }, { cwd: "/workspace/demo" });
+  for (let index = 1; index <= 2; index += 1) {
+    const agentRunId = `agent-run-stress-${index}`;
+    await pi.handlers.get("agent_start")({ agentRunId, source: "user" }, {});
+    await pi.handlers.get("turn_start")({ agentRunId }, {});
+  }
+
+  await pi.handlers.get("agent_start")({ agentRunId: "agent-run-stress-3", source: "user" }, {});
+  assert.equal(telemetry.turnSequences.size, 1);
+  assert.equal(telemetry.turnSequences.get("agent-run-stress-1"), undefined);
+  assertMetricRecordCountByReason(
+    telemetry.meter.records,
+    OBSERVME_COUNTER_METRIC_NAMES.TELEMETRY_DROPPED_TOTAL,
+    "turn_sequence_full",
+    1,
+  );
+  await pi.handlers.get("turn_start")({ agentRunId: "agent-run-stress-3" }, {});
+
+  for (let index = 4; index <= 10; index += 1) {
+    const agentRunId = `agent-run-stress-${index}`;
+    await pi.handlers.get("agent_start")({ agentRunId, source: "user" }, {});
+    await pi.handlers.get("turn_start")({ agentRunId }, {});
+  }
+
+  const sequenceDrops = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_COUNTER_METRIC_NAMES.TELEMETRY_DROPPED_TOTAL && record.attributes.reason === "turn_sequence_full",
+  );
+
+  assert.equal(telemetry.spans.activeAgentRuns.size, config.limits.maxActiveAgentRuns);
+  assert.equal(telemetry.spans.activeTurns.size, config.limits.maxActiveTurns);
+  assert.equal(telemetry.turnSequences.size, config.limits.maxActiveAgentRuns);
+  assert.equal(sequenceDrops.length, 8);
+  assert.equal(sequenceDrops.every(record => Object.keys(record.attributes).join(",") === "reason"), true);
+
+  await pi.handlers.get("agent_end")({ agentRunId: "agent-run-stress-9", status: "ok" }, {});
+  assert.equal(telemetry.turnSequences.size, 1);
+  assert.equal(telemetry.turnSequences.get("agent-run-stress-9"), undefined);
+
+  await pi.handlers.get("agent_end")({ agentRunId: "agent-run-stress-1", status: "ok" }, {});
+  assert.equal(telemetry.turnSequences.size, 1);
+  assertMetricRecordCountByReason(
+    telemetry.meter.records,
+    OBSERVME_COUNTER_METRIC_NAMES.TELEMETRY_DROPPED_TOTAL,
+    "turn_sequence_full",
+    8,
+  );
+
+  await pi.handlers.get("agent_end")({ agentRunId: "agent-run-stress-10", status: "ok" }, {});
+  assert.equal(telemetry.turnSequences.size, 0);
+});
+
 test("turn start without a prior agent start records a drop and still closes the synthetic turn", async () => {
   const pi = createFakePi();
   let telemetry;
@@ -2021,6 +2091,11 @@ function assertMetricValue(records, metricName, value) {
 function assertMetricRecordCount(records, metricName, count) {
   const matchingRecords = records.filter(candidate => candidate.name === metricName);
   assert.equal(matchingRecords.length, count, `${metricName} should record ${count} increments`);
+}
+
+function assertMetricRecordCountByReason(records, metricName, reason, count) {
+  const matchingRecords = records.filter(candidate => candidate.name === metricName && candidate.attributes.reason === reason);
+  assert.equal(matchingRecords.length, count, `${metricName} should record ${count} ${reason} increments`);
 }
 
 function assertNoMetricRecord(records, metricName) {

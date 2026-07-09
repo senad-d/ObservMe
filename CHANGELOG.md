@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Bounded per-run turn sequence state and cleaned evicted agent-tree child references while preserving historical fan-out totals.
+- Made trusted project config bootstrap use Pi's distribution config-directory constant and per-file mutation queue, including concurrent creation coverage.
+- Hardened path redaction across POSIX, Windows drive, and UNC absolute paths while preserving normal URLs and slash-separated prose.
+- Added a source-review remediation spec covering privacy, bounded state and labels, cross-process trace continuation, missing telemetry, correlated logs, and maintainability fixes.
 - Cleaned up the README quick start, installation guidance, configuration references, and documentation index.
 - Fixed the CI checkout action reference to use the major-version tag expected by the validation contract.
 - Hid time and unique-label columns in the LLM Conversations log panels so message bodies are the default focus.

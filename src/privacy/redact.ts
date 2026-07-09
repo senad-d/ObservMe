@@ -1,4 +1,13 @@
-import { basename, dirname } from "node:path/posix";
+import {
+  basename as posixBasename,
+  dirname as posixDirname,
+  isAbsolute as isPosixAbsolute,
+} from "node:path/posix";
+import {
+  basename as windowsBasename,
+  dirname as windowsDirname,
+  isAbsolute as isWindowsAbsolute,
+} from "node:path/win32";
 import { sha256, type TenantSaltSource } from "./hash.ts";
 import { matchAllSecretPatterns, type SecretMatch } from "./secret-patterns.ts";
 import type { CustomRedactionPatternConfig, PrivacyPathMode } from "../config/schema.ts";
@@ -57,8 +66,19 @@ export interface ReplacementMatch {
 const DEFAULT_MAX_INPUT_CHARS = 1_000_000;
 const DEFAULT_MAX_OUTPUT_CHARS = 32_000;
 const HASH_PREFIX_LENGTH = 12;
-const ABSOLUTE_HOME_PATH_PATTERN = /\/(?:home|Users)\/[^\s'"`]+/gu;
+const ABSOLUTE_PATH_CANDIDATE_PATTERN = /(?:[a-zA-Z]:[\\/][^\s'"`<>|]*|\\\\[^\s'"`<>|]*|\/[^\s'"`<>|]*)/gu;
+const PATH_PREFIX_CONTINUATION_PATTERN = /[\p{L}\p{N}._~:/\\-]/u;
+const TRAILING_PATH_PUNCTUATION = new Set([".", ",", ";", "!", "?", ")", "]", "}"]);
 const REDACTED_PATH_PLACEHOLDER = "[REDACTED:path]";
+
+export type AbsolutePathStyle = "posix" | "windows";
+
+export interface AbsolutePathMatch {
+  readonly value: string;
+  readonly start: number;
+  readonly end: number;
+  readonly style: AbsolutePathStyle;
+}
 
 export const MAX_CUSTOM_REDACTION_PATTERNS = 16;
 export const MAX_CUSTOM_REDACTION_PATTERN_CHARS = 256;
@@ -115,8 +135,10 @@ export function redactValue(rawValue: string, options: RedactionOptions): Redact
 export function redactPath(path: string, pathMode: PrivacyPathMode, tenantSaltSource?: TenantSaltSource): string | undefined {
   if (pathMode === "full") return path;
   if (pathMode === "drop") return undefined;
-  if (pathMode === "basename") return basename(path);
-  return hashPath(path, tenantSaltSource);
+
+  const style = detectAbsolutePathStyle(path) ?? "posix";
+  if (pathMode === "basename") return pathBasename(path, style);
+  return hashPath(path, tenantSaltSource, style);
 }
 
 export function runSizeGuard(rawValue: string, options: RedactionOptions, stages: RedactionStage[]): string {
@@ -144,7 +166,7 @@ export function runPiiDetector(value: string, options: RedactionOptions, stages:
 export function runPathScrubber(value: string, options: RedactionOptions, stages: RedactionStage[]): string {
   recordStage("path_scrubber", options, stages);
   if (options.pathMode === "full") return value;
-  return value.replace(ABSOLUTE_HOME_PATH_PATTERN, match => redactEmbeddedPath(match, options.pathMode, options.tenantSaltSource));
+  return replaceAbsolutePaths(value, findAbsolutePaths(value), options.pathMode, options.tenantSaltSource);
 }
 
 export function runCustomRegexRedactors(value: string, options: RedactionOptions, stages: RedactionStage[]): string {
@@ -251,12 +273,94 @@ export function formatReplacement(match: ReplacementMatch, options: RedactionOpt
   return `[REDACTED:${match.type}:${sha256Prefix(match.value, options.tenantSaltSource)}]`;
 }
 
-export function redactEmbeddedPath(path: string, pathMode: PrivacyPathMode, tenantSaltSource?: TenantSaltSource): string {
-  return redactPath(path, pathMode, tenantSaltSource) ?? REDACTED_PATH_PLACEHOLDER;
+export function findAbsolutePaths(value: string): AbsolutePathMatch[] {
+  const matches: AbsolutePathMatch[] = [];
+
+  for (const candidateMatch of value.matchAll(ABSOLUTE_PATH_CANDIDATE_PATTERN)) {
+    const candidateStart = candidateMatch.index;
+    if (!isAbsolutePathStartBoundary(value, candidateStart)) continue;
+
+    const candidate = trimTrailingPathPunctuation(candidateMatch[0]);
+    const style = detectAbsolutePathStyle(candidate);
+    if (!style) continue;
+
+    matches.push({ value: candidate, start: candidateStart, end: candidateStart + candidate.length, style });
+  }
+
+  return matches;
 }
 
-export function hashPath(path: string, tenantSaltSource?: TenantSaltSource): string {
-  return `/<home>/${sha256Prefix(dirname(path), tenantSaltSource)}/${basename(path)}`;
+export function isAbsolutePathStartBoundary(value: string, start: number): boolean {
+  if (start === 0) return true;
+  return !PATH_PREFIX_CONTINUATION_PATTERN.test(value[start - 1]);
+}
+
+export function trimTrailingPathPunctuation(value: string): string {
+  let end = value.length;
+  while (end > 0 && TRAILING_PATH_PUNCTUATION.has(value[end - 1])) end -= 1;
+  return value.slice(0, end);
+}
+
+export function detectAbsolutePathStyle(path: string): AbsolutePathStyle | undefined {
+  if (isWindowsDrivePath(path) || isUncPath(path)) return "windows";
+  if (isPosixAbsolute(path) && !path.startsWith("//")) return "posix";
+  return undefined;
+}
+
+export function isWindowsDrivePath(path: string): boolean {
+  return /^[a-zA-Z]:[\\/]/u.test(path) && isWindowsAbsolute(path);
+}
+
+export function isUncPath(path: string): boolean {
+  if (!path.startsWith("\\\\") || !isWindowsAbsolute(path)) return false;
+  const segments = path.slice(2).split(/[\\/]+/u);
+  return segments.length >= 2 && segments[0].length > 0 && segments[1].length > 0;
+}
+
+export function replaceAbsolutePaths(
+  value: string,
+  matches: readonly AbsolutePathMatch[],
+  pathMode: PrivacyPathMode,
+  tenantSaltSource?: TenantSaltSource,
+): string {
+  let result = "";
+  let cursor = 0;
+
+  for (const match of matches) {
+    result += value.slice(cursor, match.start);
+    result += redactEmbeddedPath(match.value, pathMode, tenantSaltSource, match.style);
+    cursor = match.end;
+  }
+
+  return `${result}${value.slice(cursor)}`;
+}
+
+export function redactEmbeddedPath(
+  path: string,
+  pathMode: PrivacyPathMode,
+  tenantSaltSource?: TenantSaltSource,
+  style: AbsolutePathStyle = detectAbsolutePathStyle(path) ?? "posix",
+): string {
+  if (pathMode === "full") return path;
+  if (pathMode === "drop") return REDACTED_PATH_PLACEHOLDER;
+  if (pathMode === "basename") return pathBasename(path, style);
+  return hashPath(path, tenantSaltSource, style);
+}
+
+export function hashPath(
+  path: string,
+  tenantSaltSource?: TenantSaltSource,
+  style: AbsolutePathStyle = detectAbsolutePathStyle(path) ?? "posix",
+): string {
+  return `/<home>/${sha256Prefix(pathDirname(path, style), tenantSaltSource)}/${pathBasename(path, style)}`;
+}
+
+export function pathBasename(path: string, style: AbsolutePathStyle): string {
+  return style === "windows" ? windowsBasename(path) : posixBasename(path);
+}
+
+export function pathDirname(path: string, style: AbsolutePathStyle): string {
+  return style === "windows" ? windowsDirname(path) : posixDirname(path);
 }
 
 export function applyCustomRedactionPattern(

@@ -1,4 +1,4 @@
-import { CONFIG_DIR_NAME, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerObsCommand } from "./commands/obs.ts";
 import { registerHandlers } from "./pi/handlers.ts";
 
@@ -9,7 +9,7 @@ const partialInitializationErrorMessage =
 
 export default function observme(pi: ExtensionAPI): void {
   assertRegistrationApiAvailable(pi);
-  registerHandlers(pi, { configDirName: CONFIG_DIR_NAME });
+  registerHandlers(pi);
   registerObsCommandWithPartialInitializationDiagnostic(pi);
 }
 

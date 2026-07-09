@@ -852,6 +852,7 @@ export function endAllActiveSpans(session: ObservMeTelemetrySession): void {
   session.spans.activeToolCalls.clear();
   session.spans.activeTurns.clear();
   session.spans.activeAgentRuns.clear();
+  session.turnSequences.clear();
 }
 
 export function resolveCurrentSessionId(session: SelfObservabilitySession): string {
