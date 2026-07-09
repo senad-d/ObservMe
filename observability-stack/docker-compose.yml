@@ -12,14 +12,8 @@ services:
         condition: service_healthy
     ports:
       - "${NGINX_HTTP_PORT:-80}:80"
-      - "${NGINX_HTTPS_PORT:-443}:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-    secrets:
-      - source: observability_tls_cert
-        target: /etc/nginx/certs/observability.local.crt
-      - source: observability_tls_key
-        target: /etc/nginx/certs/observability.local.key
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
       interval: 5s
@@ -46,8 +40,8 @@ services:
       tempo:
         condition: service_healthy
     environment:
-      GF_SERVER_DOMAIN: ${OBSERVABILITY_DOMAIN:-observability.local}
-      GF_SERVER_ROOT_URL: https://${OBSERVABILITY_DOMAIN:-observability.local}
+      GF_SERVER_DOMAIN: ${OBSERVABILITY_DOMAIN:-localhost}
+      GF_SERVER_ROOT_URL: ${OBSERVABILITY_URL:-http://localhost}
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
       GF_USERS_ALLOW_SIGN_UP: "false"
@@ -251,9 +245,5 @@ networks:
     internal: true
 
 secrets:
-  observability_tls_cert:
-    file: ./secrets/observability.local.crt
-  observability_tls_key:
-    file: ./secrets/observability.local.key
   grafana_admin_password:
     file: ./secrets/grafana_admin_password
