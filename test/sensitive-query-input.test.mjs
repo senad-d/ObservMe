@@ -196,10 +196,11 @@ test("shared sensitive input corpus still allows benign generated IDs at every p
 
 test("command diagnostics use the shared redaction corpus before rendering UI text", async () => {
   const message = sanitizeObsDiagnosticText(
-    "Authorization: Bearer grafana-token Prompt: raw prompt body /Users/senad/project rm -rf /tmp/demo OBSERVME_TOKEN=super-secret ${OBSERVME_GRAFANA_TOKEN} password=grafana-password.",
+    "Authorization: Bearer grafana-token Prompt: raw prompt body. /Users/senad/project rm -rf /tmp/demo. OBSERVME_TOKEN=super-secret ${OBSERVME_GRAFANA_TOKEN} password=grafana-password https://alice:credential@grafana.local/path?token=query-secret.",
   );
 
-  assert.doesNotMatch(message, /grafana-token|raw prompt body|\/Users\/senad|rm -rf|super-secret|OBSERVME_GRAFANA_TOKEN|grafana-password/u);
+  assert.doesNotMatch(message, /grafana-token|raw prompt body|\/Users\/senad|rm -rf|super-secret|OBSERVME_GRAFANA_TOKEN|grafana-password|alice:credential|query-secret/u);
+  assert.match(message, /https:\/\/\[redacted\]@grafana\.local\/path/u);
   assert.match(message, /redacted/u);
 
   const notifications = [];

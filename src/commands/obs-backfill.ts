@@ -1300,7 +1300,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return trimmed || undefined;
 }
 
 function safeJsonStringify(value: unknown): string | undefined {

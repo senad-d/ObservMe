@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Remediated the latest SonarQube findings by replacing Unicode-insensitive character helpers, removing backtracking-prone regexes, simplifying default assignment, and preserving diagnostic URL credential redaction without regex backtracking.
 - Restored LLM conversation capture by letting trusted project `.env` hash salts drive redaction, surfacing content-capture failure reasons, and extending the LLM Conversations dashboard default range.
 - Completed SonarQube batch 4 remediation by handling ignored fallbacks, simplifying bounded regex and default-assignment findings, using precise type-check errors, and reducing query parsing complexity.
 - Completed SonarQube batch 3 remediation by handling timestamp/stringification fallbacks, replacing literal replacements and default ternaries, simplifying backtracking-prone formatters, and tightening config/query helpers.

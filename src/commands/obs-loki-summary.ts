@@ -175,6 +175,9 @@ function isString(value: string | undefined): value is string {
 function trimTrailingFractionZeros(value: string): string {
   if (!value.includes(".")) return value;
 
-  const withoutTrailingZeros = value.replace(/0+$/u, "");
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "0") end -= 1;
+
+  const withoutTrailingZeros = value.slice(0, end);
   return withoutTrailingZeros.endsWith(".") ? withoutTrailingZeros.slice(0, -1) : withoutTrailingZeros;
 }

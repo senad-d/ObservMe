@@ -51,7 +51,7 @@ const maxTempoSearchAttributeValueLength = 256;
 const safeTempoAttributeKeyPattern = /^[A-Za-z_][A-Za-z0-9_.-]*$/u;
 const safeTempoAttributeValuePattern = /^[A-Za-z0-9._:-]+$/u;
 const hashedAttributeKeyPattern = /(?:\.hash|_hash)$/u;
-const backslashCharacter = String.fromCharCode(92);
+const backslashCharacter = String.fromCodePoint(92);
 const generatedCorrelationAttributeKeys = new Set<string>([
   COMMON_SPAN_ATTRIBUTES.PI_SESSION_ID,
   COMMON_SPAN_ATTRIBUTES.PI_WORKFLOW_ID,

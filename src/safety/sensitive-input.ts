@@ -54,10 +54,6 @@ const diagnosticReplacements = [
   { pattern: diagnosticEnvironmentAssignmentPattern, replacement: "[redacted-env]" },
   { pattern: diagnosticUnresolvedEnvironmentPlaceholderPattern, replacement: "[redacted-env-placeholder]" },
   {
-    pattern: /([a-z][a-z0-9+.-]*:\/\/)[^\s:/?#@]+:[^\s/?#@]+@/giu,
-    replacement: "$1[redacted]@",
-  },
-  {
     pattern: /([?&](?:access_)?(?:token|password|secret|authorization)=)[^\s&#;,)]+/giu,
     replacement: "$1[redacted]",
   },
@@ -109,12 +105,92 @@ export function readDiagnosticMessage(error: unknown): string {
 
 export function sanitizeUiDiagnosticText(message: string): string {
   const normalized = normalizeDiagnosticWhitespace(message);
-  const redacted = diagnosticReplacements.reduce(applyDiagnosticReplacement, normalized);
+  const redactedUrlCredentials = redactUrlCredentials(normalized);
+  const redacted = diagnosticReplacements.reduce(applyDiagnosticReplacement, redactedUrlCredentials);
   return truncateDiagnostic(redacted || "unknown error");
 }
 
 function applyDiagnosticReplacement(message: string, replacement: DiagnosticReplacement): string {
   return message.replace(replacement.pattern, replacement.replacement);
+}
+
+function redactUrlCredentials(message: string): string {
+  let redacted = "";
+  let cursor = 0;
+  let searchFrom = 0;
+
+  while (searchFrom < message.length) {
+    const markerIndex = message.indexOf("://", searchFrom);
+    if (markerIndex === -1) break;
+
+    const schemeStart = findUrlSchemeStart(message, markerIndex);
+    if (!isValidUrlScheme(message, schemeStart, markerIndex)) {
+      searchFrom = markerIndex + 3;
+      continue;
+    }
+
+    const credentialsStart = markerIndex + 3;
+    const authorityEnd = findUrlAuthorityEnd(message, credentialsStart);
+    const atIndex = message.indexOf("@", credentialsStart);
+    if (atIndex === -1 || atIndex >= authorityEnd) {
+      searchFrom = authorityEnd + 1;
+      continue;
+    }
+
+    const colonIndex = message.indexOf(":", credentialsStart);
+    if (colonIndex === -1 || colonIndex >= atIndex || colonIndex === credentialsStart || colonIndex + 1 === atIndex) {
+      searchFrom = atIndex + 1;
+      continue;
+    }
+
+    redacted += message.slice(cursor, credentialsStart);
+    redacted += "[redacted]@";
+    cursor = atIndex + 1;
+    searchFrom = atIndex + 1;
+  }
+
+  return redacted + message.slice(cursor);
+}
+
+function findUrlSchemeStart(message: string, schemeEnd: number): number {
+  let start = schemeEnd - 1;
+  while (start > 0 && isUrlSchemeCharacter(message[start - 1])) start -= 1;
+  return start;
+}
+
+function isValidUrlScheme(message: string, schemeStart: number, schemeEnd: number): boolean {
+  if (schemeStart >= schemeEnd) return false;
+  if (!isAsciiLetter(message[schemeStart])) return false;
+
+  for (let index = schemeStart + 1; index < schemeEnd; index += 1) {
+    if (!isUrlSchemeCharacter(message[index])) return false;
+  }
+
+  return true;
+}
+
+function findUrlAuthorityEnd(message: string, start: number): number {
+  let index = start;
+  while (index < message.length && !isUrlAuthorityTerminator(message[index])) index += 1;
+  return index;
+}
+
+function isUrlAuthorityTerminator(value: string): boolean {
+  return value === "/" || value === "?" || value === "#" || value === " ";
+}
+
+function isUrlSchemeCharacter(value: string): boolean {
+  return isAsciiLetter(value) || isAsciiDigit(value) || value === "+" || value === "." || value === "-";
+}
+
+function isAsciiLetter(value: string): boolean {
+  const code = value.codePointAt(0);
+  return code !== undefined && ((code >= 65 && code <= 90) || (code >= 97 && code <= 122));
+}
+
+function isAsciiDigit(value: string): boolean {
+  const code = value.codePointAt(0);
+  return code !== undefined && code >= 48 && code <= 57;
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {

@@ -60,7 +60,7 @@ const OBS_LOGS_USAGE = "Usage: /obs logs";
 const OBS_LOGS_LOKI_ERROR_NEXT_ACTION = "run /obs health and verify query.grafana.url, Grafana credentials, the Loki datasource UID, and service labels.";
 const OBS_LOGS_SESSION_ERROR_NEXT_ACTION = "run /obs session to confirm a current session before /obs logs.";
 const OBS_LOGS_NO_LOGS_NEXT_ACTION = "wait for telemetry export, then verify Loki labels and datasource with /obs health.";
-const logQlBackslash = String.fromCharCode(92);
+const logQlBackslash = String.fromCodePoint(92);
 
 export function registerObsLogsCommand(pi: ExtensionAPI, options: RegisterObsLogsCommandOptions = {}): void {
   const command = new ObsLogsCommand(options);
