@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed the CI checkout action reference to use the major-version tag expected by the validation contract.
 - Hid time and unique-label columns in the LLM Conversations log panels so message bodies are the default focus.
 - Updated the LLM Conversations dashboard log panels to render only captured message bodies by default while preserving expanded log details for the full structured payload.
 - Updated dashboard documentation, README guidance, and multi-agent navigation notes for the improved dashboard map, drill-down workflows, variables, and zero-state semantics.
