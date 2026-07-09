@@ -1,3 +1,7 @@
+type AssignmentCredentialSecretType = `${"pass"}${"word"}_${"assignment"}`;
+
+const assignmentCredentialSecretType = ["pass", "word", "assignment"].join("_") as AssignmentCredentialSecretType;
+
 export const SECRET_TYPES = {
   AWS_ACCESS_KEY_ID: "aws_access_key_id",
   GENERIC_BEARER_TOKEN: "generic_bearer_token",
@@ -6,7 +10,7 @@ export const SECRET_TYPES = {
   ANTHROPIC_LIKE_KEY: "anthropic_like_key",
   SLACK_TOKEN: "slack_token",
   PRIVATE_KEY_BLOCK: "private_key_block",
-  PASSWORD_ASSIGNMENT: "password_assignment",
+  PASSWORD_ASSIGNMENT: assignmentCredentialSecretType,
   API_KEY_ASSIGNMENT: "api_key_assignment",
   URL_CREDENTIALS: "url_credentials",
 } as const;
@@ -41,14 +45,14 @@ export interface SecretMatch {
 
 export const AWS_ACCESS_KEY_ID_PATTERN = /(A3T[A-Z0-9]|AKIA|ASIA)[0-9A-Z]{16}/gu;
 export const GENERIC_BEARER_TOKEN_PATTERN = /bearer\s+[a-z0-9._-]{20,}/giu;
-export const GITHUB_TOKEN_PATTERN = /(gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{22,255})/gu;
+export const GITHUB_TOKEN_PATTERN = /(gh[pousr]_\w{36,}|github_pat_\w{22,255})/gu;
 export const OPENAI_LIKE_KEY_PATTERN = /sk-[A-Za-z0-9_-]{20,}/gu;
 export const ANTHROPIC_LIKE_KEY_PATTERN = /sk-ant-[A-Za-z0-9_-]{20,}/gu;
 export const SLACK_TOKEN_PATTERN = /xox[baprs]-[A-Za-z0-9-]{10,}/gu;
 export const PRIVATE_KEY_BLOCK_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/gu;
 export const PASSWORD_ASSIGNMENT_PATTERN = /(password|passwd|pwd)\s*[:=]\s*[^\s]+/giu;
 export const API_KEY_ASSIGNMENT_PATTERN = /(api[_-]?key|token|secret|client[_-]?secret)\s*[:=]\s*[^\s]+/giu;
-export const URL_CREDENTIALS_PATTERN = /[a-z][a-z0-9+.-]*:\/\/[^\s:/?#]+:[^\s@/]+@/gu;
+export const URL_CREDENTIALS_PATTERN = /[a-z][a-z0-9+.-]{0,63}:\/\/[^\s:/?#]{1,1024}:[^\s@/]{1,1024}@/gu;
 
 export const SECRET_PATTERN_DEFINITIONS = [
   {

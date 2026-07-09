@@ -149,7 +149,7 @@ function normalizePrometheusQuery(query: string): string {
 function normalizeQueryTime(time: Date | undefined): Date | undefined {
   if (time === undefined) return undefined;
   if (!(time instanceof Date) || !Number.isFinite(time.getTime())) {
-    throw new Error("Prometheus query time must be a valid Date when provided.");
+    throw new TypeError("Prometheus query time must be a valid Date when provided.");
   }
 
   return time;
@@ -171,7 +171,7 @@ function createPrometheusIdentifierPattern(identifier: string): RegExp {
 }
 
 function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
 }
 
 function createPrometheusQueryUrl(
@@ -321,7 +321,7 @@ function readOptionalString(item: Record<string, unknown>, key: string): string 
   if (typeof value !== "string") return undefined;
 
   const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return trimmed || undefined;
 }
 
 function readStringOrNumber(value: unknown): string | undefined {
@@ -377,5 +377,8 @@ function formatPrometheusDuration(milliseconds: number): string {
 }
 
 function trimTrailingFractionZeros(value: string): string {
-  return value.replace(/\.0+$/u, "").replace(/(\.\d*?)0+$/u, "$1");
+  if (!value.includes(".")) return value;
+
+  const withoutTrailingZeros = value.replace(/0+$/u, "");
+  return withoutTrailingZeros.endsWith(".") ? withoutTrailingZeros.slice(0, -1) : withoutTrailingZeros;
 }

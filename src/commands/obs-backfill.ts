@@ -132,6 +132,22 @@ interface ObsBackfillBuildResult {
   readonly redactionFailures: number;
 }
 
+interface BackfillSummaryInput {
+  readonly status: ObsBackfillSummary["status"];
+  readonly request: ObsBackfillRequest;
+  readonly buildResult: ObsBackfillBuildResult;
+  readonly recordsExported: number;
+  readonly reason?: string;
+  readonly sessionId?: string;
+  readonly sessionFile?: string;
+}
+
+interface ObsBackfillFlagState {
+  currentSession: boolean;
+  since?: string;
+  index: number;
+}
+
 interface ObsBackfillContentResult {
   readonly captured: boolean;
   readonly redactionFailures: number;
@@ -547,7 +563,7 @@ function completedBackfillSummary(
   sessionId = resolveCurrentSessionId(ctx),
   sessionFile = ctx.sessionManager?.getSessionFile?.(),
 ): ObsBackfillSummary {
-  return backfillSummary("completed", ctx, request, buildResult, recordsExported, undefined, sessionId, sessionFile);
+  return backfillSummary({ status: "completed", request, buildResult, recordsExported, sessionId, sessionFile });
 }
 
 function interruptedBackfillSummary(
@@ -559,32 +575,23 @@ function interruptedBackfillSummary(
   sessionId = resolveCurrentSessionId(ctx),
   sessionFile = ctx.sessionManager?.getSessionFile?.(),
 ): ObsBackfillSummary {
-  return backfillSummary("cancelled", ctx, request, buildResult, recordsExported, reason, sessionId, sessionFile);
+  return backfillSummary({ status: "cancelled", request, buildResult, recordsExported, reason, sessionId, sessionFile });
 }
 
-function backfillSummary(
-  status: ObsBackfillSummary["status"],
-  _ctx: ObsBackfillCommandContext,
-  request: ObsBackfillRequest,
-  buildResult: ObsBackfillBuildResult,
-  recordsExported: number,
-  reason: string | undefined,
-  sessionId: string | undefined,
-  sessionFile: string | undefined,
-): ObsBackfillSummary {
+function backfillSummary(input: BackfillSummaryInput): ObsBackfillSummary {
   return {
-    status,
-    sessionId,
-    sessionFile,
-    since: request.since,
-    entriesScanned: buildResult.entriesScanned,
-    entriesEligible: buildResult.entriesEligible,
-    recordsExported,
-    recordsSkipped: buildResult.recordsSkipped + (buildResult.records.length - recordsExported),
-    rateLimited: buildResult.rateLimited,
-    contentCaptured: buildResult.contentCaptured,
-    redactionFailures: buildResult.redactionFailures,
-    reason,
+    status: input.status,
+    sessionId: input.sessionId,
+    sessionFile: input.sessionFile,
+    since: input.request.since,
+    entriesScanned: input.buildResult.entriesScanned,
+    entriesEligible: input.buildResult.entriesEligible,
+    recordsExported: input.recordsExported,
+    recordsSkipped: input.buildResult.recordsSkipped + (input.buildResult.records.length - input.recordsExported),
+    rateLimited: input.buildResult.rateLimited,
+    contentCaptured: input.buildResult.contentCaptured,
+    redactionFailures: input.buildResult.redactionFailures,
+    reason: input.reason,
   };
 }
 
@@ -614,7 +621,6 @@ async function exportObsBackfillRecords(
 
   try {
     for (const record of records) {
-      operationLabel = "export emit";
       throwIfBackfillAborted(signal);
       await runBackfillOperation(exporter.emit(record, { signal, timeoutMs: operationTimeoutMs }), signal, operationTimeoutMs, operationLabel, runScope);
       recordsExported += 1;
@@ -757,41 +763,49 @@ function parseObsBackfillArgs(args: string): ParsedObsBackfillArgs {
 }
 
 function parseObsBackfillFlags(tokens: readonly string[]): ParsedObsBackfillArgs {
-  let currentSession = false;
-  let since: string | undefined;
-  let index = 0;
+  const state: ObsBackfillFlagState = { currentSession: false, index: 0 };
 
-  while (index < tokens.length) {
-    const token = tokens[index];
-    if (token === "--current-session") {
-      if (currentSession) return { error: "Repeated option: --current-session." };
-      currentSession = true;
-      index += 1;
-      continue;
-    }
-
-    if (token === "--since") {
-      if (since !== undefined) return { error: "Repeated option: --since." };
-      const value = tokens[index + 1];
-      if (!value || value.startsWith("--")) return { error: missingObsOptionValueMessage("--since") };
-      since = value;
-      index += 2;
-      continue;
-    }
-
-    if (token.startsWith("--since=")) {
-      if (since !== undefined) return { error: "Repeated option: --since." };
-      since = token.slice("--since=".length);
-      if (!since) return { error: missingObsOptionValueMessage("--since") };
-      index += 1;
-      continue;
-    }
-
-    return { error: unknownObsOptionMessage(token) };
+  while (state.index < tokens.length) {
+    const result = parseObsBackfillFlag(tokens, state);
+    if (result.error) return result;
   }
 
-  if (!currentSession) return { error: "Backfill requires --current-session so historical replay is always explicit." };
-  return parsedObsBackfillRequest(currentSession, since);
+  if (!state.currentSession) return { error: "Backfill requires --current-session so historical replay is always explicit." };
+  return parsedObsBackfillRequest(state.currentSession, state.since);
+}
+
+function parseObsBackfillFlag(tokens: readonly string[], state: ObsBackfillFlagState): ParsedObsBackfillArgs {
+  const token = tokens[state.index];
+  if (token === "--current-session") return parseCurrentSessionBackfillFlag(state);
+  if (token === "--since") return parseSeparateSinceBackfillFlag(tokens, state);
+  if (token.startsWith("--since=")) return parseInlineSinceBackfillFlag(token, state);
+  return { error: unknownObsOptionMessage(token) };
+}
+
+function parseCurrentSessionBackfillFlag(state: ObsBackfillFlagState): ParsedObsBackfillArgs {
+  if (state.currentSession) return { error: "Repeated option: --current-session." };
+  state.currentSession = true;
+  state.index += 1;
+  return {};
+}
+
+function parseSeparateSinceBackfillFlag(tokens: readonly string[], state: ObsBackfillFlagState): ParsedObsBackfillArgs {
+  if (state.since !== undefined) return { error: "Repeated option: --since." };
+
+  const value = tokens[state.index + 1];
+  if (!value || value.startsWith("--")) return { error: missingObsOptionValueMessage("--since") };
+  state.since = value;
+  state.index += 2;
+  return {};
+}
+
+function parseInlineSinceBackfillFlag(token: string, state: ObsBackfillFlagState): ParsedObsBackfillArgs {
+  if (state.since !== undefined) return { error: "Repeated option: --since." };
+
+  state.since = token.slice("--since=".length);
+  if (!state.since) return { error: missingObsOptionValueMessage("--since") };
+  state.index += 1;
+  return {};
 }
 
 function parsedObsBackfillRequest(currentSession: boolean, since: string | undefined): ParsedObsBackfillArgs {
@@ -975,19 +989,21 @@ function toolResultMessageToBackfillRecord(
   config: ObservMeConfig,
   baseAttributes: ObsBackfillAttributes,
 ): { readonly record: ObsBackfillTelemetryRecord; readonly contentCaptured: boolean; readonly redactionFailures: number } {
+  const failed = readBoolean(message, "isError") === true;
   const attributes = withoutUndefinedAttributes({
     ...baseAttributes,
     "pi.message.role": "toolResult",
     [TOOL_ATTRIBUTES.PI_TOOL_CALL_ID]: readString(message, "toolCallId"),
     [TOOL_ATTRIBUTES.PI_TOOL_NAME]: readString(message, "toolName"),
-    [TOOL_ATTRIBUTES.PI_TOOL_SUCCESS]: readBoolean(message, "isError") === true ? false : true,
+    [TOOL_ATTRIBUTES.PI_TOOL_SUCCESS]: !failed,
   });
   const content = extractTextContent(readUnknown(message, "content"));
   attributes[TOOL_ATTRIBUTES.PI_TOOL_RESULT_SIZE] = content?.length ?? 0;
   const contentResult = maybeAttachCapturedContent(attributes, TOOL_ATTRIBUTES.PI_TOOL_RESULT_REDACTED, content, "toolResult", config, config.capture.toolResults);
+  const eventName = failed ? LOG_EVENT_NAMES.TOOL_CALL_FAILED : LOG_EVENT_NAMES.TOOL_CALL_COMPLETED;
 
   return {
-    record: createBackfillRecord(readBoolean(message, "isError") === true ? LOG_EVENT_NAMES.TOOL_CALL_FAILED : LOG_EVENT_NAMES.TOOL_CALL_COMPLETED, entry, attributes),
+    record: createBackfillRecord(eventName, entry, attributes),
     contentCaptured: contentResult.captured,
     redactionFailures: contentResult.redactionFailures,
   };
@@ -1269,7 +1285,8 @@ function readString(value: unknown, key: string): string | undefined {
 
 function readNumber(value: unknown, key: string): number | undefined {
   const raw = readUnknown(value, key);
-  return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
+  return raw;
 }
 
 function readBoolean(value: unknown, key: string): boolean | undefined {
@@ -1290,8 +1307,9 @@ function safeJsonStringify(value: unknown): string | undefined {
   try {
     const text = JSON.stringify(value);
     return typeof text === "string" ? text : undefined;
-  } catch (_error) {
-    return undefined;
+  } catch (error) {
+    if (error instanceof TypeError) return undefined;
+    throw error;
   }
 }
 

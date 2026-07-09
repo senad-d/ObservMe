@@ -121,8 +121,7 @@ export function renderObsCost(snapshot: ObsCostSnapshot): string {
     return lines.join("\n");
   }
 
-  lines.push(...rows.map(renderObsCostRow));
-  lines.push(`Total: ${formatUsd(sumObsCostRows(rows))}`);
+  lines.push(...rows.map(renderObsCostRow), `Total: ${formatUsd(sumObsCostRows(rows))}`);
   return lines.join("\n");
 }
 
@@ -193,7 +192,7 @@ function normalizeMetricLabel(value: string | undefined): string {
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return trimmed || undefined;
 }
 
 function renderObsCostRow(row: ObsCostRow): string {
@@ -201,7 +200,7 @@ function renderObsCostRow(row: ObsCostRow): string {
 }
 
 function sumObsCostRows(rows: readonly ObsCostRow[]): number {
-  return rows.reduce(sumObsCostRow, 0);
+  return rows.reduce((total, row) => sumObsCostRow(total, row), 0);
 }
 
 function sumObsCostRow(total: number, row: ObsCostRow): number {

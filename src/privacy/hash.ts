@@ -39,11 +39,17 @@ export function trySha256(
   config: TenantSaltConfig,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): string | undefined {
-  try {
-    return sha256(value, createEnvTenantSaltSource(config, env));
-  } catch (_error) {
-    return undefined;
-  }
+  const salt = readOptionalTenantSaltFromEnv(createEnvTenantSaltSource(config, env));
+  if (salt === undefined) return undefined;
+  return createHash("sha256").update(`${salt}\0${value}`).digest("hex");
+}
+
+function readOptionalTenantSaltFromEnv(source: EnvTenantSaltSource): string | undefined {
+  if (source.envName.length === 0) return undefined;
+
+  const salt = source.env[source.envName];
+  if (salt === undefined || salt.length === 0) return undefined;
+  return salt;
 }
 
 export function resolveTenantSalt(source: TenantSaltSource): string {

@@ -99,12 +99,24 @@ export function createGrafanaTransport(
 
 export function buildGrafanaApiUrl(baseUrl: string, apiPath: string): URL {
   const url = new URL(baseUrl.trim());
-  const basePath = url.pathname.replace(/\/+$/u, "");
-  const path = apiPath.replace(/^\/+/, "");
+  const basePath = removeTrailingSlashes(url.pathname);
+  const path = removeLeadingSlashes(apiPath);
   url.pathname = `${basePath}/${path}`;
   url.search = "";
   url.hash = "";
   return url;
+}
+
+function removeTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+}
+
+function removeLeadingSlashes(value: string): string {
+  let start = 0;
+  while (start < value.length && value[start] === "/") start += 1;
+  return value.slice(start);
 }
 
 export function buildGrafanaDatasourceApiUrl(baseUrl: string, datasourceUid: string, apiPath: string): URL {
@@ -213,8 +225,8 @@ function normalizeGrafanaTransportError(error: unknown, timeoutMessage: string |
 }
 
 function joinGrafanaApiPath(prefix: string, path: string): string {
-  const normalizedPrefix = prefix.replace(/\/+$/u, "");
-  const normalizedPath = path.replace(/^\/+/, "");
+  const normalizedPrefix = removeTrailingSlashes(prefix);
+  const normalizedPath = removeLeadingSlashes(path);
   if (!normalizedPath) return normalizedPrefix;
   return `${normalizedPrefix}/${normalizedPath}`;
 }
@@ -238,7 +250,11 @@ function createGrafanaAuthorizationHeader(config: ObservMeConfig): string | unde
 
   const username = normalizeConfiguredGrafanaSecret(config.query.grafana.username);
   const password = normalizeConfiguredGrafanaSecret(config.query.grafana.password);
-  if (username && password) return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+  if (username && password) {
+    const credentials = `${username}:${password}`;
+    const encodedCredentials = Buffer.from(credentials).toString("base64");
+    return `Basic ${encodedCredentials}`;
+  }
   return undefined;
 }
 

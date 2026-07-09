@@ -190,9 +190,7 @@ export function nextLlmRequestId(session: ObservMeTelemetrySession, event: unkno
 }
 
 export function resolveLlmParentSpan(session: ObservMeTelemetrySession): Span | undefined {
-  if (session.currentTurnId) return session.spans.activeTurns.get(session.currentTurnId) ?? session.sessionSpan;
-  if (session.currentAgentRunId) return session.spans.activeAgentRuns.get(session.currentAgentRunId) ?? session.sessionSpan;
-  return session.sessionSpan;
+  return resolveOperationParentSpan(session);
 }
 
 export function resolveCurrentLlmSpan(session: ObservMeTelemetrySession, event: unknown): Span | undefined {
@@ -1494,10 +1492,32 @@ export function serializeToolPayload(value: unknown): string | undefined {
   if (value instanceof Error) return value.name;
 
   try {
-    return JSON.stringify(value) ?? String(value);
-  } catch (_error) {
-    return String(value);
+    return JSON.stringify(value) ?? formatNonJsonToolPayload(value);
+  } catch (error) {
+    return formatUnserializableToolPayload(value, error);
   }
+}
+
+function formatNonJsonToolPayload(value: unknown): string {
+  if (typeof value === "function") return `[Function ${value.name || "anonymous"}]`;
+  if (typeof value === "symbol") return value.description ? `Symbol(${value.description})` : "Symbol()";
+  if (typeof value === "bigint") return value.toString();
+  if (isRecord(value)) return `[Unserializable ${readObjectTypeName(value)}]`;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value === null) return "null";
+  return "unserializable value";
+}
+
+function formatUnserializableToolPayload(value: unknown, error: unknown): string {
+  if (typeof value === "bigint") return value.toString();
+  if (!isRecord(value)) return formatNonJsonToolPayload(value);
+
+  const failureKind = error instanceof Error ? error.name : "unknown serialization failure";
+  return `[Unserializable ${readObjectTypeName(value)}: ${failureKind}]`;
+}
+
+function readObjectTypeName(value: object): string {
+  return value.constructor?.name || "Object";
 }
 
 export function toolExecutionFailed(event: unknown): boolean {
@@ -1587,14 +1607,28 @@ export function countPayloadItemSource(value: unknown): number | undefined {
   return undefined;
 }
 
+interface SafeJsonLengthResult {
+  readonly length?: number;
+  readonly failureKind?: string;
+}
+
 export function safeJsonLength(value: unknown): number | undefined {
   if (value === undefined) return undefined;
 
+  return readSafeJsonLength(value).length;
+}
+
+function readSafeJsonLength(value: unknown): SafeJsonLengthResult {
   try {
-    return JSON.stringify(value)?.length;
-  } catch (_error) {
-    return undefined;
+    return { length: JSON.stringify(value)?.length };
+  } catch (error) {
+    return { failureKind: readJsonStringifyFailureKind(error) };
   }
+}
+
+function readJsonStringifyFailureKind(error: unknown): string {
+  if (error instanceof Error) return error.name || "Error";
+  return typeof error;
 }
 
 const promptPayloadTextKeys = ["messages", "contents", "input", "prompt"] as const;

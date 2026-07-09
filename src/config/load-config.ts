@@ -67,6 +67,7 @@ interface ParsedYamlLine {
 const defaultConfigDirName = ".pi";
 const defaultEnvFileName = ".env";
 const observmeYamlFileName = "observme.yaml";
+const yamlIndentPattern = /^ */u;
 
 export async function loadFactoryConfig(options: LoadConfigOptions = {}): Promise<ObservMeConfig> {
   const globalConfig = await readConfigFile(resolveGlobalConfigPath(options), options);
@@ -436,7 +437,7 @@ function stripEnvInlineComment(valueText: string): string {
 }
 
 function isValidEnvKey(key: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/u.test(key);
+  return /^[A-Za-z_]\w*$/u.test(key);
 }
 
 function parseSimpleYaml(text: string): ConfigObject {
@@ -470,7 +471,7 @@ function parseSimpleYaml(text: string): ConfigObject {
 function normalizeYamlLines(text: string): ParsedYamlLine[] {
   return text
     .split("\n")
-    .map(line => ({ indent: line.match(/^ */)?.[0].length ?? 0, text: stripYamlComment(line).trim() }))
+    .map(line => ({ indent: yamlIndentPattern.exec(line)?.[0].length ?? 0, text: stripYamlComment(line).trim() }))
     .filter(line => line.text !== "");
 }
 

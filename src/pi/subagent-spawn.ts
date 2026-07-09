@@ -734,7 +734,7 @@ function readSpanContext(span: Span): SpanContext | undefined {
   try {
     const spanContext = span.spanContext();
     return isSpanContextValid(spanContext) ? spanContext : undefined;
-  } catch (_error) {
+  } catch {
     return undefined;
   }
 }

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Completed SonarQube batch 4 remediation by handling ignored fallbacks, simplifying bounded regex and default-assignment findings, using precise type-check errors, and reducing query parsing complexity.
+- Completed SonarQube batch 3 remediation by handling timestamp/stringification fallbacks, replacing literal replacements and default ternaries, simplifying backtracking-prone formatters, and tightening config/query helpers.
+- Completed SonarQube batch 2 remediation by handling Grafana parser failures, simplifying handler/status/config/Grafana/agent/backfill code paths, replacing backtracking-prone regexes, and removing redundant ternaries and array operations.
+- Remediated the first twenty SonarQube maintainability findings by handling fallback failures explicitly, reducing parser/redaction complexity, simplifying regexes and default assignments, and removing duplicated/stringification-prone handler code.
 - Generated SonarQube-readable LCOV output during coverage runs so scans can import test coverage from `coverage/lcov.info`.
 - Fixed bounded OTEL flush/shutdown timeouts so awaited lifecycle operations resolve under Node's test runner instead of using unref'ed timers that let GitHub Actions cancel pending tests.
 - Kept Docker-backed integration tests out of default coverage generation unless `OBSERVME_INCLUDE_INTEGRATION_COVERAGE=1` is set, making GitHub Actions coverage deterministic and offline by default.

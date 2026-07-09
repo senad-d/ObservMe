@@ -98,14 +98,8 @@ export function normalizeLokiQueryAttributes(query: string): string {
 
     if (quote) {
       normalizedQuery += char;
-      if (escaped) {
-        escaped = false;
-        index += 1;
-        continue;
-      }
-
-      if (char === "\\") escaped = true;
-      if (char === quote) quote = undefined;
+      quote = nextLokiQuote(quote, char, escaped);
+      escaped = nextLokiEscapeState(char, escaped);
       index += 1;
       continue;
     }
@@ -129,6 +123,16 @@ export function normalizeLokiQueryAttributes(query: string): string {
   }
 
   return normalizedQuery;
+}
+
+function nextLokiQuote(quote: string, char: string, escaped: boolean): string | undefined {
+  if (escaped || char !== quote) return quote;
+  return undefined;
+}
+
+function nextLokiEscapeState(char: string, escaped: boolean): boolean {
+  if (escaped) return false;
+  return char === "\\";
 }
 
 function normalizeLokiQuery(query: string): string {
@@ -173,7 +177,7 @@ function normalizeTimeRange(range: TimeRange): NormalizedTimeRange {
 
 function normalizeDate(value: Date, label: string): Date {
   if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
-    throw new Error(`Loki query range ${label} must be a valid Date.`);
+    throw new TypeError(`Loki query range ${label} must be a valid Date.`);
   }
 
   return value;
@@ -299,12 +303,12 @@ function readOptionalString(item: Record<string, unknown>, key: string): string 
   if (typeof value !== "string") return undefined;
 
   const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return trimmed || undefined;
 }
 
 function readNonEmptyStringOrNumber(value: unknown): string | undefined {
   const text = readStringOrNumber(value)?.trim();
-  return text ? text : undefined;
+  return text || undefined;
 }
 
 function readStringOrNumber(value: unknown): string | undefined {

@@ -67,19 +67,25 @@ function validateGrafanaUrlProtocol(url: string): GrafanaQueryReadinessIssue[] {
   try {
     const parsed = new URL(url);
     if (parsed.protocol === "http:" || parsed.protocol === "https:") return [];
-  } catch (_error) {
-    return [createInvalidGrafanaUrlIssue()];
+  } catch (error) {
+    return [createInvalidGrafanaUrlIssue(readUrlParseFailureKind(error))];
   }
 
   return [createInvalidGrafanaUrlIssue()];
 }
 
-function createInvalidGrafanaUrlIssue(): GrafanaQueryReadinessIssue {
+function createInvalidGrafanaUrlIssue(failureKind?: string): GrafanaQueryReadinessIssue {
+  const failureDetail = failureKind ? ` URL parser failed with ${failureKind}.` : "";
   return createGrafanaReadinessIssue(
     "invalid_grafana_url",
     "query.grafana.url",
-    "query.grafana.url must be a valid http:// or https:// URL.",
+    `query.grafana.url must be a valid http:// or https:// URL.${failureDetail}`,
   );
+}
+
+function readUrlParseFailureKind(error: unknown): string {
+  if (error instanceof Error) return error.name || "Error";
+  return typeof error;
 }
 
 function validateGrafanaAuth(config: ObservMeConfig): GrafanaQueryReadinessIssue[] {

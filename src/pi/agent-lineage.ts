@@ -170,10 +170,15 @@ export function sanitizePropagationEnvironment(config: ObservMeConfig, env: Node
   return sanitized;
 }
 
+const highCardinalityLineageKeyPatterns = [
+  /(?:workflow|session|trace|span|entry|spawn|tool_call)[._-]id/iu,
+  /agent[._-](?:id|parent[._-]id|root[._-]id|child[._-]id)/iu,
+  /(?:parent|child|root)[._-]agent[._-]id/iu,
+  /(?:^|[._-])id$/iu,
+] as const;
+
 export function isHighCardinalityLineageKey(key: string): boolean {
-  return /(?:workflow|session|trace|span|entry|spawn|tool_call)[._-]id|agent[._-](?:id|parent[._-]id|root[._-]id|child[._-]id)|(?:parent|child|root)[._-]agent[._-]id|(?:^|[._-])id$/iu.test(
-    key,
-  );
+  return highCardinalityLineageKeyPatterns.some(pattern => pattern.test(key));
 }
 
 function propagationEnvironmentKeys(config: ObservMeConfig): string[] {

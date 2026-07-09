@@ -8,7 +8,12 @@ import {
   getGrafanaHealth,
   getGrafanaTraceLink,
 } from "../src/query/grafana.ts";
-import { formatGrafanaFetchFailure, requiresCustomGrafanaTransport } from "../src/query/grafana-transport.ts";
+import {
+  buildGrafanaApiUrl,
+  buildGrafanaDatasourceApiUrl,
+  formatGrafanaFetchFailure,
+  requiresCustomGrafanaTransport,
+} from "../src/query/grafana-transport.ts";
 
 const sampleTraceId = "4bf92f3577b34da6a3ce929d0e0e4736";
 const telemetrySourceRoots = ["src/events", "src/otel", "src/pi"];
@@ -39,6 +44,14 @@ function createNeverResolvingFetch(signals) {
       init.signal.addEventListener("abort", () => reject(createAbortError()), { once: true });
     });
 }
+
+test("Grafana transport joins base and API paths with linear slash trimming", () => {
+  assert.equal(String(buildGrafanaApiUrl("http://grafana.local/grafana///", "///api/health")), "http://grafana.local/grafana/api/health");
+  assert.equal(
+    String(buildGrafanaDatasourceApiUrl("http://grafana.local///", "tempo/main", "///health")),
+    "http://grafana.local/api/datasources/uid/tempo%2Fmain/health",
+  );
+});
 
 async function collectTypeScriptFiles(root) {
   let entries;

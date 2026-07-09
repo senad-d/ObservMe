@@ -195,9 +195,11 @@ export function renderObsAgents(snapshot: ObsAgentsSnapshot): string {
   ];
 
   if (latestChild) lines.push(`Latest child: ${renderLatestChild(latestChild, snapshot.waitJoinHints)}`);
-  lines.push(`Wait/join hints: ${renderWaitJoinHints(snapshot.waitJoinHints)}`);
-  lines.push(`Aggregate agent metrics (last ${OBS_AGENTS_WINDOW}): ${renderAggregateRows(snapshot.aggregateRows)}`);
-  lines.push(`Lineage drill-down: ${renderLineageDrilldown(snapshot)}`);
+  lines.push(
+    `Wait/join hints: ${renderWaitJoinHints(snapshot.waitJoinHints)}`,
+    `Aggregate agent metrics (last ${OBS_AGENTS_WINDOW}): ${renderAggregateRows(snapshot.aggregateRows)}`,
+    `Lineage drill-down: ${renderLineageDrilldown(snapshot)}`,
+  );
   return lines.join("\n");
 }
 
@@ -390,7 +392,7 @@ function readLatestHintForChild(
   hints: readonly ObsAgentWaitJoinHint[],
   kind: "join" | "wait",
 ): ObsAgentWaitJoinHint | undefined {
-  return hints.filter(hint => hint.kind === kind && hint.childAgentId === childAgentId).at(-1);
+  return hints.findLast(hint => hint.kind === kind && hint.childAgentId === childAgentId);
 }
 
 function renderWaitJoinHints(hints: readonly ObsAgentWaitJoinHint[]): string {
@@ -453,7 +455,7 @@ function normalizeRecentChildrenLimit(value: number | undefined): number {
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return trimmed || undefined;
 }
 
 function isObsAgentsRequest(args: string): boolean {
@@ -471,7 +473,13 @@ function formatDuration(value: number | undefined): string {
 }
 
 function trimTrailingFractionZeros(value: string): string {
-  return value.replace(/\.0+$/u, "").replace(/(\.\d*?)0+$/u, "$1");
+  const decimalIndex = value.indexOf(".");
+  if (decimalIndex === -1) return value;
+
+  let end = value.length;
+  while (end > decimalIndex + 1 && value[end - 1] === "0") end -= 1;
+  if (end === decimalIndex + 1) return value.slice(0, decimalIndex);
+  return value.slice(0, end);
 }
 
 function resolveObsAgentsDiagnostic(error: unknown): ObsCommandRecoveryHint {

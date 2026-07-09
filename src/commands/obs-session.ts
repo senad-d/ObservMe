@@ -219,7 +219,7 @@ function normalizeObsSessionSnapshot(snapshot: ObsSessionSnapshot): ObsSessionSn
 
 function normalizeString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return trimmed || undefined;
 }
 
 function normalizeTraceId(value: string | undefined): string | undefined {

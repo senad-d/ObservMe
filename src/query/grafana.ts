@@ -290,13 +290,19 @@ function buildDefaultGrafanaTraceLink(config: ObservMeConfig, traceId: string): 
   if (!baseUrl) throw new Error("Grafana URL is not configured for trace-link construction.");
 
   const url = new URL(baseUrl);
-  const basePath = url.pathname.replace(/\/+$/u, "");
+  const basePath = removeTrailingSlashes(url.pathname);
   url.pathname = `${basePath}/explore`;
   url.search = "";
   url.hash = "";
   url.searchParams.set("schemaVersion", "1");
   url.searchParams.set("panes", JSON.stringify(createDefaultExplorePanes(config, traceId)));
   return url.toString();
+}
+
+function removeTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
 }
 
 function createDefaultExplorePanes(config: ObservMeConfig, traceId: string): GrafanaExplorePanes {

@@ -78,6 +78,13 @@ interface RegexGroupScanState {
   hasQuantifier: boolean;
 }
 
+interface RegexGroupScanContext {
+  readonly groupStack: RegexGroupScanState[];
+  escaped: boolean;
+  inCharacterClass: boolean;
+  lastClosedGroupHadQuantifier: boolean;
+}
+
 export function redactValue(rawValue: string, options: RedactionOptions): RedactionResult {
   const stages: RedactionStage[] = [];
   try {
@@ -326,51 +333,67 @@ export function hasUnsupportedCustomRedactionConstruct(source: string): boolean 
 }
 
 export function hasNestedQuantifiedGroup(source: string): boolean {
-  const groupStack: RegexGroupScanState[] = [];
-  let escaped = false;
-  let inCharacterClass = false;
-  let lastClosedGroupHadQuantifier = false;
+  const context = createRegexGroupScanContext();
 
   for (let index = 0; index < source.length; index += 1) {
-    const char = source[index];
-    if (escaped) {
-      escaped = false;
-      lastClosedGroupHadQuantifier = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      lastClosedGroupHadQuantifier = false;
-      continue;
-    }
-    if (char === "[" && !inCharacterClass) {
-      inCharacterClass = true;
-      lastClosedGroupHadQuantifier = false;
-      continue;
-    }
-    if (char === "]" && inCharacterClass) {
-      inCharacterClass = false;
-      continue;
-    }
-    if (inCharacterClass) continue;
-    if (char === "(") {
-      groupStack.push({ hasQuantifier: false });
-      lastClosedGroupHadQuantifier = false;
-      continue;
-    }
-    if (char === ")") {
-      lastClosedGroupHadQuantifier = groupStack.pop()?.hasQuantifier === true;
-      continue;
-    }
-    if (isRegexQuantifierStart(source, index)) {
-      if (lastClosedGroupHadQuantifier) return true;
-      markCurrentRegexGroupQuantified(groupStack);
-      lastClosedGroupHadQuantifier = false;
-      continue;
-    }
-    lastClosedGroupHadQuantifier = false;
+    if (scanRegexEscape(source[index], context)) continue;
+    if (scanRegexCharacterClass(source[index], context)) continue;
+    if (context.inCharacterClass) continue;
+    if (scanRegexGroupBoundary(source[index], context)) continue;
+    if (scanRegexQuantifier(source, index, context)) return true;
+    context.lastClosedGroupHadQuantifier = false;
   }
 
+  return false;
+}
+
+function createRegexGroupScanContext(): RegexGroupScanContext {
+  return { groupStack: [], escaped: false, inCharacterClass: false, lastClosedGroupHadQuantifier: false };
+}
+
+function scanRegexEscape(char: string, context: RegexGroupScanContext): boolean {
+  if (context.escaped) {
+    context.escaped = false;
+    context.lastClosedGroupHadQuantifier = false;
+    return true;
+  }
+
+  if (char !== "\\") return false;
+  context.escaped = true;
+  context.lastClosedGroupHadQuantifier = false;
+  return true;
+}
+
+function scanRegexCharacterClass(char: string, context: RegexGroupScanContext): boolean {
+  if (char === "[" && !context.inCharacterClass) {
+    context.inCharacterClass = true;
+    context.lastClosedGroupHadQuantifier = false;
+    return true;
+  }
+
+  if (char !== "]" || !context.inCharacterClass) return false;
+  context.inCharacterClass = false;
+  return true;
+}
+
+function scanRegexGroupBoundary(char: string, context: RegexGroupScanContext): boolean {
+  if (char === "(") {
+    context.groupStack.push({ hasQuantifier: false });
+    context.lastClosedGroupHadQuantifier = false;
+    return true;
+  }
+
+  if (char !== ")") return false;
+  context.lastClosedGroupHadQuantifier = context.groupStack.pop()?.hasQuantifier === true;
+  return true;
+}
+
+function scanRegexQuantifier(source: string, index: number, context: RegexGroupScanContext): boolean {
+  if (!isRegexQuantifierStart(source, index)) return false;
+  if (context.lastClosedGroupHadQuantifier) return true;
+
+  markCurrentRegexGroupQuantified(context.groupStack);
+  context.lastClosedGroupHadQuantifier = false;
   return false;
 }
 
@@ -379,8 +402,8 @@ export function validateCustomRedactionPatternSyntax(source: string): CustomReda
     const expression = new RegExp(source, "u");
     if (expression.test("")) return [createCustomRedactionPatternEmptyMatchIssue()];
     return [];
-  } catch (_error) {
-    return [createInvalidCustomRedactionPatternIssue()];
+  } catch (error) {
+    return [createInvalidCustomRedactionPatternIssue(error)];
   }
 }
 
@@ -399,7 +422,7 @@ export function isBraceQuantifierStart(source: string, index: number): boolean {
   if (source[index] !== "{") return false;
   const closeIndex = source.indexOf("}", index + 1);
   if (closeIndex === -1) return false;
-  return /^[0-9]+(?:,[0-9]*)?$/u.test(source.slice(index + 1, closeIndex));
+  return /^\d+(?:,\d*)?$/u.test(source.slice(index + 1, closeIndex));
 }
 
 export function markCurrentRegexGroupQuantified(groupStack: RegexGroupScanState[]): void {
@@ -452,11 +475,17 @@ export function createCustomRedactionPatternEmptyMatchIssue(): CustomRedactionPa
   };
 }
 
-export function createInvalidCustomRedactionPatternIssue(): CustomRedactionPatternSafetyIssue {
+export function createInvalidCustomRedactionPatternIssue(error?: unknown): CustomRedactionPatternSafetyIssue {
   return {
     code: "invalid_custom_redaction_pattern",
-    message: "Custom redaction pattern is not a valid regular expression.",
+    message: `Custom redaction pattern is not a valid regular expression${formatRegexSyntaxError(error)}.`,
   };
+}
+
+function formatRegexSyntaxError(error: unknown): string {
+  if (error === undefined) return "";
+  if (error instanceof Error) return ` (${error.name})`;
+  return " (unknown parser failure)";
 }
 
 export function formatCustomReplacement(name: string, value: string, tenantSaltSource?: TenantSaltSource): string {
@@ -464,7 +493,16 @@ export function formatCustomReplacement(name: string, value: string, tenantSaltS
 }
 
 export function normalizeCustomType(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9_]+/gu, "_").replace(/^_+|_+$/gu, "") || "custom";
+  const normalized = trimUnderscores(value.toLowerCase().replace(/[^a-z0-9_]+/gu, "_"));
+  return normalized || "custom";
+}
+
+function trimUnderscores(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === "_") start += 1;
+  while (end > start && value[end - 1] === "_") end -= 1;
+  return value.slice(start, end);
 }
 
 export function sha256Prefix(value: string, tenantSaltSource?: TenantSaltSource): string {

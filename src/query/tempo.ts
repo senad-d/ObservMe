@@ -51,6 +51,7 @@ const maxTempoSearchAttributeValueLength = 256;
 const safeTempoAttributeKeyPattern = /^[A-Za-z_][A-Za-z0-9_.-]*$/u;
 const safeTempoAttributeValuePattern = /^[A-Za-z0-9._:-]+$/u;
 const hashedAttributeKeyPattern = /(?:\.hash|_hash)$/u;
+const backslashCharacter = String.fromCharCode(92);
 const generatedCorrelationAttributeKeys = new Set<string>([
   COMMON_SPAN_ATTRIBUTES.PI_SESSION_ID,
   COMMON_SPAN_ATTRIBUTES.PI_WORKFLOW_ID,
@@ -216,7 +217,7 @@ function normalizeTimeRange(range: TimeRange): NormalizedTimeRange {
 
 function normalizeDate(value: Date, label: string): Date {
   if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
-    throw new Error(`Tempo search range ${label} must be a valid Date.`);
+    throw new TypeError(`Tempo search range ${label} must be a valid Date.`);
   }
 
   return value;
@@ -247,7 +248,7 @@ function formatTempoTagQueryPart(attr: NormalizedTempoSearchAttribute): string {
 }
 
 function escapeTempoTagValue(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  return value.replaceAll(backslashCharacter, String.raw`\\`).replaceAll('"', String.raw`\"`);
 }
 
 function formatEpochSeconds(date: Date, direction: "floor" | "ceil"): string {
@@ -301,7 +302,7 @@ function readOptionalString(item: Record<string, unknown>, key: string): string 
   if (typeof value !== "string") return undefined;
 
   const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return trimmed || undefined;
 }
 
 function readOptionalStringOrNumber(item: Record<string, unknown>, key: string): string | undefined {

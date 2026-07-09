@@ -37,6 +37,7 @@ import {
   recordOptionalToolArguments,
   recordOptionalToolResult,
   safeJsonLength,
+  serializeToolPayload,
   toolMetricLabels,
 } from "../src/pi/handler-internals.ts";
 import type { ObservMeTelemetrySession } from "../src/pi/handlers.ts";
@@ -208,6 +209,10 @@ test("LLM parser and attribute helpers isolate message, prompt, usage, and cost 
   );
   assert.equal(extractPayloadPromptText({ input: "plain completion prompt" }), "plain completion prompt");
   assert.equal(safeJsonLength(undefined), undefined);
+
+  const circularPayload: Record<string, unknown> = { prompt: "loop" };
+  circularPayload.self = circularPayload;
+  assert.equal(safeJsonLength(circularPayload), undefined);
 });
 
 test("tool attribute builders normalize identity, result payloads, failures, and labels", () => {
@@ -247,6 +252,15 @@ test("tool attribute builders normalize identity, result payloads, failures, and
     [TOOL_ATTRIBUTES.PI_TOOL_ERROR]: false,
   });
   assert.deepEqual(toolMetricLabels(callAttributes), { tool_name: "read.file", tool_category: "filesystem" });
+});
+
+test("tool payload serialization avoids default object stringification fallbacks", () => {
+  const circular: Record<string, unknown> = { ok: true };
+  circular.self = circular;
+
+  assert.equal(serializeToolPayload({ ok: true }), JSON.stringify({ ok: true }));
+  assert.match(serializeToolPayload(circular) ?? "", /^\[Unserializable Object: TypeError\]$/u);
+  assert.doesNotMatch(serializeToolPayload(circular) ?? "", /\[object Object\]/u);
 });
 
 test("bash payload normalization handles nested messages, streams, status, and partial events", () => {

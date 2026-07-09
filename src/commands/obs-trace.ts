@@ -83,6 +83,11 @@ export interface ParsedObsTraceRequest {
   readonly error?: string;
 }
 
+interface ObsTraceParseState {
+  request?: ObsTraceRequest;
+  index: number;
+}
+
 const OBS_COMMAND_NAME = "obs";
 const OBS_TRACE_SUBCOMMAND = "trace";
 const OBS_TRACE_USAGE = "Usage: /obs trace [--last-turn|--session <session-id>]";
@@ -161,8 +166,7 @@ export function renderObsTraceWithTitle(snapshot: ObsTraceSnapshot, title: strin
   const sessionId = normalizeOptionalString(snapshot.sessionId);
 
   if (sessionId) lines.push(`Session: ${sessionId}`);
-  lines.push(`Trace: ${snapshot.traceId}`);
-  lines.push(`Open trace: ${snapshot.traceLink}`);
+  lines.push(`Trace: ${snapshot.traceId}`, `Open trace: ${snapshot.traceLink}`);
   const visibilityNote = formatObsTraceVisibilityNote(snapshot);
   if (visibilityNote) lines.push(visibilityNote);
   return lines.join("\n");
@@ -315,7 +319,7 @@ function normalizeObsTraceSessionId(value: string | undefined): string {
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return trimmed || undefined;
 }
 
 function normalizeTurnCount(value: number | undefined): number {
@@ -326,49 +330,49 @@ function normalizeTurnCount(value: number | undefined): number {
 function parseObsTraceOptions(tokens: readonly string[]): ParsedObsTraceRequest {
   if (tokens.length === 0) return { request: defaultObsTraceRequest };
 
-  let request: ObsTraceRequest | undefined;
-  let index = 0;
+  const state: ObsTraceParseState = { index: 0 };
 
-  while (index < tokens.length) {
-    const token = tokens[index];
-    const normalizedToken = token.toLowerCase();
-
-    if (isCurrentSessionToken(normalizedToken)) {
-      if (request) return { error: `Repeated or conflicting option: ${token}.` };
-      request = defaultObsTraceRequest;
-      index += 1;
-      continue;
-    }
-
-    if (normalizedToken === "--last-turn") {
-      if (request) return { error: `Repeated or conflicting option: ${token}.` };
-      request = { scope: "last-turn" };
-      index += 1;
-      continue;
-    }
-
-    if (normalizedToken === "--session") {
-      if (request) return { error: `Repeated or conflicting option: ${token}.` };
-      const sessionId = tokens[index + 1];
-      if (!sessionId || sessionId.startsWith("--")) return { error: missingObsOptionValueMessage("--session") };
-      request = { scope: "session", sessionId };
-      index += 2;
-      continue;
-    }
-
-    if (normalizedToken.startsWith("--session=")) {
-      if (request) return { error: "Repeated or conflicting option: --session." };
-      const sessionId = token.slice("--session=".length);
-      if (!sessionId) return { error: missingObsOptionValueMessage("--session") };
-      request = { scope: "session", sessionId };
-      index += 1;
-      continue;
-    }
-
-    return { error: unknownObsOptionMessage(token) };
+  while (state.index < tokens.length) {
+    const result = parseObsTraceOption(tokens, state);
+    if (result.error) return result;
   }
 
-  return { request: request ?? defaultObsTraceRequest };
+  return { request: state.request ?? defaultObsTraceRequest };
+}
+
+function parseObsTraceOption(tokens: readonly string[], state: ObsTraceParseState): ParsedObsTraceRequest {
+  const token = tokens[state.index];
+  const normalizedToken = token.toLowerCase();
+
+  if (isCurrentSessionToken(normalizedToken)) return setObsTraceRequest(state, token, defaultObsTraceRequest, state.index + 1);
+  if (normalizedToken === "--last-turn") return setObsTraceRequest(state, token, { scope: "last-turn" }, state.index + 1);
+  if (normalizedToken === "--session") return parseSeparateSessionTraceOption(tokens, state, token);
+  if (normalizedToken.startsWith("--session=")) return parseInlineSessionTraceOption(state, token);
+  return { error: unknownObsOptionMessage(token) };
+}
+
+function parseSeparateSessionTraceOption(tokens: readonly string[], state: ObsTraceParseState, token: string): ParsedObsTraceRequest {
+  const sessionId = tokens[state.index + 1];
+  if (!sessionId || sessionId.startsWith("--")) return { error: missingObsOptionValueMessage("--session") };
+  return setObsTraceRequest(state, token, { scope: "session", sessionId }, state.index + 2);
+}
+
+function parseInlineSessionTraceOption(state: ObsTraceParseState, token: string): ParsedObsTraceRequest {
+  const sessionId = token.slice("--session=".length);
+  if (!sessionId) return { error: missingObsOptionValueMessage("--session") };
+  return setObsTraceRequest(state, "--session", { scope: "session", sessionId }, state.index + 1);
+}
+
+function setObsTraceRequest(
+  state: ObsTraceParseState,
+  token: string,
+  request: ObsTraceRequest,
+  nextIndex: number,
+): ParsedObsTraceRequest {
+  if (state.request) return { error: `Repeated or conflicting option: ${token}.` };
+  state.request = request;
+  state.index = nextIndex;
+  return {};
 }
 
 function isCurrentSessionToken(token: string): boolean {

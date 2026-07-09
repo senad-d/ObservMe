@@ -31,7 +31,7 @@ export interface UnsafeCaptureWarningContext {
 }
 
 const forbiddenMetricLabelPattern =
-  /(?:^|[._-])(?:workflow|session|agent|parent|child|trace|span|entry|spawn|tool_call)(?:[._-]|$)|(?:^|[._-])id$/i;
+  /(?:^|[._-])(?:(?:workflow|session|agent|parent|child|trace|span|entry|spawn|tool_call)(?:[._-]|$)|id$)/i;
 const lineageValuePattern = /^[A-Za-z0-9._:-]+$/;
 const traceIdPattern = /^[a-f0-9]{32}$/i;
 const spanIdPattern = /^[a-f0-9]{16}$/i;
@@ -92,14 +92,24 @@ function validateConfigStructure(config: unknown): ValidationIssue[] {
 
   try {
     return buildStructuralValidationIssues(observMeConfigValidator.Errors(config));
-  } catch (_error) {
-    return [
-      {
-        code: "invalid_config_shape",
-        message: "Configuration shape is invalid and could not be inspected safely.",
-      },
-    ];
+  } catch (error) {
+    return buildUnreadableStructuralValidationIssues(error);
   }
+}
+
+function buildUnreadableStructuralValidationIssues(error: unknown): ValidationIssue[] {
+  return [
+    {
+      code: "invalid_config_shape",
+      message: `Configuration shape is invalid and could not be inspected safely (${formatStructuralInspectionFailure(error)}).`,
+    },
+  ];
+}
+
+function formatStructuralInspectionFailure(error: unknown): string {
+  if (error instanceof Error) return "schema validator threw an Error";
+  if (typeof error === "string") return "schema validator threw a string";
+  return "schema validator threw a non-error value";
 }
 
 function buildStructuralValidationIssues(errors: Array<{ keyword: string; instancePath: string }>): ValidationIssue[] {
@@ -211,7 +221,7 @@ function validateSignalEndpoint(signal: string, endpoint: string | undefined, re
 function endpointPathMatches(endpoint: string, requiredPath: string): boolean {
   try {
     return new URL(endpoint).pathname.endsWith(requiredPath);
-  } catch (_error) {
+  } catch {
     return false;
   }
 }

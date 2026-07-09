@@ -44,6 +44,9 @@ export interface ObsStatusOperationResult {
 
 export type ObsStatusConfigLoader = (options: LoadSessionConfigOptions) => Promise<ObservMeConfig>;
 export type ObsStatusProvider = (ctx: ObsStatusCommandContext) => Promise<ObsStatusSnapshot> | ObsStatusSnapshot;
+type ObsStatusReadText = NonNullable<LoadSessionConfigOptions["readText"]>;
+type ObsStatusRuntimeOptions = NonNullable<LoadSessionConfigOptions["runtimeOptions"]>;
+type ObsStatusLogger = NonNullable<LoadSessionConfigOptions["logger"]>;
 
 export interface ObsStatusSnapshotOptions {
   readonly loadConfig?: ObsStatusConfigLoader;
@@ -51,9 +54,9 @@ export interface ObsStatusSnapshotOptions {
   readonly configDirName?: string;
   readonly globalConfigPath?: string;
   readonly projectConfigPath?: string;
-  readonly readText?: LoadSessionConfigOptions["readText"];
-  readonly runtimeOptions?: LoadSessionConfigOptions["runtimeOptions"];
-  readonly logger?: LoadSessionConfigOptions["logger"];
+  readonly readText?: ObsStatusReadText;
+  readonly runtimeOptions?: ObsStatusRuntimeOptions;
+  readonly logger?: ObsStatusLogger;
 }
 
 export interface RegisterObsStatusCommandOptions extends ObsStatusSnapshotOptions {
@@ -294,8 +297,8 @@ function formatSafeConfiguredUrl(value: string): string {
     parsed.search = "";
     parsed.hash = "";
     return parsed.toString();
-  } catch (_error) {
-    return "invalid configured URL";
+  } catch (error) {
+    return formatInvalidConfiguredUrl(error);
   }
 }
 
@@ -331,9 +334,14 @@ function formatSafeConfiguredEndpoint(value: string): string {
     const formatted = parsed.toString();
     if (parsed.pathname === "/" && !hasExplicitRootPath) return formatted.replace(/\/$/u, "");
     return formatted;
-  } catch (_error) {
-    return "invalid configured URL";
+  } catch (error) {
+    return formatInvalidConfiguredUrl(error);
   }
+}
+
+function formatInvalidConfiguredUrl(error: unknown): string {
+  const failureKind = error instanceof Error ? error.name : "unknown parser failure";
+  return `invalid configured URL (${failureKind})`;
 }
 
 function formatError(error: unknown): string {

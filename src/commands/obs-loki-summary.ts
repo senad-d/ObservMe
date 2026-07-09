@@ -29,6 +29,7 @@ const millisecondsPerHour = 60 * 60 * 1000;
 const nanosecondsPerMillisecond = 1_000_000n;
 const maximumDisplayValueLength = 96;
 const safeEventBodyPattern = /^[A-Za-z0-9_.:-]{1,96}$/u;
+const integerNanosecondsPattern = /^-?\d+$/u;
 const unknownTimestamp = "unknown-time";
 const unknownEventName = "structured-log";
 const eventNameAliases = ["event_name", "event.name"] as const;
@@ -93,13 +94,11 @@ function formatLogTimestamp(timestampUnixNano: string): string {
   const timestamp = timestampUnixNano.trim();
   if (!timestamp) return unknownTimestamp;
 
-  try {
-    const milliseconds = BigInt(timestamp) / nanosecondsPerMillisecond;
-    if (milliseconds < 0n || milliseconds > BigInt(Number.MAX_SAFE_INTEGER)) return timestamp;
-    return new Date(Number(milliseconds)).toISOString();
-  } catch (_error) {
-    return timestamp;
-  }
+  if (!integerNanosecondsPattern.test(timestamp)) return timestamp;
+
+  const milliseconds = BigInt(timestamp) / nanosecondsPerMillisecond;
+  if (milliseconds < 0n || milliseconds > BigInt(Number.MAX_SAFE_INTEGER)) return timestamp;
+  return new Date(Number(milliseconds)).toISOString();
 }
 
 function resolveLogEventName(log: LogResult): string {
@@ -174,5 +173,8 @@ function isString(value: string | undefined): value is string {
 }
 
 function trimTrailingFractionZeros(value: string): string {
-  return value.replace(/\.0+$/u, "").replace(/(\.\d*?)0+$/u, "$1");
+  if (!value.includes(".")) return value;
+
+  const withoutTrailingZeros = value.replace(/0+$/u, "");
+  return withoutTrailingZeros.endsWith(".") ? withoutTrailingZeros.slice(0, -1) : withoutTrailingZeros;
 }

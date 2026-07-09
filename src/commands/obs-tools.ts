@@ -236,7 +236,7 @@ function normalizeMetricLabel(value: string | undefined): string {
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return trimmed || undefined;
 }
 
 function renderObsToolCallRow(row: ObsToolCallRow): string {
@@ -264,5 +264,8 @@ function formatRatePerSecond(value: number): string {
 }
 
 function trimTrailingFractionZeros(value: string): string {
-  return value.replace(/\.0+$/u, "").replace(/(\.\d*?)0+$/u, "$1");
+  if (!value.includes(".")) return value;
+
+  const withoutTrailingZeros = value.replace(/0+$/u, "");
+  return withoutTrailingZeros.endsWith(".") ? withoutTrailingZeros.slice(0, -1) : withoutTrailingZeros;
 }

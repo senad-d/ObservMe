@@ -482,7 +482,7 @@ class SerializedLifecycleQueue {
     // continue. ObservMe queues both lifecycle handlers together so async startup, shutdown,
     // reload, and replacement state transitions cannot clear or replace shared runtime state out of order.
     return async (event, ctx) => {
-      const current = this.#previous.then(() => Promise.resolve(fn(event, ctx)));
+      const current = this.#previous.then(() => fn(event, ctx));
       this.#previous = current.catch(() => undefined);
       await current;
     };
@@ -796,8 +796,8 @@ function emitStartupReplayTelemetry(session: ObservMeTelemetrySession, attribute
 
 function buildRecoveryLineageEnv(
   config: ObservMeConfig,
-  env: NodeJS.ProcessEnv = process.env,
   correlation: MinimalSessionCorrelation | undefined,
+  env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   if (!correlation) return env;
 
@@ -990,7 +990,7 @@ function createSessionStartHandler(
     const recovery = await resolveStartupRecovery(event, ctx, config, options);
     const lineage = createAgentLineageContext({
       config,
-      env: buildRecoveryLineageEnv(config, options.env, recovery.customCorrelation ?? recovery.header?.correlation),
+      env: buildRecoveryLineageEnv(config, recovery.customCorrelation ?? recovery.header?.correlation, options.env),
       trustedParentContext: options.trustedParentContext === true || Boolean(recovery.customCorrelation ?? recovery.header?.correlation),
     });
     const session = await startTelemetryFn({ config, lineage });

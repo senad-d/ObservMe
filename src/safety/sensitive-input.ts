@@ -15,20 +15,37 @@ export const UNSAFE_OBSERVME_SESSION_ID_DETAILS =
 const maximumDiagnosticLength = 360;
 const rawContentMarkerPattern = /(?:^|[\s"'`|=(])(?:prompt|system prompt|user prompt|assistant response|thinking|raw content)\s*:/iu;
 const shellCommandPattern = /(?:^|[\s"'`|=])(?:sudo|rm|mv|cp|curl|wget|npm|pnpm|yarn|node|python3?|bash|sh|git)\s+\S+/iu;
-const filesystemPathPattern = /(?:^|[\s"'`=])(?:~(?:\/|\b)|\.{1,2}\/|\/(?:Users|home|tmp|var|etc|private|workspace|opt|Volumes)\b|[A-Za-z]:\\|\\\\)\S*/u;
+const homeFilesystemPathPattern = /(?:^|[\s"'`=])~(?:\/|\b)\S*/u;
+const relativeFilesystemPathPattern = /(?:^|[\s"'`=])\.{1,2}\/\S*/u;
+const unixFilesystemPathPattern = /(?:^|[\s"'`=])\/(?:Users|home|tmp|var|etc|private|workspace|opt|Volumes)\b\S*/u;
+const windowsDriveFilesystemPathPattern = /(?:^|[\s"'`=])[A-Za-z]:\\\S*/u;
+const windowsUncFilesystemPathPattern = /(?:^|[\s"'`=])\\\\\S*/u;
 const environmentAssignmentPattern = /\b[A-Z][A-Z0-9_]{2,}=[^\s"'`;,)]*/u;
 const diagnosticEnvironmentAssignmentPattern = /\b[A-Z][A-Z0-9_]{2,}=[^\s"'`;,)]*/gu;
 const unresolvedEnvironmentPlaceholderPattern = /\$\{[A-Z0-9_]+\}/u;
 const diagnosticUnresolvedEnvironmentPlaceholderPattern = /\$\{[A-Z0-9_]+\}/gu;
-const credentialTokenPattern = /\b(?:Bearer\s+[A-Za-z0-9._~+/=-]+|(?:access[_-]?token|api[_-]?key|token|password|secret|authorization)\s*[:=]\s*["']?[^\s"'`;,)]*)/iu;
+const bearerCredentialPattern = /\bBearer\s+[^\s"'`;,)]+/iu;
+const credentialAssignmentPatterns = [
+  /\baccess[_-]?token\s*[:=]\s*["']?[^\s"'`;,)]*/iu,
+  /\bapi[_-]?key\s*[:=]\s*["']?[^\s"'`;,)]*/iu,
+  /\btoken\s*[:=]\s*["']?[^\s"'`;,)]*/iu,
+  /\bpassword\s*[:=]\s*["']?[^\s"'`;,)]*/iu,
+  /\bsecret\s*[:=]\s*["']?[^\s"'`;,)]*/iu,
+  /\bauthorization\s*[:=]\s*["']?[^\s"'`;,)]*/iu,
+] as const;
 const safeObservMeSessionIdPattern = /^[A-Za-z0-9._:-]{1,256}$/u;
 const sensitiveQueryInputPatterns = [
   rawContentMarkerPattern,
   shellCommandPattern,
-  filesystemPathPattern,
+  homeFilesystemPathPattern,
+  relativeFilesystemPathPattern,
+  unixFilesystemPathPattern,
+  windowsDriveFilesystemPathPattern,
+  windowsUncFilesystemPathPattern,
   environmentAssignmentPattern,
   unresolvedEnvironmentPlaceholderPattern,
-  credentialTokenPattern,
+  bearerCredentialPattern,
+  ...credentialAssignmentPatterns,
 ] as const;
 const diagnosticReplacements = [
   { pattern: /Bearer\s+[^\s;,)]+/giu, replacement: "Bearer [redacted]" },
@@ -37,7 +54,7 @@ const diagnosticReplacements = [
   { pattern: diagnosticEnvironmentAssignmentPattern, replacement: "[redacted-env]" },
   { pattern: diagnosticUnresolvedEnvironmentPlaceholderPattern, replacement: "[redacted-env-placeholder]" },
   {
-    pattern: /([a-z][a-z0-9+.-]*:\/\/)\S+?:\S+?@/giu,
+    pattern: /([a-z][a-z0-9+.-]*:\/\/)[^\s:/?#@]+:[^\s/?#@]+@/giu,
     replacement: "$1[redacted]@",
   },
   {
@@ -102,7 +119,7 @@ function applyDiagnosticReplacement(message: string, replacement: DiagnosticRepl
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return trimmed || undefined;
 }
 
 function normalizeDiagnosticWhitespace(message: string): string {
