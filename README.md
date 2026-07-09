@@ -6,6 +6,7 @@
   <a href="https://pi.dev"><img alt="pi package" src="https://img.shields.io/badge/pi-package-6f42c1?style=flat-square" /></a>
   <a href="https://www.npmjs.com/package/@senad-d/observme"><img alt="npm" src="https://img.shields.io/npm/v/%40senad-d%2Fobservme?style=flat-square" /></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=senad-d_ObservMe"><img alt="Quality Gate Status" src="https://sonarcloud.io/api/project_badges/measure?project=senad-d_ObservMe&metric=alert_status" /></a>
 </p>
 
 <p align="center">
@@ -15,7 +16,7 @@
 
 ---
 
-ObservMe is a Pi extension for **observability of Pi agent sessions**. It reads Pi extension lifecycle and session events, maps them to OpenTelemetry semantics (`pi.*`/`observme.*` namespaces plus official `gen_ai.*` attributes where they fit), exports them via OTLP to an OpenTelemetry Collector, and is **privacy-preserving by default**: prompts, responses, thinking content, tool arguments/results, bash commands/output, and file paths are not captured unless explicitly enabled and redacted.
+ObservMe maps Pi lifecycle and session events to OpenTelemetry traces, metrics, and logs, then exports them via OTLP to an OpenTelemetry Collector. It uses `pi.*`, `observme.*`, and applicable official `gen_ai.*` attributes. ObservMe is **privacy-preserving by default**: prompts, responses, thinking content, tool arguments/results, bash commands/output, and file paths are not captured unless explicitly enabled and redacted.
 
 <table align="center">
   <tr>
@@ -69,21 +70,61 @@ The repository version is currently `0.1.0`. Run the validation commands below b
 
 ## Quick Start
 
+Use this checklist to confirm telemetry end to end. You need a supported Pi installation; see the [compatibility matrix](docs/compatibility-matrix.md). If you already have an OTLP Collector and Grafana stack, skip the first step.
+
+### 1) Start the included local stack
+
+The local stack is available in a repository checkout, not in the npm package:
+
 ```bash
-pi install npm:@senad-d/observme
+git clone https://github.com/senad-d/ObservMe.git
+cd ObservMe/observability-stack
+cp .env.example .env
+mkdir -p secrets
+if [ ! -s secrets/grafana_admin_password ]; then
+  openssl rand -hex 24 > secrets/grafana_admin_password
+fi
+chmod 600 secrets/grafana_admin_password
+docker compose up -d
+```
+
+### 2) Install the extension
+
+```bash
 cd /path/to/your/project
+pi install npm:@senad-d/observme
+```
+
+For local-stack credentials or other environment variables, copy `.env.example` from an ObservMe checkout to the project as `.env`. Keep secrets out of `.pi/observme.yaml`.
+
+### 3) Start Pi and check connectivity
+
+```bash
 pi
 ```
 
-Inside Pi:
+Inside Pi, run:
 
 ```text
 /obs status
 /obs health
 /obs session
+/obs trace
 ```
 
-Local source checkout:
+### 4) Generate and inspect telemetry
+
+In the running Pi session, start a normal task, such as:
+
+```text
+Summarize this repository in one sentence
+```
+
+Open your configured Grafana URL, then open **ObservMe Overview** and confirm that the task produced traces, logs, and metrics. ObservMe never blocks Pi execution when the backend is unavailable.
+
+On the first trusted `session_start` for a project, ObservMe creates `.pi/observme.yaml` when the file is missing. The starter keeps raw prompt, response, thinking, tool, bash, and path capture disabled by default; opt in only to the specific redacted capture fields you need.
+
+### Run from a source checkout
 
 ```bash
 git clone https://github.com/senad-d/ObservMe.git
@@ -93,10 +134,6 @@ npm run validate
 pi --no-extensions -e .
 ```
 
-ObservMe observes the current Pi session and exports telemetry to the configured OTLP endpoint. It never blocks Pi execution when the backend is unavailable.
-
-On the first trusted Pi `session_start` for a project, ObservMe creates `.pi/observme.yaml` if the file is missing. This includes startup, reload, new-session, resume, and fork lifecycles; the bootstrap is idempotent, never overwrites an existing file, skips untrusted or missing project contexts, and notifies only when it creates the starter. Use that project-local file for local-stack setup, then edit the OTLP, resource, capture/privacy, and Grafana query sections for your environment. The starter keeps raw prompt, response, thinking, tool, bash, and path capture disabled by default; opt in only to the specific redacted capture fields you need.
-
 ## Installation
 
 | Scope | Command | Notes |
@@ -104,7 +141,7 @@ On the first trusted Pi `session_start` for a project, ObservMe creates `.pi/obs
 | Global | `pi install npm:@senad-d/observme` | Loads in every trusted Pi project. |
 | Project-local | `pi install npm:@senad-d/observme -l` | Writes to `.pi/settings.json` in the current project. |
 | One run | `pi -e npm:@senad-d/observme` | Try without changing settings. |
-| Git | `pi install git:senad-d/ObservMe` | Pin a tag or commit. |
+| Git | `pi install git:senad-d/ObservMe` | Install from Git; use a tag or commit when you need a fixed version. |
 | Local checkout | `pi --no-extensions -e .` | Develop or test this repository. |
 
 ## Commands
@@ -146,7 +183,7 @@ Grafana
 
 The extension factory in `src/extension.ts` only registers handlers and commands. OTEL SDK startup happens from `session_start`, and bounded flush/shutdown happens from `session_shutdown`, so importing or registering the extension does not open exporters, timers, or sockets.
 
-See the packaged `ObservMe-Production-Docs/02-reference-architecture.md` for the full architecture. Implementation planning specs are repository-only and live at <https://github.com/senad-d/ObservMe/tree/main/specs>. A reference Docker Compose deployment of the Grafana/Tempo/Loki/Prometheus/Collector stack is also repository-only at <https://github.com/senad-d/ObservMe/tree/main/observability-stack> because it contains generated local credentials and state placeholders.
+See `ObservMe-Production-Docs/02-reference-architecture.md` for the full architecture. Implementation planning specs are repository-only and live at <https://github.com/senad-d/ObservMe/tree/main/specs>. A reference Docker Compose deployment of the Grafana/Tempo/Loki/Prometheus/Collector stack is also repository-only at <https://github.com/senad-d/ObservMe/tree/main/observability-stack> because it contains generated local credentials and state placeholders.
 
 ## Configuration and Privacy
 
@@ -184,7 +221,7 @@ When optional content capture is enabled, live telemetry and `/obs backfill` use
 
 Metadata such as token counts, duration, status, model/provider, tool name, and agent role/depth is captured by default. High-cardinality identifiers (session IDs, workflow IDs, agent IDs, trace/span IDs, entry IDs) are allowed on spans/logs for drill-down but are blocked from Prometheus metric labels.
 
-Grafana-backed query commands use the Grafana HTTP API, so browser login cookies are irrelevant. Configure either a Grafana service-account token (`OBSERVME_GRAFANA_TOKEN`) or local Basic auth (`OBSERVME_GRAFANA_USERNAME`/`OBSERVME_GRAFANA_PASSWORD`); token auth takes precedence and secrets are never rendered in command errors. You can supply these values as system environment variables before starting Pi, or copy `.env.example` to `.env` in a trusted project; system environment variables override `.env` values.
+Grafana-backed query commands use the Grafana HTTP API, so browser login cookies are irrelevant. Configure either a Grafana service-account token (`OBSERVME_GRAFANA_TOKEN`) or local Basic auth (`OBSERVME_GRAFANA_USERNAME`/`OBSERVME_GRAFANA_PASSWORD`); token auth takes precedence and secrets are never rendered in command errors. You can supply these values as system environment variables before starting Pi, or copy the `.env.example` shipped with ObservMe to `.env` in a trusted project; system environment variables override `.env` values.
 
 ### Supported local-stack query profile
 
@@ -257,29 +294,13 @@ Open **ObservMe Overview** first for health/SLO chips, workload, cost, latency, 
 
 The full dashboard map, standard variables, drill-down workflow, threshold colors, and zero-state semantics are documented in `ObservMe-Production-Docs/09-dashboards-alerts-slos.md`.
 
-The Docker Compose local stack is intentionally repository-only at <https://github.com/senad-d/ObservMe/tree/main/observability-stack> so packaged installs do not contain generated credentials, certificates, or local Pi state.
-
 ## Documentation Set
 
-The full production design is included in the npm package under `ObservMe-Production-Docs/`:
-
-| File | Purpose |
-|---|---|
-| `01-requirements-and-scope.md` | Product goals, non-goals, personas, requirements |
-| `02-reference-architecture.md` | Full system architecture |
-| `03-pi-event-and-session-model.md` | Pi session/event sources and interpretation |
-| `04-telemetry-semantic-conventions.md` | Attribute, metric, log, and span naming |
-| `05-otel-pipeline-and-collector.md` | OTLP exporter strategy and Collector configs |
-| `06-security-privacy-redaction.md` | Redaction, PII handling, tenant isolation |
-| `07-extension-implementation-blueprint.md` | TypeScript implementation architecture |
-| `08-query-grafana-integration.md` | `/obs` commands and Grafana/Tempo/Loki/Prometheus integration |
-| `09-dashboards-alerts-slos.md` | Dashboards, alerts, SLOs |
-| `10-testing-release-operations.md` | Test strategy and release process |
-| `11-deployment-runbooks.md` | Deployment runbooks |
-| `12-configuration-reference.md` | Full configuration schema |
-| `13-source-notes.md` | External documentation cross-check notes |
-
-Implementation specs are repository-only at <https://github.com/senad-d/ObservMe/tree/main/specs>: `project-definition-brief.md`, `spec-architecture.md`, `spec-guidelines.md`, `spec-tasks.md`. User-facing configuration guidance is in [`docs/configuration.md`](docs/configuration.md). Review-task validation and current `*-2.md` review-spec ordering are documented in [`docs/review-validation.md`](docs/review-validation.md).
+- [`docs/configuration.md`](docs/configuration.md): quick configuration guide.
+- [`docs/compatibility-matrix.md`](docs/compatibility-matrix.md): supported Pi, Node.js, OpenTelemetry, and local-stack versions.
+- [`docs/validation-flow.md`](docs/validation-flow.md): secret-safe Grafana and `/obs` troubleshooting flow.
+- `ObservMe-Production-Docs/`: architecture, configuration, privacy, dashboards, and operational reference docs.
+- [`SECURITY.md`](SECURITY.md): security reporting and package safety guidance.
 
 ## Development
 

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Cleaned up the README quick start, installation guidance, configuration references, and documentation index.
 - Fixed the CI checkout action reference to use the major-version tag expected by the validation contract.
 - Hid time and unique-label columns in the LLM Conversations log panels so message bodies are the default focus.
 - Updated the LLM Conversations dashboard log panels to render only captured message bodies by default while preserving expanded log details for the full structured payload.
@@ -76,6 +77,7 @@
 - Added handler self-observability instrumentation so registered Pi handlers emit `observme_events_observed_total` and `observme_handler_duration_ms` with bounded labels.
 - Documented the Export Health telemetry contract, including healthy zero-state behavior, dashboard-driving signals, low-cardinality labels, and induced-failure expectations.
 - Added a task spec for fixing the ObservMe Export Health dashboard by emitting missing self-observability metrics/logs and improving healthy zero-state panels.
+- Updated the README Quick Start flow with an end-to-end local observability checklist (stack start, extension install, env setup, connectivity checks, task run, dashboard validation).
 
 ## 0.1.0 - 2026-07-07
 
