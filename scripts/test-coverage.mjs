@@ -6,20 +6,34 @@ import { spawnSync } from "node:child_process";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-async function collectTestFiles(directory) {
+const includeIntegrationCoverage = process.env.OBSERVME_INCLUDE_INTEGRATION_COVERAGE === "1";
+
+async function collectTestFiles(directory, options = { includeIntegration: false }) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
 
   for (const entry of entries) {
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...(await collectTestFiles(path)));
-    if (entry.isFile() && (entry.name.endsWith(".test.mjs") || entry.name.endsWith(".test.ts"))) files.push(path);
+    if (entry.isDirectory() && shouldCollectTestDirectory(path, options)) files.push(...(await collectTestFiles(path, options)));
+    if (entry.isFile() && isTestFile(path)) files.push(path);
   }
 
   return files;
 }
 
-const testFiles = (await collectTestFiles("test")).sort((a, b) => a.localeCompare(b));
+function shouldCollectTestDirectory(path, options) {
+  return options.includeIntegration || !isIntegrationTestPath(path);
+}
+
+function isIntegrationTestPath(path) {
+  return path.split(/[\\/]/u).includes("integration");
+}
+
+function isTestFile(path) {
+  return path.endsWith(".test.mjs") || path.endsWith(".test.ts");
+}
+
+const testFiles = (await collectTestFiles("test", { includeIntegration: includeIntegrationCoverage })).sort((a, b) => a.localeCompare(b));
 assert.ok(testFiles.length > 0, "coverage requires at least one test file");
 
 const args = ["--experimental-test-coverage", "--test", ...testFiles];

@@ -50,13 +50,16 @@ export async function runBoundedOtelOperation(
   timeoutMs: number,
 ): Promise<BoundedOtelOperationResult> {
   const normalizedTimeoutMs = normalizeTimeoutMs(timeoutMs);
-  const timeoutResult = timeoutOperation(operation, normalizedTimeoutMs);
+  const timeoutController = new AbortController();
+  const timeoutResult = timeoutOperation(operation, normalizedTimeoutMs, timeoutController.signal);
 
   try {
     const completed = completeOperation(operation, action);
     return await Promise.race([completed, timeoutResult]);
   } catch (error) {
     return { operation, completed: false, timedOut: false, error };
+  } finally {
+    timeoutController.abort();
   }
 }
 
@@ -76,8 +79,9 @@ async function completeOperation(
 async function timeoutOperation(
   operation: "flush" | "shutdown",
   timeoutMs: number,
+  signal: AbortSignal,
 ): Promise<BoundedOtelOperationResult> {
-  return delay(timeoutMs, { operation, completed: false, timedOut: true } as const, { ref: false });
+  return delay(timeoutMs, { operation, completed: false, timedOut: true } as const, { signal });
 }
 
 function completedOperation(operation: "flush" | "shutdown"): BoundedOtelOperationResult {

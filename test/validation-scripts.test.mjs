@@ -18,3 +18,8 @@ test("coverage generation writes only to ignored coverage artifacts", () => {
   assert.match(coverageScript, /coverage\/node-test-coverage\.txt/u);
   assert.match(gitignore, /^coverage\/$/mu);
 });
+
+test("coverage generation keeps Docker integration tests opt-in", () => {
+  assert.match(coverageScript, /OBSERVME_INCLUDE_INTEGRATION_COVERAGE/u);
+  assert.match(coverageScript, /isIntegrationTestPath/u);
+});
