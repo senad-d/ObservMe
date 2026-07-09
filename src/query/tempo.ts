@@ -1,6 +1,7 @@
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { GrafanaFetch, GrafanaTransportClient } from "./grafana-transport.ts";
 import { createGrafanaTransport } from "./grafana-transport.ts";
+import { assertNoSensitiveQueryInput } from "../safety/sensitive-input.ts";
 import { assertGrafanaQueryReady } from "./grafana-readiness.ts";
 import {
   AGENT_RUN_ATTRIBUTES,
@@ -47,17 +48,9 @@ interface NormalizedTimeRange {
 const minimumMaxTraces = 1;
 const maxTempoSearchAttributes = 8;
 const maxTempoSearchAttributeValueLength = 256;
-const unresolvedEnvironmentPlaceholderPattern = /\$\{[A-Z0-9_]+\}/u;
 const safeTempoAttributeKeyPattern = /^[A-Za-z_][A-Za-z0-9_.-]*$/u;
 const safeTempoAttributeValuePattern = /^[A-Za-z0-9._:-]+$/u;
 const hashedAttributeKeyPattern = /(?:\.hash|_hash)$/u;
-const sensitiveQueryValuePatterns = [
-  /(?:^|\b)(?:prompt|system prompt|user prompt|assistant response|thinking|raw content)(?:\b|:)/iu,
-  /(?:^|\s)(?:sudo|rm|mv|cp|curl|wget|npm|pnpm|yarn|node|python3?|bash|sh|git)\s+\S+/iu,
-  /(?:^|[\s=:])(?:~|\.{1,2}\/|\/|[A-Za-z]:\\|\\\\)\S*/u,
-  /\b[A-Z][A-Z0-9_]{2,}=[^\s]+/u,
-  unresolvedEnvironmentPlaceholderPattern,
-] as const;
 const generatedCorrelationAttributeKeys = new Set<string>([
   COMMON_SPAN_ATTRIBUTES.PI_SESSION_ID,
   COMMON_SPAN_ATTRIBUTES.PI_WORKFLOW_ID,
@@ -200,29 +193,17 @@ function assertSafeTempoAttributeValue(value: string, key: string): void {
     throw new Error(`Unsafe Tempo ${key}: attribute values are bounded to 256 characters.`);
   }
 
+  assertNoSensitiveQueryInput(value, `Tempo ${key}`);
+
   if (!safeTempoAttributeValuePattern.test(value)) {
     throw new Error(
       `Unsafe Tempo ${key}: only generated IDs and hash-like values are accepted; raw prompts, commands, paths, and environment values are rejected.`,
     );
   }
-
-  assertNoSensitiveRawQueryInput(value, key);
 }
 
 function isAllowedTempoSearchAttributeKey(key: string): boolean {
   return generatedCorrelationAttributeKeys.has(key) || hashedAttributeKeyPattern.test(key);
-}
-
-function assertNoSensitiveRawQueryInput(value: string, label: string): void {
-  if (!isSensitiveRawQueryInput(value)) return;
-
-  throw new Error(
-    `Unsafe Tempo ${label}: raw prompts, commands, paths, and inherited environment values are not query inputs.`,
-  );
-}
-
-function isSensitiveRawQueryInput(value: string): boolean {
-  return sensitiveQueryValuePatterns.some(pattern => pattern.test(value));
 }
 
 function normalizeTimeRange(range: TimeRange): NormalizedTimeRange {

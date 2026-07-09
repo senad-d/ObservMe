@@ -1,6 +1,7 @@
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { GrafanaFetch, GrafanaTransportClient } from "./grafana-transport.ts";
 import { createGrafanaTransport } from "./grafana-transport.ts";
+import { assertNoSensitiveQueryInput } from "../safety/sensitive-input.ts";
 import { assertGrafanaQueryReady } from "./grafana-readiness.ts";
 
 export type PrometheusFetch = GrafanaFetch;
@@ -77,14 +78,6 @@ const allForbiddenHighCardinalityPrometheusLabels = [
 const minimumMaxMetricSeries = 1;
 const minimumMaxAgents = 1;
 const maxPromQlQueryLength = 4096;
-const unresolvedEnvironmentPlaceholderPattern = /\$\{[A-Z0-9_]+\}/u;
-const sensitiveQueryValuePatterns = [
-  /(?:^|[\s"'`|=])(?:prompt|system prompt|user prompt|assistant response|thinking|raw content)\s*:/iu,
-  /(?:^|[\s"'`])(?:sudo|rm|mv|cp|curl|wget|npm|pnpm|yarn|node|python3?|bash|sh|git)\s+\S+/iu,
-  /(?:^|[\s"'`=])(?:~|\.{1,2}\/|\/Users\/|\/home\/|\/tmp\/|[A-Za-z]:\\|\\\\)\S*/u,
-  /\b[A-Z][A-Z0-9_]{2,}=[^\s"'`]+/u,
-  unresolvedEnvironmentPlaceholderPattern,
-] as const;
 
 export class PrometheusQueryClient {
   readonly #config: ObservMeConfig;
@@ -148,7 +141,7 @@ function normalizePrometheusQuery(query: string): string {
   if (!trimmed) throw new Error("Prometheus query requires a non-empty PromQL query.");
   if (trimmed.length > maxPromQlQueryLength) throw new Error("Prometheus query is bounded to 4096 characters.");
 
-  assertNoSensitiveRawQueryInput(trimmed);
+  assertNoSensitiveQueryInput(trimmed, "Prometheus query");
   assertNoForbiddenHighCardinalityLabels(trimmed);
   return trimmed;
 }
@@ -160,16 +153,6 @@ function normalizeQueryTime(time: Date | undefined): Date | undefined {
   }
 
   return time;
-}
-
-function assertNoSensitiveRawQueryInput(query: string): void {
-  if (!isSensitiveRawQueryInput(query)) return;
-
-  throw new Error("Unsafe Prometheus query: raw prompts, commands, paths, and inherited environment values are not query inputs.");
-}
-
-function isSensitiveRawQueryInput(query: string): boolean {
-  return sensitiveQueryValuePatterns.some(pattern => pattern.test(query));
 }
 
 function assertNoForbiddenHighCardinalityLabels(query: string): void {

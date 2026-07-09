@@ -4,6 +4,7 @@ import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { LokiFetch } from "../query/loki.ts";
 import { createLokiQueryClient } from "../query/loki.ts";
+import { normalizeObservMeSessionId } from "../safety/sensitive-input.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { appendObsRecoveryHint, formatObsCommandFailure, readObsDiagnosticMessage, type ObsCommandRecoveryHint } from "./obs-diagnostics.ts";
 import type { ObsLokiLogSummaryRow, ObsLokiTimeRangeOptions } from "./obs-loki-summary.ts";
@@ -59,13 +60,6 @@ const OBS_LOGS_USAGE = "Usage: /obs logs";
 const OBS_LOGS_LOKI_ERROR_NEXT_ACTION = "run /obs health and verify query.grafana.url, Grafana credentials, the Loki datasource UID, and service labels.";
 const OBS_LOGS_SESSION_ERROR_NEXT_ACTION = "run /obs session to confirm a current session before /obs logs.";
 const OBS_LOGS_NO_LOGS_NEXT_ACTION = "wait for telemetry export, then verify Loki labels and datasource with /obs health.";
-const safeSessionIdPattern = /^[A-Za-z0-9._:-]{1,256}$/u;
-const sensitiveSessionIdValuePatterns = [
-  /(?:^|\b)(?:prompt|system prompt|user prompt|assistant response|thinking|raw content)(?:\b|:)/iu,
-  /(?:^|\s)(?:sudo|rm|mv|cp|curl|wget|npm|pnpm|yarn|node|python3?|bash|sh|git)\s+\S+/iu,
-  /(?:^|[\s=:])(?:~|\.{1,2}\/|\/|[A-Za-z]:\\|\\\\)\S*/u,
-  /\b[A-Z][A-Z0-9_]{2,}=[^\s]+/u,
-] as const;
 
 export function registerObsLogsCommand(pi: ExtensionAPI, options: RegisterObsLogsCommandOptions = {}): void {
   const command = new ObsLogsCommand(options);
@@ -176,29 +170,11 @@ async function queryObsLogs(config: ObservMeConfig, query: string, options: ObsL
 }
 
 function normalizeObsLogsSessionId(value: string | undefined): string {
-  const sessionId = normalizeOptionalString(value);
-
-  if (!sessionId) throw new Error("No current ObservMe session id is available.");
-  if (!safeSessionIdPattern.test(sessionId) || isSensitiveSessionIdValue(sessionId)) {
-    throw new Error(
-      "Unsafe ObservMe session id: only generated session IDs may be used; raw prompts, commands, paths, and environment values are not query inputs.",
-    );
-  }
-
-  return sessionId;
-}
-
-function isSensitiveSessionIdValue(value: string): boolean {
-  return sensitiveSessionIdValuePatterns.some(pattern => pattern.test(value));
+  return normalizeObservMeSessionId(value, { emptyMessage: "No current ObservMe session id is available." });
 }
 
 function escapeLogQlString(value: string): string {
   return value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"');
-}
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 function isObsLogsRequest(args: string): boolean {

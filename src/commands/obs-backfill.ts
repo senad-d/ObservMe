@@ -1,11 +1,13 @@
+import { setTimeout as delay } from "node:timers/promises";
 import type { ExtensionAPI, SessionEntry, SessionHeader } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
 import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import { ObservMeLogSdk } from "../otel/logs.ts";
+import type { BoundedOtelOperationResult } from "../otel/shutdown.ts";
+import { flushOtelSdk, shutdownOtelSdk } from "../otel/shutdown.ts";
+import { applyContentCapturePolicy } from "../privacy/content-capture.ts";
 import type { ContentLimitKind } from "../privacy/truncate.ts";
-import { truncateContent } from "../privacy/truncate.ts";
-import { redactValue } from "../privacy/redact.ts";
 import {
   BASH_ATTRIBUTES,
   COMMON_SPAN_ATTRIBUTES,
@@ -39,7 +41,13 @@ export interface ObsBackfillCommandContext {
 }
 
 export interface ObsBackfillOperationOptions {
+  /**
+   * Cooperative cancellation signal for this backfill run. Custom exporters should stop
+   * pending work when this signal is aborted; non-cancellable work must be idempotent
+   * and avoid emitting additional records after observing cancellation.
+   */
   readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
 }
 
 export interface ObsBackfillSessionManager {
@@ -82,6 +90,7 @@ export type ObsBackfillConfigLoader = (options: LoadSessionConfigOptions) => Pro
 export type ObsBackfillExporterFactory = (
   config: ObservMeConfig,
   ctx: ObsBackfillCommandContext,
+  options?: ObsBackfillOperationOptions,
 ) => ObsBackfillExporter | Promise<ObsBackfillExporter>;
 export type ObsBackfillRunner = (
   ctx: ObsBackfillCommandContext,
@@ -138,6 +147,7 @@ const OBS_BACKFILL_SUBCOMMAND = "backfill";
 const OBS_BACKFILL_USAGE = "Usage: /obs backfill --current-session --since 1h";
 const OBS_BACKFILL_DEFAULT_MAX_RECORDS = 100;
 const OBS_BACKFILL_DEFAULT_OPERATION_TIMEOUT_MS = 30_000;
+const OBS_BACKFILL_ABORT_CLEANUP_TIMEOUT_MS = 100;
 const OBS_BACKFILL_CATEGORY = "backfill";
 const OBS_BACKFILL_UNKNOWN_SESSION = "unknown";
 const millisecondsPerSecond = 1000;
@@ -204,27 +214,12 @@ export async function runObsBackfill(
   if (isAbortSignalAborted(ctx.signal)) return cancelledBackfillSummary(ctx, request, "operation cancelled");
 
   const operationTimeoutMs = normalizeBackfillOperationTimeoutMs(options.exportOperationTimeoutMs);
-  try {
-    await waitForObsBackfillIdle(ctx, operationTimeoutMs);
-  } catch (error) {
-    if (error instanceof ObsBackfillInterruptedError) return cancelledBackfillSummary(ctx, request, error.reason);
-    throw error;
-  }
-
-  const entries = readCurrentSessionEntries(ctx);
-  const sessionId = resolveCurrentSessionId(ctx);
-  const sessionFile = ctx.sessionManager?.getSessionFile?.();
-  const buildResult = buildObsBackfillRecords(entries, config, request, sessionId, options);
+  const runScope = new ObsBackfillRunScope(ctx.signal);
 
   try {
-    const recordsExported = buildResult.records.length > 0 ? await exportObsBackfillRecords(buildResult.records, config, ctx, operationTimeoutMs, options) : 0;
-    return completedBackfillSummary(ctx, request, buildResult, recordsExported, sessionId, sessionFile);
-  } catch (error) {
-    if (error instanceof ObsBackfillInterruptedError) {
-      return interruptedBackfillSummary(ctx, request, buildResult, error.recordsExported, error.reason, sessionId, sessionFile);
-    }
-
-    throw error;
+    return await runObsBackfillWithScope(ctx, request, config, operationTimeoutMs, options, runScope);
+  } finally {
+    runScope.cleanup();
   }
 }
 
@@ -291,21 +286,56 @@ export function buildObsBackfillRecords(
   };
 }
 
-export function createObsBackfillLogExporter(config: ObservMeConfig): ObsBackfillExporter {
+export function createObsBackfillLogExporter(
+  config: ObservMeConfig,
+  options: ObsBackfillOperationOptions = {},
+): ObsBackfillExporter {
   const sdk = new ObservMeLogSdk({ config });
   sdk.start();
-  return new ObsBackfillLogExporter(sdk);
+  return new ObsBackfillLogExporter(sdk, resolveBackfillOperationTimeoutMs(options, OBS_BACKFILL_DEFAULT_OPERATION_TIMEOUT_MS));
 }
 
 class ObsBackfillInterruptedError extends Error {
   readonly reason: string;
   readonly recordsExported: number;
+  readonly timedOut: boolean;
 
-  constructor(reason: string, recordsExported = 0) {
+  constructor(reason: string, recordsExported = 0, timedOut = false) {
     super(reason);
     this.name = "ObsBackfillInterruptedError";
     this.reason = reason;
     this.recordsExported = recordsExported;
+    this.timedOut = timedOut;
+  }
+}
+
+class ObsBackfillRunScope {
+  readonly #controller = new AbortController();
+  readonly #parentSignal?: AbortSignal;
+  readonly #abortFromParent = (): void => {
+    this.abort("operation cancelled");
+  };
+
+  constructor(parentSignal: AbortSignal | undefined) {
+    this.#parentSignal = parentSignal;
+    if (parentSignal?.aborted) {
+      this.abort("operation cancelled");
+      return;
+    }
+
+    parentSignal?.addEventListener("abort", this.#abortFromParent, { once: true });
+  }
+
+  get signal(): AbortSignal {
+    return this.#controller.signal;
+  }
+
+  abort(reason: string): void {
+    if (!this.#controller.signal.aborted) this.#controller.abort(reason);
+  }
+
+  cleanup(): void {
+    this.#parentSignal?.removeEventListener("abort", this.#abortFromParent);
   }
 }
 
@@ -323,12 +353,15 @@ class ObsBackfillCommand {
 
 class ObsBackfillLogExporter implements ObsBackfillExporter {
   readonly #sdk: ObservMeLogSdk;
+  readonly #operationTimeoutMs: number;
 
-  constructor(sdk: ObservMeLogSdk) {
+  constructor(sdk: ObservMeLogSdk, operationTimeoutMs: number) {
     this.#sdk = sdk;
+    this.#operationTimeoutMs = operationTimeoutMs;
   }
 
-  emit(record: ObsBackfillTelemetryRecord, _options?: ObsBackfillOperationOptions): void {
+  emit(record: ObsBackfillTelemetryRecord, options?: ObsBackfillOperationOptions): void {
+    throwIfBackfillAborted(options?.signal);
     this.#sdk.logger.emit({
       severityText: "INFO",
       body: record.body,
@@ -340,12 +373,16 @@ class ObsBackfillLogExporter implements ObsBackfillExporter {
     });
   }
 
-  async flush(_options?: ObsBackfillOperationOptions): Promise<void> {
-    await this.#sdk.forceFlush();
+  async flush(options?: ObsBackfillOperationOptions): Promise<void> {
+    throwIfBackfillAborted(options?.signal);
+    const result = await flushOtelSdk(this.#sdk, resolveBackfillOperationTimeoutMs(options, this.#operationTimeoutMs));
+    throwIfBackfillOtelOperationFailed(result, "export flush");
+    throwIfBackfillAborted(options?.signal);
   }
 
-  async shutdown(_options?: ObsBackfillOperationOptions): Promise<void> {
-    await this.#sdk.shutdown();
+  async shutdown(options?: ObsBackfillOperationOptions): Promise<void> {
+    const result = await shutdownOtelSdk(this.#sdk, resolveBackfillOperationTimeoutMs(options, this.#operationTimeoutMs));
+    throwIfBackfillOtelOperationFailed(result, "export shutdown");
   }
 }
 
@@ -356,6 +393,39 @@ async function resolveObsBackfillSummary(
 ): Promise<ObsBackfillSummary> {
   if (options.runBackfill) return options.runBackfill(ctx, request);
   return runObsBackfill(ctx, request, options);
+}
+
+async function runObsBackfillWithScope(
+  ctx: ObsBackfillCommandContext,
+  request: ObsBackfillRequest,
+  config: ObservMeConfig,
+  operationTimeoutMs: number,
+  options: ObsBackfillOptions,
+  runScope: ObsBackfillRunScope,
+): Promise<ObsBackfillSummary> {
+  try {
+    await waitForObsBackfillIdle(ctx, operationTimeoutMs, runScope.signal, runScope);
+  } catch (error) {
+    if (error instanceof ObsBackfillInterruptedError) return cancelledBackfillSummary(ctx, request, error.reason);
+    throw error;
+  }
+
+  const entries = readCurrentSessionEntries(ctx);
+  const sessionId = resolveCurrentSessionId(ctx);
+  const sessionFile = ctx.sessionManager?.getSessionFile?.();
+  const buildResult = buildObsBackfillRecords(entries, config, request, sessionId, options);
+
+  try {
+    throwIfBackfillAborted(runScope.signal);
+    const recordsExported = buildResult.records.length > 0 ? await exportObsBackfillRecords(buildResult.records, config, ctx, runScope.signal, operationTimeoutMs, options, runScope) : 0;
+    return completedBackfillSummary(ctx, request, buildResult, recordsExported, sessionId, sessionFile);
+  } catch (error) {
+    if (error instanceof ObsBackfillInterruptedError) {
+      return interruptedBackfillSummary(ctx, request, buildResult, error.recordsExported, error.reason, sessionId, sessionFile);
+    }
+
+    throw error;
+  }
 }
 
 async function loadObsBackfillConfig(
@@ -417,7 +487,7 @@ function buildBackfillConfirmationMessage(
   config: ObservMeConfig,
   options: ObsBackfillOptions,
 ): string {
-  const contentMode = anyBackfillContentCaptureEnabled(config) ? "enabled capture flags will be redacted before export" : "content capture is disabled";
+  const contentMode = describeBackfillContentMode(config);
   return [
     "Send historical ObservMe telemetry for the current Pi session?",
     `Window: ${request.since ?? "all current-session entries"}`,
@@ -519,37 +589,49 @@ function backfillSummary(
   };
 }
 
-async function waitForObsBackfillIdle(ctx: ObsBackfillCommandContext, operationTimeoutMs: number): Promise<void> {
+async function waitForObsBackfillIdle(
+  ctx: ObsBackfillCommandContext,
+  operationTimeoutMs: number,
+  signal: AbortSignal,
+  runScope: ObsBackfillRunScope,
+): Promise<void> {
   if (!ctx.waitForIdle) return;
-  await runBackfillOperation(ctx.waitForIdle({ signal: ctx.signal }), ctx.signal, operationTimeoutMs, "wait for idle");
+  await runBackfillOperation(ctx.waitForIdle({ signal, timeoutMs: operationTimeoutMs }), signal, operationTimeoutMs, "wait for idle", runScope);
 }
 
 async function exportObsBackfillRecords(
   records: readonly ObsBackfillTelemetryRecord[],
   config: ObservMeConfig,
   ctx: ObsBackfillCommandContext,
+  signal: AbortSignal,
   operationTimeoutMs: number,
   options: ObsBackfillOptions,
+  runScope: ObsBackfillRunScope,
 ): Promise<number> {
-  const exporter = await createObsBackfillExporter(config, ctx, operationTimeoutMs, options);
+  const exporter = await createObsBackfillExporter(config, ctx, signal, operationTimeoutMs, options, runScope);
   let recordsExported = 0;
+  let operationLabel = "export emit";
   let pendingError: unknown;
 
   try {
     for (const record of records) {
-      throwIfBackfillAborted(ctx.signal);
-      await runBackfillOperation(exporter.emit(record, { signal: ctx.signal }), ctx.signal, operationTimeoutMs, "export emit");
+      operationLabel = "export emit";
+      throwIfBackfillAborted(signal);
+      await runBackfillOperation(exporter.emit(record, { signal, timeoutMs: operationTimeoutMs }), signal, operationTimeoutMs, operationLabel, runScope);
       recordsExported += 1;
     }
 
-    throwIfBackfillAborted(ctx.signal);
-    await runBackfillOperation(exporter.flush?.({ signal: ctx.signal }), ctx.signal, operationTimeoutMs, "export flush");
+    operationLabel = "export flush";
+    throwIfBackfillAborted(signal);
+    await runBackfillOperation(exporter.flush?.({ signal, timeoutMs: operationTimeoutMs }), signal, operationTimeoutMs, operationLabel, runScope);
+    throwIfBackfillAborted(signal);
   } catch (error) {
-    pendingError = addExportCountToBackfillInterruption(error, recordsExported);
+    pendingError = backfillOperationError(error, recordsExported, operationLabel);
   } finally {
-    pendingError = await shutdownObsBackfillExporter(exporter, ctx.signal, operationTimeoutMs, pendingError);
+    pendingError = await shutdownObsBackfillExporter(exporter, signal, operationTimeoutMs, pendingError, recordsExported, runScope);
   }
 
+  if (pendingError === undefined && isAbortSignalAborted(signal)) pendingError = new ObsBackfillInterruptedError("operation cancelled", recordsExported);
   if (pendingError !== undefined) throw pendingError;
   return recordsExported;
 }
@@ -557,25 +639,35 @@ async function exportObsBackfillRecords(
 async function createObsBackfillExporter(
   config: ObservMeConfig,
   ctx: ObsBackfillCommandContext,
+  signal: AbortSignal,
   operationTimeoutMs: number,
   options: ObsBackfillOptions,
+  runScope: ObsBackfillRunScope,
 ): Promise<ObsBackfillExporter> {
-  throwIfBackfillAborted(ctx.signal);
-  const exporter = options.createExporter ? options.createExporter(config, ctx) : createObsBackfillLogExporter(config);
-  return runBackfillOperation(exporter, ctx.signal, operationTimeoutMs, "exporter setup");
+  throwIfBackfillAborted(signal);
+
+  try {
+    const setupOptions = { signal, timeoutMs: operationTimeoutMs };
+    const exporter = options.createExporter ? options.createExporter(config, ctx, setupOptions) : createObsBackfillLogExporter(config, setupOptions);
+    return await runBackfillOperation(exporter, signal, operationTimeoutMs, "exporter setup", runScope);
+  } catch (error) {
+    throw backfillOperationError(error, 0, "exporter setup");
+  }
 }
 
 async function shutdownObsBackfillExporter(
   exporter: ObsBackfillExporter,
-  signal: AbortSignal | undefined,
+  signal: AbortSignal,
   operationTimeoutMs: number,
   pendingError: unknown,
+  recordsExported: number,
+  runScope: ObsBackfillRunScope,
 ): Promise<unknown> {
   try {
-    await runBackfillOperation(exporter.shutdown?.({ signal }), undefined, operationTimeoutMs, "export shutdown");
+    await runBackfillOperation(exporter.shutdown?.({ signal, timeoutMs: operationTimeoutMs }), undefined, operationTimeoutMs, "export shutdown", runScope);
     return pendingError;
   } catch (shutdownError) {
-    return pendingError ?? shutdownError;
+    return pendingError ?? backfillOperationError(shutdownError, recordsExported, "export shutdown");
   }
 }
 
@@ -584,14 +676,21 @@ async function runBackfillOperation<T>(
   signal: AbortSignal | undefined,
   timeoutMs: number,
   label: string,
+  runScope?: ObsBackfillRunScope,
 ): Promise<T> {
   throwIfBackfillAborted(signal);
 
+  const operationPromise = Promise.resolve(operation);
   const abortPromise = createBackfillAbortPromise<T>(signal);
   const timeoutPromise = createBackfillTimeoutPromise<T>(timeoutMs, label);
 
   try {
-    return await Promise.race([Promise.resolve(operation), abortPromise.promise, timeoutPromise.promise]);
+    return await Promise.race([operationPromise, abortPromise.promise, timeoutPromise.promise]);
+  } catch (error) {
+    if (isTimedOutBackfillInterruption(error)) runScope?.abort(error.reason);
+    if (shouldWaitForBackfillOperationCleanup(error)) await waitForBackfillOperationCleanup(operationPromise, timeoutMs);
+
+    throw error;
   } finally {
     abortPromise.cleanup();
     timeoutPromise.cleanup();
@@ -613,14 +712,33 @@ function createBackfillAbortPromise<T>(signal: AbortSignal | undefined): { reado
 function createBackfillTimeoutPromise<T>(timeoutMs: number, label: string): { readonly promise: Promise<T>; readonly cleanup: () => void } {
   let timeout: NodeJS.Timeout | undefined;
   const promise = new Promise<T>((_resolve, reject) => {
-    timeout = setTimeout(() => reject(new ObsBackfillInterruptedError(`${label} timed out`)), timeoutMs);
+    timeout = setTimeout(() => reject(new ObsBackfillInterruptedError(`${label} timed out`, 0, true)), timeoutMs);
   });
   return { promise, cleanup: () => clearTimeout(timeout) };
 }
 
-function addExportCountToBackfillInterruption(error: unknown, recordsExported: number): unknown {
-  if (error instanceof ObsBackfillInterruptedError) return new ObsBackfillInterruptedError(error.reason, recordsExported);
-  return error;
+async function waitForBackfillOperationCleanup<T>(operationPromise: Promise<T>, timeoutMs: number): Promise<void> {
+  const cleanupTimeoutMs = Math.min(normalizeBackfillOperationTimeoutMs(timeoutMs), OBS_BACKFILL_ABORT_CLEANUP_TIMEOUT_MS);
+  await Promise.race([operationPromise.then(noop, noop), delay(cleanupTimeoutMs, undefined, { ref: false })]);
+}
+
+function backfillOperationError(error: unknown, recordsExported: number, label: string): ObsBackfillInterruptedError {
+  if (error instanceof ObsBackfillInterruptedError) return new ObsBackfillInterruptedError(error.reason, recordsExported, error.timedOut);
+  if (isAbortLikeError(error)) return new ObsBackfillInterruptedError("operation cancelled", recordsExported);
+  return new ObsBackfillInterruptedError(`${label} failed`, recordsExported);
+}
+
+function isTimedOutBackfillInterruption(error: unknown): error is ObsBackfillInterruptedError {
+  return error instanceof ObsBackfillInterruptedError && error.timedOut;
+}
+
+function shouldWaitForBackfillOperationCleanup(error: unknown): boolean {
+  return error instanceof ObsBackfillInterruptedError || isAbortLikeError(error);
+}
+
+function throwIfBackfillOtelOperationFailed(result: BoundedOtelOperationResult, label: string): void {
+  if (result.timedOut) throw new ObsBackfillInterruptedError(`${label} timed out`, 0, true);
+  if (result.error) throw result.error;
 }
 
 function readCurrentSessionEntries(ctx: ObsBackfillCommandContext): readonly SessionEntry[] {
@@ -1001,52 +1119,12 @@ function maybeAttachCapturedContent(
   config: ObservMeConfig,
   captureEnabled: boolean,
 ): ObsBackfillContentResult {
-  if (!captureEnabled || value === undefined || value.length === 0) return { captured: false, redactionFailures: 0 };
-  if (!config.privacy.redactionEnabled && config.privacy.allowUnsafeCapture) return attachUnsafeCapturedContent(attributes, attributeKey, value, kind, config);
-  return attachRedactedCapturedContent(attributes, attributeKey, value, kind, config);
-}
+  const result = applyContentCapturePolicy({ captureEnabled, value, kind, config });
+  if (!result.captured || result.value === undefined) return { captured: false, redactionFailures: result.redactionFailures };
 
-function attachUnsafeCapturedContent(
-  attributes: ObsBackfillAttributes,
-  attributeKey: string,
-  value: string,
-  kind: ContentLimitKind,
-  config: ObservMeConfig,
-): ObsBackfillContentResult {
-  const result = truncateContent(value, kind, config.limits);
   attributes[attributeKey] = result.value;
   Object.assign(attributes, result.attributes);
   return { captured: true, redactionFailures: 0 };
-}
-
-function attachRedactedCapturedContent(
-  attributes: ObsBackfillAttributes,
-  attributeKey: string,
-  value: string,
-  kind: ContentLimitKind,
-  config: ObservMeConfig,
-): ObsBackfillContentResult {
-  const result = redactValue(value, {
-    pathMode: config.privacy.pathMode,
-    customRedactionPatterns: config.privacy.customRedactionPatterns,
-    maxOutputChars: limitForBackfillContent(kind, config),
-  });
-
-  if (result.dropped || result.value === undefined) return { captured: false, redactionFailures: result.failureMetrics.redactionFailures || 1 };
-
-  attributes[attributeKey] = result.value;
-  if (result.truncated) attributes[COMMON_SPAN_ATTRIBUTES.OBSERVME_TRUNCATED] = true;
-  if (result.originalLength !== undefined) attributes[COMMON_SPAN_ATTRIBUTES.OBSERVME_ORIGINAL_LENGTH] = result.originalLength;
-  return { captured: true, redactionFailures: 0 };
-}
-
-function limitForBackfillContent(kind: ContentLimitKind, config: ObservMeConfig): number {
-  if (kind === "prompt") return config.limits.maxPromptChars;
-  if (kind === "response") return config.limits.maxResponseChars;
-  if (kind === "toolArgument") return config.limits.maxToolArgumentChars;
-  if (kind === "toolResult") return config.limits.maxToolResultChars;
-  if (kind === "bashOutput") return config.limits.maxBashOutputChars;
-  return config.limits.maxLogBodyChars;
 }
 
 function extractTextContent(value: unknown): string | undefined {
@@ -1115,6 +1193,11 @@ function normalizeBackfillOperationTimeoutMs(value: number | undefined): number 
   return Math.trunc(value);
 }
 
+function resolveBackfillOperationTimeoutMs(options: ObsBackfillOperationOptions | undefined, fallback: number): number {
+  if (options?.timeoutMs === undefined) return normalizeBackfillOperationTimeoutMs(fallback);
+  return normalizeBackfillOperationTimeoutMs(options.timeoutMs);
+}
+
 function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
@@ -1139,6 +1222,12 @@ function anyBackfillContentCaptureEnabled(config: ObservMeConfig): boolean {
     config.capture.bashCommands ||
     config.capture.bashOutput
   );
+}
+
+function describeBackfillContentMode(config: ObservMeConfig): string {
+  if (!anyBackfillContentCaptureEnabled(config)) return "content capture is disabled";
+  if (!config.privacy.redactionEnabled && config.privacy.allowUnsafeCapture) return "enabled capture flags will export raw truncated content";
+  return "enabled capture flags will be redacted before export";
 }
 
 function notificationTypeForSummary(summary: ObsBackfillSummary): "info" | "warning" {

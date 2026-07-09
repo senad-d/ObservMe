@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { Counter, Histogram, Span, SpanContext, UpDownCounter } from "@opentelemetry/api";
 import { context as otelContext, isSpanContextValid, SpanStatusCode, trace } from "@opentelemetry/api";
 import {
@@ -6,6 +6,7 @@ import {
   updateObsAgentsRuntimeStateFromTree,
 } from "../commands/obs-agents-runtime.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
+import { trySha256 } from "../privacy/hash.ts";
 import {
   AGENT_SPAWN_ATTRIBUTES,
   AGENT_WAIT_JOIN_ATTRIBUTES,
@@ -18,7 +19,7 @@ import type { BoundedMap } from "../util/bounded-map.ts";
 import type { AgentChildStatus, AgentTreeNode, AgentTreeSummary } from "./agent-tree-tracker.ts";
 import { AgentTreeTracker } from "./agent-tree-tracker.ts";
 import type { AgentLineageContext, AgentRole } from "./agent-lineage.ts";
-import { createAgentLineageContext, createPropagationEnvironment } from "./agent-lineage.ts";
+import { createAgentLineageContext, createPropagationEnvironment, sanitizePropagationEnvironment } from "./agent-lineage.ts";
 import { recordActiveSpanEnd, recordActiveSpanStart } from "./handler-internals.ts";
 import type { TelemetryLogger, TelemetryTracer } from "./handlers.ts";
 
@@ -288,20 +289,24 @@ export function buildSubagentPropagationEnvironment(
   options: BuildSubagentPropagationEnvironmentOptions,
 ): SubagentPropagationEnvironment {
   const baseEnv = options.env ?? process.env;
+  const sanitizedBaseEnv = sanitizePropagationEnvironment(options.config, baseEnv);
+
   if (!options.config.workflow.enabled || !options.config.agent.propagateToSubagents) {
-    return { env: { ...baseEnv }, traceContextPropagated: false };
+    return { env: sanitizedBaseEnv, traceContextPropagated: false };
   }
 
   const parentTraceId = options.spanContext?.traceId;
   const parentSpanId = options.spanContext?.spanId;
   const traceparent = buildTraceparent(options.config, options.spanContext);
   const tracestate = traceparent ? serializeTraceState(options.spanContext) : undefined;
+  const propagatedParentTraceId = traceparent ? parentTraceId : undefined;
+  const propagatedParentSpanId = traceparent ? parentSpanId : undefined;
   const env = sanitizeTraceContextEnvironment(
     {
-      ...createPropagationEnvironment(options.lineage, options.config, baseEnv),
+      ...createPropagationEnvironment(options.lineage, options.config, sanitizedBaseEnv),
       ...definedEnvValue(options.config.agent.parentSessionIdEnv, options.parentSessionId),
-      ...definedEnvValue(options.config.agent.parentTraceIdEnv, parentTraceId),
-      ...definedEnvValue(options.config.agent.parentSpanIdEnv, parentSpanId),
+      ...definedEnvValue(options.config.agent.parentTraceIdEnv, propagatedParentTraceId),
+      ...definedEnvValue(options.config.agent.parentSpanIdEnv, propagatedParentSpanId),
       ...definedEnvValue(options.config.agent.spawnIdEnv, options.spawnId),
       ...definedEnvValue("traceparent", traceparent),
       ...definedEnvValue("tracestate", tracestate),
@@ -315,8 +320,8 @@ export function buildSubagentPropagationEnvironment(
     traceContextPropagated: Boolean(traceparent),
     traceparent,
     tracestate,
-    parentTraceId,
-    parentSpanId,
+    parentTraceId: propagatedParentTraceId,
+    parentSpanId: propagatedParentSpanId,
   };
 }
 
@@ -515,7 +520,7 @@ function buildSubagentSpawnAttributes(
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_TYPE]: normalizeSpawnType(options.spawnType),
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_REASON]: normalizeMetricLabel(options.spawnReason ?? "subagent", "subagent"),
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_TOOL_CALL_ID]: options.toolCallId,
-    [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_COMMAND_HASH]: hashCommand(options.command, options.args),
+    [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_COMMAND_HASH]: hashCommand(options.command, options.args, session.config),
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILD_ID]: childAgentId,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_PARENT_ID]: session.lineage.agentId,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_ROOT_ID]: session.lineage.rootAgentId,
@@ -766,9 +771,9 @@ function resolveCurrentSessionId(session: SubagentTelemetrySession): string {
   return session.sessionAttributes?.[sessionIdAttributeKey]?.toString() ?? `session-${session.lineage.workflowId}`;
 }
 
-function hashCommand(command: string | undefined, args: readonly string[] | undefined): string | undefined {
+function hashCommand(command: string | undefined, args: readonly string[] | undefined, config: ObservMeConfig): string | undefined {
   if (command === undefined) return undefined;
-  return createHash("sha256").update(command).update("\0").update((args ?? []).join("\0")).digest("hex");
+  return trySha256(`${command}\0${(args ?? []).join("\0")}`, config);
 }
 
 function definedEnvValue(name: string, value: string | undefined): NodeJS.ProcessEnv {
@@ -782,17 +787,15 @@ function sanitizeTraceContextEnvironment(
 ): NodeJS.ProcessEnv {
   const sanitized = { ...env };
 
-  if (!traceparent) {
-    delete sanitized.traceparent;
-    delete sanitized.tracestate;
-    delete sanitized.TRACEPARENT;
-    delete sanitized.TRACESTATE;
-    return sanitized;
-  }
+  delete sanitized.traceparent;
+  delete sanitized.tracestate;
+  delete sanitized.TRACEPARENT;
+  delete sanitized.TRACESTATE;
+
+  if (!traceparent) return sanitized;
 
   sanitized.traceparent = traceparent;
   if (tracestate) sanitized.tracestate = tracestate;
-  if (!tracestate) delete sanitized.tracestate;
   return sanitized;
 }
 

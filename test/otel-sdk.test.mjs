@@ -99,6 +99,27 @@ test("bounded OTEL operations report failures without throwing into Pi lifecycle
   assert.match(result.error.message, /exporter failed/u);
 });
 
+test("OTEL shutdown warnings sanitize exporter failure diagnostics", async () => {
+  const warnings = [];
+  const controller = await startOtelSdk({
+    config: defaultObservMeConfig,
+    logger: { warn: message => warnings.push(message) },
+    sdkFactory: () => ({
+      shutdown: () => {
+        throw new Error(
+          "Authorization: Bearer otel-token password=otel-password /tmp/private.env bash export OBSERVME_TOKEN=env-secret",
+        );
+      },
+    }),
+  });
+
+  await controller.shutdown(100);
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /ObservMe OTEL shutdown failed/u);
+  assert.doesNotMatch(warnings[0], /otel-token|otel-password|private\.env|bash export|env-secret/u);
+});
+
 async function measure(action) {
   const startedAt = performance.now();
   const result = await action();

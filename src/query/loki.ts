@@ -1,6 +1,7 @@
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { GrafanaFetch, GrafanaTransportClient } from "./grafana-transport.ts";
 import { createGrafanaTransport } from "./grafana-transport.ts";
+import { assertNoSensitiveQueryInput } from "../safety/sensitive-input.ts";
 import { assertGrafanaQueryReady } from "./grafana-readiness.ts";
 
 export type LokiFetch = GrafanaFetch;
@@ -28,17 +29,9 @@ interface NormalizedTimeRange {
 
 const minimumMaxLogs = 1;
 const maxLogQlQueryLength = 4096;
-const unresolvedEnvironmentPlaceholderPattern = /\$\{[A-Z0-9_]+\}/u;
 const safeLokiAttributeNamePattern = /^[A-Za-z_][A-Za-z0-9_.]*$/u;
 const lokiIdentifierStartPattern = /^[A-Za-z_]$/u;
 const lokiIdentifierPartPattern = /^[A-Za-z0-9_.]$/u;
-const sensitiveQueryValuePatterns = [
-  /(?:^|[\s"'`|=])(?:prompt|system prompt|user prompt|assistant response|thinking|raw content)\s*:/iu,
-  /(?:^|[\s"'`])(?:sudo|rm|mv|cp|curl|wget|npm|pnpm|yarn|node|python3?|bash|sh|git)\s+\S+/iu,
-  /(?:^|[\s"'`])~\S*|(?:^|[\s"'`=])(?:\.{1,2}\/|\/Users\/|\/home\/|\/tmp\/|[A-Za-z]:\\|\\\\)\S*/u,
-  /\b[A-Z][A-Z0-9_]{2,}=[^\s"'`]+/u,
-  unresolvedEnvironmentPlaceholderPattern,
-] as const;
 
 export class LokiQueryClient {
   readonly #config: ObservMeConfig;
@@ -143,7 +136,7 @@ function normalizeLokiQuery(query: string): string {
   if (!trimmed) throw new Error("Loki query requires a non-empty LogQL query.");
   if (trimmed.length > maxLogQlQueryLength) throw new Error("Loki query is bounded to 4096 characters.");
 
-  assertNoSensitiveRawQueryInput(trimmed);
+  assertNoSensitiveQueryInput(trimmed, "Loki query");
   return normalizeLokiQueryAttributes(trimmed);
 }
 
@@ -168,16 +161,6 @@ function isLokiIdentifierStart(char: string): boolean {
 
 function isLokiIdentifierPart(char: string): boolean {
   return lokiIdentifierPartPattern.test(char);
-}
-
-function assertNoSensitiveRawQueryInput(query: string): void {
-  if (!isSensitiveRawQueryInput(query)) return;
-
-  throw new Error("Unsafe Loki query: raw prompts, commands, paths, and inherited environment values are not query inputs.");
-}
-
-function isSensitiveRawQueryInput(query: string): boolean {
-  return sensitiveQueryValuePatterns.some(pattern => pattern.test(query));
 }
 
 function normalizeTimeRange(range: TimeRange): NormalizedTimeRange {

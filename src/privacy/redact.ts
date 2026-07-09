@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { basename, dirname } from "node:path/posix";
+import { sha256, type TenantSaltSource } from "./hash.ts";
 import { matchAllSecretPatterns, type SecretMatch } from "./secret-patterns.ts";
 import type { CustomRedactionPatternConfig, PrivacyPathMode } from "../config/schema.ts";
 
@@ -29,6 +29,7 @@ export interface RedactionOptions {
   readonly piiDetector?: (value: string) => readonly PiiMatch[];
   readonly secretMatcher?: (value: string) => readonly SecretMatch[];
   readonly onStage?: (stage: RedactionStage) => void;
+  readonly tenantSaltSource?: TenantSaltSource;
 }
 
 export interface RedactionFailureMetrics {
@@ -104,11 +105,11 @@ export function redactValue(rawValue: string, options: RedactionOptions): Redact
   }
 }
 
-export function redactPath(path: string, pathMode: PrivacyPathMode): string | undefined {
+export function redactPath(path: string, pathMode: PrivacyPathMode, tenantSaltSource?: TenantSaltSource): string | undefined {
   if (pathMode === "full") return path;
   if (pathMode === "drop") return undefined;
   if (pathMode === "basename") return basename(path);
-  return hashPath(path);
+  return hashPath(path, tenantSaltSource);
 }
 
 export function runSizeGuard(rawValue: string, options: RedactionOptions, stages: RedactionStage[]): string {
@@ -122,7 +123,7 @@ export function runSecretDetector(value: string, options: RedactionOptions, stag
   recordStage("secret_detector", options, stages);
   const secretMatcher = options.secretMatcher ?? matchAllSecretPatterns;
   const matches = secretMatcher(value);
-  return replaceMatches(value, matches.map(toReplacementMatch));
+  return replaceMatches(value, matches.map(toReplacementMatch), options);
 }
 
 export function runPiiDetector(value: string, options: RedactionOptions, stages: RedactionStage[]): string {
@@ -130,13 +131,13 @@ export function runPiiDetector(value: string, options: RedactionOptions, stages:
   if (options.piiEnabled !== true) return value;
   if (!options.piiDetector) return value;
   const matches = options.piiDetector(value);
-  return replaceMatches(value, matches.map(toPiiReplacementMatch));
+  return replaceMatches(value, matches.map(toPiiReplacementMatch), options);
 }
 
 export function runPathScrubber(value: string, options: RedactionOptions, stages: RedactionStage[]): string {
   recordStage("path_scrubber", options, stages);
   if (options.pathMode === "full") return value;
-  return value.replace(ABSOLUTE_HOME_PATH_PATTERN, match => redactEmbeddedPath(match, options.pathMode));
+  return value.replace(ABSOLUTE_HOME_PATH_PATTERN, match => redactEmbeddedPath(match, options.pathMode, options.tenantSaltSource));
 }
 
 export function runCustomRegexRedactors(value: string, options: RedactionOptions, stages: RedactionStage[]): string {
@@ -144,7 +145,10 @@ export function runCustomRegexRedactors(value: string, options: RedactionOptions
   const patterns = options.customRedactionPatterns ?? [];
   const issues = validateCustomRedactionPatterns(patterns);
   if (issues.length > 0) throw new Error(issues[0].message);
-  return patterns.reduce(applyCustomRedactionPattern, value);
+
+  let redactedValue = value;
+  for (const pattern of patterns) redactedValue = applyCustomRedactionPattern(redactedValue, pattern, options.tenantSaltSource);
+  return redactedValue;
 }
 
 export function runTruncation(
@@ -160,7 +164,8 @@ export function runTruncation(
 
 export function runHashing(value: string, options: RedactionOptions, stages: RedactionStage[]): string {
   recordStage("hashing", options, stages);
-  return sha256Hex(value);
+  if (!options.tenantSaltSource) throw new Error("tenant salt source is required for redaction hashing");
+  return sha256(value, options.tenantSaltSource);
 }
 
 export function runExportStage(options: RedactionOptions, stages: RedactionStage[]): void {
@@ -183,14 +188,14 @@ export function redactionFailureResult(error: unknown, stages: readonly Redactio
   };
 }
 
-export function replaceMatches(value: string, matches: readonly ReplacementMatch[]): string {
+export function replaceMatches(value: string, matches: readonly ReplacementMatch[], options: RedactionOptions): string {
   const selectedMatches = selectNonOverlappingMatches(matches);
   let result = "";
   let cursor = 0;
 
   for (const match of selectedMatches) {
     result += value.slice(cursor, match.start);
-    result += formatReplacement(match);
+    result += formatReplacement(match, options);
     cursor = match.end;
   }
 
@@ -235,21 +240,25 @@ export function toPiiReplacementMatch(match: PiiMatch): ReplacementMatch {
   };
 }
 
-export function formatReplacement(match: ReplacementMatch): string {
-  return `[REDACTED:${match.type}:${sha256Prefix(match.value)}]`;
+export function formatReplacement(match: ReplacementMatch, options: RedactionOptions): string {
+  return `[REDACTED:${match.type}:${sha256Prefix(match.value, options.tenantSaltSource)}]`;
 }
 
-export function redactEmbeddedPath(path: string, pathMode: PrivacyPathMode): string {
-  return redactPath(path, pathMode) ?? REDACTED_PATH_PLACEHOLDER;
+export function redactEmbeddedPath(path: string, pathMode: PrivacyPathMode, tenantSaltSource?: TenantSaltSource): string {
+  return redactPath(path, pathMode, tenantSaltSource) ?? REDACTED_PATH_PLACEHOLDER;
 }
 
-export function hashPath(path: string): string {
-  return `/<home>/${sha256Prefix(dirname(path))}/${basename(path)}`;
+export function hashPath(path: string, tenantSaltSource?: TenantSaltSource): string {
+  return `/<home>/${sha256Prefix(dirname(path), tenantSaltSource)}/${basename(path)}`;
 }
 
-export function applyCustomRedactionPattern(value: string, pattern: CustomRedactionPatternConfig): string {
+export function applyCustomRedactionPattern(
+  value: string,
+  pattern: CustomRedactionPatternConfig,
+  tenantSaltSource?: TenantSaltSource,
+): string {
   const expression = compileCustomRedactionPattern(pattern.pattern);
-  return value.replace(expression, match => formatCustomReplacement(pattern.name, match));
+  return value.replace(expression, match => formatCustomReplacement(pattern.name, match, tenantSaltSource));
 }
 
 export function compileCustomRedactionPattern(pattern: string): RegExp {
@@ -450,18 +459,19 @@ export function createInvalidCustomRedactionPatternIssue(): CustomRedactionPatte
   };
 }
 
-export function formatCustomReplacement(name: string, value: string): string {
-  return `[REDACTED:${normalizeCustomType(name)}:${sha256Prefix(value)}]`;
+export function formatCustomReplacement(name: string, value: string, tenantSaltSource?: TenantSaltSource): string {
+  return `[REDACTED:${normalizeCustomType(name)}:${sha256Prefix(value, tenantSaltSource)}]`;
 }
 
 export function normalizeCustomType(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_]+/gu, "_").replace(/^_+|_+$/gu, "") || "custom";
 }
 
-export function sha256Prefix(value: string): string {
-  return sha256Hex(value).slice(0, HASH_PREFIX_LENGTH);
+export function sha256Prefix(value: string, tenantSaltSource?: TenantSaltSource): string {
+  if (!tenantSaltSource) throw new Error("tenant salt source is required for redaction hashing");
+  return sha256Hex(value, tenantSaltSource).slice(0, HASH_PREFIX_LENGTH);
 }
 
-export function sha256Hex(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
+export function sha256Hex(value: string, tenantSaltSource: TenantSaltSource): string {
+  return sha256(value, tenantSaltSource);
 }

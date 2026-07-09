@@ -292,6 +292,7 @@ tracestate
 Important details:
 
 - `OBSERVME_AGENT_ID` is not normally propagated from parent to child; the child should generate its own `pi.agent.id`.
+- Inherited ObservMe and W3C propagation variables are cleared before current child lineage is written, so stale agent IDs, spawn IDs, parent trace/span IDs, `traceparent`, or `tracestate` never leak into a new child environment.
 - `OBSERVME_AGENT_DEPTH` carries the parent depth. The child increments it when creating its own lineage.
 - `traceparent` and `tracestate` let the child continue the same distributed trace when possible.
 - If W3C trace context cannot be propagated, ObservMe must still propagate workflow/parent/root ids and emit fallback telemetry.

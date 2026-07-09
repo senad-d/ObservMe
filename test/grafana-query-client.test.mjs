@@ -219,6 +219,27 @@ test("Grafana transport failure formatting distinguishes TLS and DNS failures", 
   assert.match(formatGrafanaFetchFailure(dnsError), /DNS lookup failed/u);
 });
 
+test("Grafana health sanitizes transport failure details", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "https://admin:secret@grafana.local?token=url-token";
+  config.query.grafana.token = "grafana-token";
+
+  const health = await getGrafanaHealth(config, {
+    fetch: async () => {
+      throw new Error(
+        "Authorization: Bearer grafana-token https://admin:secret@grafana.local?token=url-token password=grafana-password /home/senad/private.env curl https://example.test OBSERVME_TOKEN=env-secret",
+      );
+    },
+  });
+
+  assert.equal(health.checks[0].status, "failed");
+  assert.match(health.checks[0].detail, /\[redacted\]/u);
+  assert.doesNotMatch(
+    health.checks[0].detail,
+    /grafana-token|admin:secret|url-token|grafana-password|private\.env|curl https|env-secret/u,
+  );
+});
+
 test("Grafana health applies query.timeoutMs as an aborting fetch timeout", async () => {
   const config = cloneDefaultConfig();
   config.query.timeoutMs = 1;

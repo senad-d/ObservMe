@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
 
 export type ProjectConfigBootstrapStatus = "created" | "exists" | "skipped_untrusted";
 export type ProjectConfigNotifyLevel = "info" | "warning" | "error";
@@ -279,5 +280,5 @@ function isErrorWithCode(error: unknown): error is NodeJS.ErrnoException {
 }
 
 function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return sanitizeDiagnosticText(readDiagnosticMessage(error));
 }

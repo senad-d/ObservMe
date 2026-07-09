@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
 
 export interface FlushableOtelSdk {
   forceFlush?: () => Promise<void> | void;
@@ -93,5 +94,5 @@ function logBoundedOperationIssue(result: BoundedOtelOperationResult, logger: Ot
 }
 
 function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return sanitizeDiagnosticText(readDiagnosticMessage(error));
 }

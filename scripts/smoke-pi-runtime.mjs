@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -288,9 +288,10 @@ async function main() {
     await assertObsHealthCommand(client);
     backend.assertAuthenticatedGrafanaProbes();
     await assertObsCostTimeoutCommand(client, backend);
+    await assertPiRuntimeEventShapeCoverage(client);
 
     console.log(
-      "Pi runtime smoke passed: real RPC process discovered /obs, verified reload and new-session lifecycle replacement, and executed status, session, health, and bounded query commands.",
+      "Pi runtime smoke passed: real RPC process discovered /obs, verified reload and new-session lifecycle replacement, executed status/session/health/bounded query commands, and covered sanitized current Pi event shapes.",
     );
   } finally {
     await client?.stop();
@@ -311,7 +312,9 @@ async function createTemporaryPiProject(baseUrl) {
   await mkdir(sessionDir, { recursive: true });
   await mkdir(extensionDir, { recursive: true });
   await writeFile(join(configDir, "observme.yaml"), renderSmokeObservMeConfig(baseUrl), "utf8");
+  await writeFile(join(projectDir, "observme-smoke-input.txt"), "ObservMe smoke fixture input.\n", "utf8");
   await writeFile(join(extensionDir, "observme.ts"), renderSmokeObservMeExtension(), "utf8");
+  await writeFile(join(extensionDir, "observme-smoke-events.ts"), renderSmokeEventShapeExtension(), "utf8");
   await writeFile(join(extensionDir, "observme-smoke-reload.ts"), renderSmokeReloadExtension(), "utf8");
 
   return { rootDir, homeDir, projectDir, sessionDir };
@@ -371,6 +374,405 @@ async function handleObservMeSmokeReload(_args, ctx) {
 `;
 }
 
+function renderSmokeEventShapeExtension() {
+  const piAiUrl = pathToFileURL(join(repoRoot, "node_modules", "@earendil-works", "pi-ai", "dist", "index.js")).href;
+
+  return `import { createAssistantMessageEventStream } from ${JSON.stringify(piAiUrl)};
+
+const observedEvents = new Map();
+const observedCounts = new Map();
+const observedEventNames = [
+  "session_start",
+  "agent_start",
+  "turn_start",
+  "before_provider_request",
+  "after_provider_response",
+  "message_end",
+  "tool_execution_start",
+  "tool_execution_update",
+  "tool_call",
+  "tool_result",
+  "tool_execution_end",
+  "user_bash",
+  "model_select",
+  "thinking_level_select",
+  "turn_end",
+  "agent_end",
+  "session_compact",
+  "session_tree",
+];
+const fixtureBackedEvents = new Map([
+  ["session_compact", "session_compact is covered by test/fixtures/events/session-compact.json; the minimal credential-free RPC smoke does not force a compaction summary."],
+  ["session_tree", "session_tree is covered by test/fixtures/events/session-tree.json; interactive tree navigation is not exposed as a bounded RPC smoke action."],
+  ["user_bash", "user_bash is emitted by interactive !/!! handling, not by Pi RPC bash or prompt commands; the smoke verifies the installed Pi UserBashEvent type contract and docs/review-validation.md records the manual TUI recipe."],
+]);
+let providerCallCount = 0;
+let smokePi;
+
+export default function observmeSmokeEventShapes(pi) {
+  smokePi = pi;
+  for (const eventName of observedEventNames) registerShapeHandler(pi, eventName);
+  pi.registerProvider("observme-smoke", {
+    name: "ObservMe Smoke Provider",
+    baseUrl: "http://127.0.0.1",
+    apiKey: "observme-smoke-key",
+    api: "observme-smoke-api",
+    models: [
+      {
+        id: "offline",
+        name: "ObservMe Offline Smoke",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 10000,
+        maxTokens: 1000,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+      {
+        id: "offline-alt",
+        name: "ObservMe Offline Smoke Alternate",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 10000,
+        maxTokens: 1000,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    ],
+    streamSimple: streamSmokeProvider,
+  });
+  pi.registerCommand("observme-smoke-event-shapes", {
+    description: "Report sanitized Pi runtime event shapes for ObservMe smoke validation.",
+    handler: handleEventShapesCommand,
+  });
+  pi.registerCommand("observme-smoke-select-model", {
+    description: "Select the deterministic ObservMe smoke provider and thinking level.",
+    handler: handleSelectModelCommand,
+  });
+}
+
+function registerShapeHandler(pi, eventName) {
+  pi.on(eventName, recordShapeEvent.bind(undefined, eventName));
+}
+
+function recordShapeEvent(eventName, event, ctx) {
+  observedCounts.set(eventName, (observedCounts.get(eventName) ?? 0) + 1);
+  observedEvents.set(eventName, summarizeEvent(eventName, event, ctx));
+}
+
+async function handleEventShapesCommand(_args, ctx) {
+  await ctx.ui.notify("ObservMe smoke event shapes: " + JSON.stringify(createEventShapeReport()), "info");
+}
+
+async function handleSelectModelCommand(_args, ctx) {
+  const alternateModel = ctx.modelRegistry.find("observme-smoke", "offline-alt");
+  const model = ctx.modelRegistry.find("observme-smoke", "offline");
+  const alternateSelected = alternateModel ? await smokePi.setModel(alternateModel) : false;
+  const selected = model ? await smokePi.setModel(model) : false;
+
+  if (selected) smokePi.setThinkingLevel("high");
+  await ctx.ui.notify("ObservMe smoke model selection: " + JSON.stringify({ alternateFound: Boolean(alternateModel), alternateSelected, modelFound: Boolean(model), selected }), selected ? "info" : "error");
+}
+
+function createEventShapeReport() {
+  return {
+    version: 1,
+    events: Object.fromEntries([...observedEvents.entries()].sort(compareEntriesByKey)),
+    counts: Object.fromEntries([...observedCounts.entries()].sort(compareEntriesByKey)),
+    fixtureBackedEvents: Object.fromEntries([...fixtureBackedEvents.entries()].filter(isMissingObservedEvent).sort(compareEntriesByKey)),
+  };
+}
+
+function isMissingObservedEvent(entry) {
+  return !observedEvents.has(entry[0]);
+}
+
+function compareEntriesByKey(left, right) {
+  return left[0].localeCompare(right[0]);
+}
+
+function streamSmokeProvider(model, _context, options) {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(emitSmokeProviderStream.bind(undefined, stream, model, options));
+  return stream;
+}
+
+function emitSmokeProviderStream(stream, model, options) {
+  const output = createAssistantOutput(model);
+
+  try {
+    if (options?.signal?.aborted) throw new Error("smoke provider aborted");
+    stream.push({ type: "start", partial: output });
+    if (providerCallCount === 0) emitSmokeToolCall(stream, output);
+    else emitSmokeText(stream, output);
+    providerCallCount += 1;
+    stream.push({ type: "done", reason: output.stopReason, message: output });
+  } catch (error) {
+    output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+    output.errorMessage = error instanceof Error ? error.message : String(error);
+    stream.push({ type: "error", reason: output.stopReason, error: output });
+  } finally {
+    stream.end();
+  }
+}
+
+function createAssistantOutput(model) {
+  return {
+    role: "assistant",
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 7,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
+function emitSmokeToolCall(stream, output) {
+  const contentIndex = output.content.length;
+  const toolCall = { type: "toolCall", id: "observme-smoke-read-call", name: "read", arguments: {} };
+  const args = { path: "observme-smoke-input.txt" };
+
+  output.content.push(toolCall);
+  stream.push({ type: "toolcall_start", contentIndex, partial: output });
+  toolCall.arguments = args;
+  stream.push({ type: "toolcall_delta", contentIndex, delta: JSON.stringify(args), partial: output });
+  stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
+  output.stopReason = "toolUse";
+}
+
+function emitSmokeText(stream, output) {
+  const contentIndex = output.content.length;
+  const text = "ObservMe smoke provider completed after the read tool.";
+
+  output.content.push({ type: "text", text: "" });
+  stream.push({ type: "text_start", contentIndex, partial: output });
+  output.content[contentIndex].text = text;
+  stream.push({ type: "text_delta", contentIndex, delta: text, partial: output });
+  stream.push({ type: "text_end", contentIndex, content: text, partial: output });
+  output.stopReason = "stop";
+}
+
+function summarizeEvent(eventName, event, ctx) {
+  const record = asRecord(event);
+  const base = {
+    eventName,
+    keys: sortedKeys(record),
+    ctx: summarizeContext(ctx),
+  };
+
+  if (eventName === "user_bash") return withoutUndefined({ ...base, ...summarizeUserBash(record) });
+  if (eventName.startsWith("tool_")) return withoutUndefined({ ...base, ...summarizeToolEvent(record) });
+  if (eventName === "message_end") return withoutUndefined({ ...base, ...summarizeMessageEvent(record) });
+  if (eventName === "before_provider_request") return withoutUndefined({ ...base, ...summarizeProviderRequest(record) });
+  if (eventName === "after_provider_response") return withoutUndefined({ ...base, ...summarizeProviderResponse(record) });
+  if (eventName === "model_select") return withoutUndefined({ ...base, ...summarizeModelSelect(record) });
+  if (eventName === "thinking_level_select") return withoutUndefined({ ...base, ...summarizeThinkingSelect(record) });
+  if (eventName === "agent_start") return withoutUndefined({ ...base, ...summarizeAgentStart(record) });
+  if (eventName === "turn_start" || eventName === "turn_end") return withoutUndefined({ ...base, ...summarizeTurnEvent(record) });
+  if (eventName === "agent_end") return withoutUndefined({ ...base, ...summarizeAgentEnd(record) });
+  if (eventName === "session_start") return withoutUndefined({ ...base, ...summarizeSessionStart(record) });
+
+  return withoutUndefined(base);
+}
+
+function summarizeContext(ctx) {
+  const record = asRecord(ctx);
+
+  return withoutUndefined({
+    mode: stringValue(record.mode),
+    hasUIType: valueType(record.hasUI),
+    cwdType: valueType(record.cwd),
+    sessionFileType: valueType(record.sessionFile ?? record.session_file),
+    modelProvider: stringValue(asRecord(record.model).provider),
+    modelId: stringValue(asRecord(record.model).id ?? asRecord(record.model).model),
+    thinkingLevel: stringValue(asRecord(record.thinking).level),
+  });
+}
+
+function summarizeSessionStart(record) {
+  return {
+    reason: stringValue(record.reason),
+    previousSessionFileType: valueType(record.previousSessionFile),
+    targetSessionFileType: valueType(record.targetSessionFile),
+    sessionIdType: valueType(record.sessionId ?? record.session_id),
+  };
+}
+
+function summarizeAgentStart(record) {
+  const prompt = stringValue(record.prompt ?? record.userPrompt ?? record.message);
+
+  return {
+    source: stringValue(record.source),
+    promptType: valueType(prompt),
+    promptLength: prompt?.length,
+  };
+}
+
+function summarizeTurnEvent(record) {
+  return {
+    turnIndexType: valueType(record.turnIndex ?? record.turn_index),
+    hasMessage: record.message !== undefined,
+    toolResultCount: Array.isArray(record.toolResults) ? record.toolResults.length : undefined,
+  };
+}
+
+function summarizeAgentEnd(record) {
+  return {
+    messageCount: Array.isArray(record.messages) ? record.messages.length : undefined,
+    status: stringValue(record.status ?? record.outcome),
+  };
+}
+
+function summarizeProviderRequest(record) {
+  const payload = asRecord(record.payload);
+
+  return {
+    payloadKeys: sortedKeys(payload),
+    payloadMessageCount: countItems(payload.messages ?? payload.contents ?? payload.input ?? payload.prompt),
+    payloadToolSchemaCount: countItems(payload.tools ?? payload.toolSchemas),
+  };
+}
+
+function summarizeProviderResponse(record) {
+  return {
+    statusType: valueType(record.status),
+    headerKeys: sortedKeys(asRecord(record.headers)),
+  };
+}
+
+function summarizeMessageEvent(record) {
+  const message = asRecord(record.message ?? record);
+
+  return {
+    role: stringValue(message.role),
+    provider: stringValue(message.provider),
+    model: stringValue(message.model),
+    stopReason: stringValue(message.stopReason),
+    contentTypes: contentTypes(message.content),
+    usageKeys: sortedKeys(asRecord(message.usage)),
+  };
+}
+
+function summarizeToolEvent(record) {
+  const args = readToolArgs(record);
+  const result = readToolResult(record);
+
+  return {
+    toolCallIdType: valueType(record.toolCallId ?? record.tool_call_id ?? record.callId ?? record.id ?? asRecord(record.toolCall).id),
+    toolName: stringValue(record.toolName ?? record.tool_name ?? record.name ?? asRecord(record.toolCall).name),
+    argumentSource: args.source,
+    argumentKeys: sortedKeys(asRecord(args.value)),
+    hasResultPayload: result.value !== undefined,
+    resultSource: result.source,
+    resultKeys: sortedKeys(asRecord(result.value)),
+    resultContentTypes: contentTypes(asRecord(result.value).content ?? record.content),
+    isErrorType: valueType(record.isError),
+    successType: valueType(record.success),
+  };
+}
+
+function summarizeUserBash(record) {
+  const command = stringValue(record.command ?? record.cmd ?? record.input);
+
+  return {
+    commandType: valueType(command),
+    commandLength: command?.length,
+    cwdType: valueType(record.cwd),
+    excludeFromContextType: valueType(record.excludeFromContext ?? record.exclude_from_context),
+    hasCompletedResult: record.result !== undefined || record.output !== undefined || record.exitCode !== undefined || record.exit_code !== undefined || record.cancelled !== undefined || record.truncated !== undefined,
+  };
+}
+
+function summarizeModelSelect(record) {
+  const model = asRecord(record.model);
+  const previousModel = asRecord(record.previousModel);
+
+  return {
+    provider: stringValue(model.provider),
+    modelId: stringValue(model.id ?? model.model),
+    previousProviderType: valueType(previousModel.provider),
+    source: stringValue(record.source),
+  };
+}
+
+function summarizeThinkingSelect(record) {
+  return {
+    level: stringValue(record.level),
+    previousLevelType: valueType(record.previousLevel),
+  };
+}
+
+function readToolArgs(record) {
+  if (record.arguments !== undefined) return { source: "arguments", value: record.arguments };
+  if (record.args !== undefined) return { source: "args", value: record.args };
+  if (record.input !== undefined) return { source: "input", value: record.input };
+  if (record.parameters !== undefined) return { source: "parameters", value: record.parameters };
+  if (record.params !== undefined) return { source: "params", value: record.params };
+  if (asRecord(record.toolCall).arguments !== undefined) return { source: "toolCall.arguments", value: asRecord(record.toolCall).arguments };
+  if (asRecord(record.toolCall).input !== undefined) return { source: "toolCall.input", value: asRecord(record.toolCall).input };
+  return { source: undefined, value: undefined };
+}
+
+function readToolResult(record) {
+  if (record.result !== undefined) return { source: "result", value: record.result };
+  if (record.output !== undefined) return { source: "output", value: record.output };
+  if (record.response !== undefined) return { source: "response", value: record.response };
+  if (record.content !== undefined) return { source: "content", value: { content: record.content } };
+  return { source: undefined, value: undefined };
+}
+
+function countItems(value) {
+  if (Array.isArray(value)) return value.length;
+  if (typeof value === "string" && value.trim() !== "") return 1;
+  if (isRecord(value)) return 1;
+  return undefined;
+}
+
+function contentTypes(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(contentType).filter(Boolean))].sort();
+}
+
+function contentType(value) {
+  return stringValue(asRecord(value).type);
+}
+
+function sortedKeys(value) {
+  return Object.keys(asRecord(value)).sort();
+}
+
+function stringValue(value) {
+  return typeof value === "string" ? value : undefined;
+}
+
+function valueType(value) {
+  if (value === undefined) return undefined;
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+function asRecord(value) {
+  return isRecord(value) ? value : {};
+}
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function withoutUndefined(value) {
+  return Object.fromEntries(Object.entries(value).filter(entry => entry[1] !== undefined));
+}
+`;
+}
+
 function renderSmokeObservMeConfig(baseUrl) {
   return `observme:
   environment: development
@@ -410,6 +812,8 @@ function renderSmokeObservMeConfig(baseUrl) {
 
 async function assertObsCommandIsDiscoverable(client) {
   await assertSingleExtensionCommand(client, "obs");
+  await assertSingleExtensionCommand(client, "observme-smoke-event-shapes");
+  await assertSingleExtensionCommand(client, "observme-smoke-select-model");
   await assertSingleExtensionCommand(client, "observme-smoke-reload");
 }
 
@@ -455,6 +859,8 @@ async function assertObsReloadLifecycle(client, baseUrl) {
   await client.waitForStatusClearedAfter(startIndex);
   await client.waitForStatusLoadedAfter(startIndex);
   await assertSingleExtensionCommand(client, "obs");
+  await assertSingleExtensionCommand(client, "observme-smoke-event-shapes");
+  await assertSingleExtensionCommand(client, "observme-smoke-select-model");
   await assertSingleExtensionCommand(client, "observme-smoke-reload");
   await assertObsStatusCommand(client, baseUrl);
 
@@ -472,6 +878,8 @@ async function assertObsNewSessionLifecycle(client, baseUrl) {
   await client.waitForStatusClearedAfter(startIndex);
   await client.waitForStatusLoadedAfter(startIndex);
   await assertSingleExtensionCommand(client, "obs");
+  await assertSingleExtensionCommand(client, "observme-smoke-event-shapes");
+  await assertSingleExtensionCommand(client, "observme-smoke-select-model");
   await assertSingleExtensionCommand(client, "observme-smoke-reload");
   await assertObsStatusCommand(client, baseUrl);
 
@@ -519,6 +927,145 @@ async function assertObsCostTimeoutCommand(client, backend) {
   } finally {
     backend.delayPrometheusQueries(0);
   }
+}
+
+async function assertPiRuntimeEventShapeCoverage(client) {
+  await assertSmokeModelAvailable(client);
+  await assertSmokeModelSelectionCommand(client);
+
+  const startIndex = client.recordCount();
+  await client.request({ type: "prompt", message: "Use the smoke provider read tool once." });
+  await client.waitForRecordAfter(record => record?.type === "agent_end", "mock provider agent_end", startIndex);
+  await assertUserBashContractFromInstalledPiTypes();
+
+  const report = await readSmokeEventShapeReport(client);
+  assertSmokeEventShapeReport(report);
+}
+
+async function assertSmokeModelAvailable(client) {
+  const response = await client.request({ type: "get_available_models" });
+  const models = response.data?.models ?? [];
+  const hasSmokeModel = models.some(model => model.provider === "observme-smoke" && model.id === "offline");
+
+  assert.equal(hasSmokeModel, true, "real Pi model registry should include the credential-free ObservMe smoke provider");
+}
+
+async function assertSmokeModelSelectionCommand(client) {
+  const prefix = "ObservMe smoke model selection: ";
+  const notification = client.waitForNotifyMessage(prefix);
+
+  await client.request({ type: "prompt", message: "/observme-smoke-select-model" });
+  const message = await notification;
+  const result = JSON.parse(message.slice(prefix.length));
+
+  assert.deepEqual(
+    result,
+    { alternateFound: true, alternateSelected: true, modelFound: true, selected: true },
+    "smoke extension command should select the deterministic provider without credentials",
+  );
+}
+
+async function readSmokeEventShapeReport(client) {
+  const prefix = "ObservMe smoke event shapes: ";
+  const notification = client.waitForNotifyMessage(prefix);
+
+  await client.request({ type: "prompt", message: "/observme-smoke-event-shapes" });
+  const message = await notification;
+
+  return JSON.parse(message.slice(prefix.length));
+}
+
+function assertSmokeEventShapeReport(report) {
+  assert.equal(report.version, 1, "event-shape smoke report should use the expected schema version");
+  assertRequiredEventShapes(report);
+  assertUserBashBlocker(report);
+  assertToolLifecycleShapes(report.events);
+  assertModelAndThinkingShapes(report.events);
+  assertAgentTurnShapes(report.events);
+  assertEventShapeReportIsSanitized(report);
+}
+
+function assertRequiredEventShapes(report) {
+  for (const eventName of ["session_start", "tool_execution_start", "tool_call", "tool_result", "tool_execution_end", "message_end", "model_select", "thinking_level_select", "agent_start", "turn_start", "turn_end", "agent_end"]) {
+    assert.ok(report.events[eventName], `event-shape smoke should observe ${eventName}`);
+    assert.ok(report.counts[eventName] >= 1, `event-shape smoke should count ${eventName}`);
+  }
+
+  assert.equal(
+    typeof report.fixtureBackedEvents?.session_compact,
+    "string",
+    "credential-free event smoke should document session_compact fixture coverage instead of making live model-dependent compaction calls",
+  );
+  assert.equal(
+    typeof report.fixtureBackedEvents?.session_tree,
+    "string",
+    "credential-free event smoke should document session_tree fixture coverage instead of requiring interactive tree navigation",
+  );
+}
+
+async function assertUserBashContractFromInstalledPiTypes() {
+  const typesPath = join(repoRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "extensions", "types.d.ts");
+  const types = await readFile(typesPath, "utf8");
+  const match = /export interface UserBashEvent \{(?<body>[\s\S]*?)\n\}/u.exec(types);
+  const body = match?.groups?.body ?? "";
+
+  assert.ok(body, "installed Pi types should expose UserBashEvent for interactive !/!! compatibility checks");
+  assert.match(body, /command:\s*string/u, "UserBashEvent should expose a command string");
+  assert.match(body, /excludeFromContext:\s*boolean/u, "UserBashEvent should expose whether !! excluded the command from context");
+  assert.match(body, /cwd:\s*string/u, "UserBashEvent should expose cwd");
+  assert.doesNotMatch(body, /\b(result|output|exitCode|truncated|cancelled)\b/u, "UserBashEvent should remain a pre-execution event without completed-result fields");
+}
+
+function assertUserBashBlocker(report) {
+  assert.equal(report.events.user_bash, undefined, "RPC event-shape smoke should not synthesize user_bash events");
+  assert.equal(
+    typeof report.fixtureBackedEvents?.user_bash,
+    "string",
+    "event-shape smoke should document the interactive user_bash blocker and rely on the installed Pi type-contract check",
+  );
+}
+
+function assertToolLifecycleShapes(events) {
+  assert.equal(events.tool_execution_start.toolCallIdType, "string", "tool_execution_start should expose a toolCallId");
+  assert.equal(events.tool_execution_start.toolName, "read", "tool_execution_start should expose the built-in read tool name");
+  assert.deepEqual(events.tool_execution_start.argumentKeys, ["path"], "tool_execution_start should expose sanitized read argument keys");
+
+  assert.equal(events.tool_call.toolCallIdType, "string", "tool_call should expose a toolCallId");
+  assert.equal(events.tool_call.toolName, "read", "tool_call should expose the built-in read tool name");
+  assert.deepEqual(events.tool_call.argumentKeys, ["path"], "tool_call should expose sanitized input keys for ObservMe parser compatibility");
+
+  assert.equal(events.tool_result.toolCallIdType, "string", "tool_result should expose a toolCallId");
+  assert.equal(events.tool_result.toolName, "read", "tool_result should expose the built-in read tool name");
+  assert.equal(events.tool_result.hasResultPayload, true, "tool_result should expose a result/content payload");
+  assert.ok(events.tool_result.resultContentTypes.includes("text"), "tool_result should expose text content without raw output in the shape report");
+
+  assert.equal(events.tool_execution_end.toolCallIdType, "string", "tool_execution_end should expose a toolCallId");
+  assert.equal(events.tool_execution_end.toolName, "read", "tool_execution_end should expose the built-in read tool name");
+  assert.equal(events.tool_execution_end.hasResultPayload, true, "tool_execution_end should expose a final result payload");
+  assert.equal(events.tool_execution_end.isErrorType, "boolean", "tool_execution_end should expose boolean isError for parser failure detection");
+}
+
+function assertModelAndThinkingShapes(events) {
+  assert.equal(events.model_select.provider, "observme-smoke", "model_select should expose the selected provider");
+  assert.equal(events.model_select.modelId, "offline", "model_select should expose the selected model id");
+  assert.equal(events.thinking_level_select.level, "high", "thinking_level_select should expose the selected thinking level");
+}
+
+function assertAgentTurnShapes(events) {
+  assert.ok(events.agent_start.keys.includes("type"), "agent_start should expose its current runtime event type");
+  assert.equal(events.message_end.role, "assistant", "message_end should expose the finalized assistant message role");
+  assert.ok(events.message_end.contentTypes.includes("text"), "message_end should expose assistant content block types");
+  assert.ok(events.message_end.usageKeys.includes("input"), "message_end should expose usage keys");
+  assert.equal(events.turn_end.hasMessage, true, "turn_end should expose the finalized assistant turn message");
+  assert.ok(events.agent_end.messageCount >= 1, "agent_end should expose generated message count");
+}
+
+function assertEventShapeReportIsSanitized(report) {
+  const serialized = JSON.stringify(report);
+
+  assert.doesNotMatch(serialized, /Use the smoke provider read tool once\./u, "event-shape report should not contain raw prompts");
+  assert.doesNotMatch(serialized, /observme-user-bash-shape/u, "event-shape report should not contain raw user bash commands");
+  assert.doesNotMatch(serialized, /ObservMe smoke fixture input\./u, "event-shape report should not contain raw tool output");
 }
 
 async function waitForProcessExit(child, timeoutMs) {

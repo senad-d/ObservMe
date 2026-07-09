@@ -183,6 +183,62 @@ function responseForPrometheusQuery(query) {
   throw new Error(`Unexpected PromQL query: ${query}`);
 }
 
+function createChildRows(count) {
+  return Array.from({ length: count }, (_value, index) => ({
+    agentId: `agent-child-${String(index + 1).padStart(2, "0")}`,
+    workflowId: "workflow-1",
+    rootAgentId: "agent-root",
+    parentAgentId: "agent-root",
+    depth: 1 + (index % 3),
+    role: index % 2 === 0 ? "worker" : "reviewer",
+    orphaned: index % 11 === 0,
+    childIds: [],
+    activeChildren: index === count - 1 ? 1 : 0,
+    fanoutCount: index % 4,
+    status: index === count - 1 ? "active" : "completed",
+  }));
+}
+
+function createRenderSnapshot(children, recentChildrenLimit = 4) {
+  const latestChild = children.at(-1);
+  return {
+    workflowId: "workflow-1",
+    workflowRootAgentId: "agent-root",
+    agentId: "agent-root",
+    rootAgentId: "agent-root",
+    role: "orchestrator",
+    capability: "planning",
+    depth: 0,
+    orphaned: false,
+    sessionId: " session-1 ",
+    traceId: ` ${traceId} `,
+    activeChildren: latestChild ? 1 : 0,
+    fanoutCount: children.length,
+    treeDepth: 4,
+    treeWidth: children.length,
+    orphanCount: children.filter(child => child.orphaned).length,
+    children,
+    waitJoinHints: latestChild ? [{
+      kind: "join",
+      id: `join-${latestChild.agentId}`,
+      active: false,
+      childAgentId: latestChild.agentId,
+      childStatus: latestChild.status,
+      joinStatus: "completed",
+      durationMs: 1200,
+    }] : [],
+    aggregateQueries: [OBS_AGENTS_SPAWNED_PROMQL, OBS_AGENTS_FANOUT_P95_PROMQL, OBS_AGENTS_ORPHAN_PROMQL],
+    aggregateRows: {
+      spawned: [{ labels: { agent_role: "orchestrator" }, value: 0.5 }],
+      fanoutP95: [{ labels: { subagent_depth: "1" }, value: 4 }],
+      orphaned: [{ labels: { agent_role: "worker" }, value: 0 }],
+    },
+    tempoSearchAttributes: { "pi.agent.id": "agent-root", "pi.workflow.id": "workflow-1" },
+    traces: [{ traceId: ` ${remoteTraceId} `, rootServiceName: "observme-pi-extension" }],
+    recentChildrenLimit,
+  };
+}
+
 test("renderObsAgents reports current lineage, child relationships, and wait/join hints", () => {
   const output = renderObsAgents({
     workflowId: "workflow-1",
@@ -227,6 +283,35 @@ test("renderObsAgents reports current lineage, child relationships, and wait/joi
       `Lineage drill-down: Tempo attributes pi.agent.id, pi.workflow.id traces=1 latest_trace=${remoteTraceId}`,
     ].join("\n"),
   );
+});
+
+test("renderObsAgents bounds recent child rows while preserving useful agent fields", () => {
+  const zeroOutput = renderObsAgents(createRenderSnapshot([], 4));
+  const fewerOutput = renderObsAgents(createRenderSnapshot(createChildRows(3), 4));
+  const exactOutput = renderObsAgents(createRenderSnapshot(createChildRows(4), 4));
+  const greaterOutput = renderObsAgents(createRenderSnapshot(createChildRows(7), 4));
+  const largeOutput = renderObsAgents(createRenderSnapshot(createChildRows(60), 4));
+
+  assert.match(zeroOutput, /Recent children: none/u);
+  assert.doesNotMatch(fewerOutput, /omitted/u);
+  assert.match(fewerOutput, /agent-child-01 status=completed depth=1/u);
+  assert.match(fewerOutput, /agent-child-03 status=active depth=3/u);
+  assert.doesNotMatch(exactOutput, /omitted/u);
+  assert.match(exactOutput, /agent-child-04 status=active depth=1/u);
+
+  assert.match(greaterOutput, /Recent children: .*agent-child-01.*agent-child-02.*agent-child-06.*agent-child-07/u);
+  assert.match(greaterOutput, /omitted 3 child row\(s\)/u);
+  assert.doesNotMatch(greaterOutput, /agent-child-03/u);
+  assert.doesNotMatch(greaterOutput, /agent-child-05/u);
+  assert.match(greaterOutput, /Latest child: agent-child-07 status=active active=1 join=1\.2s/u);
+
+  assert.ok(largeOutput.length < 1200);
+  assert.match(largeOutput, /Workflow: workflow-1 root=agent-root/u);
+  assert.match(largeOutput, /Session: session-1/u);
+  assert.match(largeOutput, /Current tree: depth=4 width=60 active=1 orphaned=6/u);
+  assert.match(largeOutput, /Wait\/join hints: active_waits=0 active_joins=0 latest=join:agent-child-60 status=completed duration=1\.2s/u);
+  assert.match(largeOutput, /Aggregate agent metrics \(last 1h\): spawn_series=1 fanout_series=1 orphan_series=1/u);
+  assert.match(largeOutput, new RegExp(`Lineage drill-down: .*latest_trace=${remoteTraceId}`, "u"));
 });
 
 test("/obs agents queries low-cardinality PromQL and Tempo lineage attributes", async () => {

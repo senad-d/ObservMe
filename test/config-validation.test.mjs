@@ -50,10 +50,84 @@ test("validation rejects content capture without redaction unless unsafe capture
 });
 
 test("validation rejects insecure production transport unless explicitly allowed", () => {
-  assertValid(cloneDefault({ otlp: { endpoint: "http://collector.example.test:4318" }, privacy: { allowInsecureTransport: true } }));
+  assertValid(
+    cloneDefault({
+      otlp: { endpoint: "http://collector.example.test:4318" },
+      privacy: { allowInsecureTransport: true },
+    }),
+  );
   assertInvalid(
     cloneDefault({ otlp: { endpoint: "http://collector.example.test:4318" }, privacy: { allowInsecureTransport: false } }),
     "insecure_production_transport",
+  );
+  assertValid(
+    cloneDefault({
+      query: {
+        grafana: {
+          url: "http://grafana.example.test",
+          token: "grafana-token",
+          username: "admin",
+          password: "grafana-password",
+        },
+      },
+      privacy: { allowInsecureTransport: true },
+    }),
+  );
+  assertInvalid(
+    cloneDefault({
+      query: {
+        grafana: {
+          url: "http://grafana.example.test",
+          token: "grafana-token",
+          username: "admin",
+          password: "grafana-password",
+        },
+      },
+      privacy: { allowInsecureTransport: false },
+    }),
+    "insecure_production_transport",
+  );
+});
+
+for (const signal of ["traces", "metrics", "logs"]) {
+  test(`validation rejects insecure production ${signal} OTLP endpoint unless explicitly allowed`, () => {
+    assertValid(
+      cloneDefault({
+        otlp: { signalEndpoints: { [signal]: `https://collector.example.test:4318/v1/${signal}` } },
+        privacy: { allowInsecureTransport: false },
+      }),
+    );
+    assertValid(
+      cloneDefault({
+        otlp: { signalEndpoints: { [signal]: `http://collector.example.test:4318/v1/${signal}` } },
+        privacy: { allowInsecureTransport: true },
+      }),
+    );
+    assertInvalid(
+      cloneDefault({
+        otlp: { signalEndpoints: { [signal]: `http://collector.example.test:4318/v1/${signal}` } },
+        privacy: { allowInsecureTransport: false },
+      }),
+      "insecure_production_transport",
+    );
+  });
+}
+
+test("validation accepts explicit insecure local development transport", () => {
+  assertValid(
+    cloneDefault({
+      environment: "development",
+      otlp: {
+        endpoint: "http://localhost:4318",
+        signalEndpoints: {
+          traces: "http://localhost:4318/v1/traces",
+          metrics: "http://localhost:4318/v1/metrics",
+          logs: "http://localhost:4318/v1/logs",
+        },
+      },
+      privacy: { allowInsecureTransport: true },
+      query: { grafana: { url: "http://localhost:3000" } },
+    }),
   );
 });
 

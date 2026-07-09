@@ -9,6 +9,11 @@ const syntheticGitHubToken = `ghp_${"A".repeat(36)}`;
 const syntheticOpenAiKey = `sk-${"abc123_ABC".repeat(4)}`;
 const syntheticAnthropicKey = `sk-ant-${"abc123_ABC".repeat(4)}`;
 const syntheticSlackToken = `xoxb-${"T".repeat(12)}`;
+const tenantSaltSource = {
+  secureRuntimeConfig: {
+    tenantSalt: "redaction-test-salt",
+  },
+};
 
 const secretCategoryCases = [
   {
@@ -62,6 +67,7 @@ function defaultOptions(overrides: Partial<RedactionOptions> = {}): RedactionOpt
   return {
     pathMode: "hash",
     customRedactionPatterns: [],
+    tenantSaltSource,
     ...overrides,
   };
 }

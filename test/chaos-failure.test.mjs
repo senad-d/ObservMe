@@ -21,6 +21,8 @@ import {
 } from "../src/pi/handlers.ts";
 import { observeTrustedSubagentLineage, startSubagentSpawn } from "../src/pi/subagent-spawn.ts";
 
+process.env.OBSERVME_HASH_SALT = "chaos-failure-test-salt";
+
 const validSpanContext = {
   traceId: "11111111111111111111111111111111",
   spanId: "2222222222222222",

@@ -19,7 +19,7 @@ Edit `.pi/observme.yaml` in the project where you run Pi:
 - `otlp.endpoint` and `otlp.signalEndpoints` — your OpenTelemetry Collector URLs.
 - `resource.attributes` — service name, project name, tenant, and deployment environment labels.
 - `capture` — whether prompts, responses, thinking, tool data, bash data, and file paths are exported. For local debugging, set only the specific fields you need to `true`.
-- `privacy` — redaction, unsafe-capture acknowledgement, insecure transport, hash salt env var, and path handling. Keep `redactionEnabled: true`; set `allowUnsafeCapture: true` only when you intentionally accept unredacted sensitive-content export from this trusted project.
+- `privacy` — redaction, unsafe-capture acknowledgement, insecure transport, hash salt env var, and path handling. Keep `redactionEnabled: true`; set `allowUnsafeCapture: true` only when you intentionally accept unredacted sensitive-content export from this trusted project. Live telemetry and `/obs backfill` use the same policy: disabled capture omits content, enabled redaction redacts then truncates, redaction failures drop content, and `redactionEnabled: false` with `allowUnsafeCapture: true` exports raw truncated content.
 - `query.grafana` — Grafana URL, datasource UIDs, TLS, and IPv4 transport settings for `/obs` query commands.
 - `query.links.traceUrlTemplate` — the Grafana Explore trace-link template used by `/obs trace` and `/obs link`.
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { getObsRootCommandArgumentCompletions, registerObsCommand } from "../src/commands/obs.ts";
@@ -10,6 +11,7 @@ import {
 
 const now = new Date("2026-07-07T12:00:00.000Z");
 const bearerToken = `Authorization: Bearer ${"abc123._-".repeat(4)}`;
+process.env.OBSERVME_HASH_SALT = "obs-backfill-test-salt";
 
 function cloneDefaultConfig() {
   return structuredClone(defaultObservMeConfig);
@@ -93,6 +95,40 @@ function assistantEntry(id, parentId, timestamp) {
   };
 }
 
+function toolResultEntry(id, parentId, timestamp, content) {
+  return {
+    type: "message",
+    id,
+    parentId,
+    timestamp,
+    message: {
+      role: "toolResult",
+      toolCallId: "tool-1",
+      toolName: "bash",
+      content,
+      timestamp: Date.parse(timestamp),
+    },
+  };
+}
+
+function bashEntry(id, parentId, timestamp, output) {
+  return {
+    type: "message",
+    id,
+    parentId,
+    timestamp,
+    message: {
+      role: "bashExecution",
+      command: "echo ok",
+      output,
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      timestamp: Date.parse(timestamp),
+    },
+  };
+}
+
 test("/obs backfill requires confirmation before exporting replayed telemetry", async () => {
   const notifications = [];
   const records = [];
@@ -163,6 +199,74 @@ test("/obs backfill omits historical content when capture flags are disabled", a
   assert.equal(summary.contentCaptured, false);
   assert.equal(exported[0].attributes["pi.llm.prompt.redacted"], undefined);
   assert.doesNotMatch(serializedAttributes, /abc123/u);
+});
+
+test("/obs backfill unsafe capture uses the shared raw truncation policy for prompt, tool result, and bash output", () => {
+  const config = cloneDefaultConfig();
+  config.capture.prompts = true;
+  config.capture.toolResults = true;
+  config.capture.bashOutput = true;
+  config.privacy.redactionEnabled = false;
+  config.privacy.allowUnsafeCapture = true;
+  config.limits.maxPromptChars = 12;
+  config.limits.maxToolResultChars = 12;
+  config.limits.maxBashOutputChars = 12;
+
+  const result = buildObsBackfillRecords([
+    userEntry("a1", "2026-07-07T11:10:00.000Z", "password=prompt-secret"),
+    toolResultEntry("a2", "a1", "2026-07-07T11:20:00.000Z", "api_key=tool-secret"),
+    bashEntry("a3", "a2", "2026-07-07T11:30:00.000Z", "token=bash-secret"),
+  ], config, {
+    currentSession: true,
+    since: "1h",
+    sinceMs: 60 * 60 * 1000,
+  }, "session-1", {
+    maxRecords: 10,
+    now: () => now,
+  });
+
+  assert.equal(result.contentCaptured, true);
+  assert.equal(result.redactionFailures, 0);
+  assert.equal(result.records[0].attributes["pi.llm.prompt.redacted"], "password=pro");
+  assert.equal(result.records[1].attributes["pi.tool.result.redacted"], "api_key=tool");
+  assert.equal(result.records[2].attributes["pi.bash.output.redacted"], "token=bash-s");
+  assert.equal(result.records[0].attributes["observme.truncated"], true);
+  assert.equal(result.records[1].attributes["observme.truncated"], true);
+  assert.equal(result.records[2].attributes["observme.truncated"], true);
+});
+
+test("/obs backfill drops prompt, tool result, and bash output when redaction fails", () => {
+  const previousSalt = process.env.OBSERVME_HASH_SALT;
+  delete process.env.OBSERVME_HASH_SALT;
+
+  try {
+    const config = cloneDefaultConfig();
+    config.capture.prompts = true;
+    config.capture.toolResults = true;
+    config.capture.bashOutput = true;
+
+    const result = buildObsBackfillRecords([
+      userEntry("a1", "2026-07-07T11:10:00.000Z", "password=prompt-secret"),
+      toolResultEntry("a2", "a1", "2026-07-07T11:20:00.000Z", "api_key=tool-secret"),
+      bashEntry("a3", "a2", "2026-07-07T11:30:00.000Z", "token=bash-secret"),
+    ], config, {
+      currentSession: true,
+      since: "1h",
+      sinceMs: 60 * 60 * 1000,
+    }, "session-1", {
+      maxRecords: 10,
+      now: () => now,
+    });
+
+    assert.equal(result.contentCaptured, false);
+    assert.equal(result.redactionFailures, 3);
+    assert.equal(result.records[0].attributes["pi.llm.prompt.redacted"], undefined);
+    assert.equal(result.records[1].attributes["pi.tool.result.redacted"], undefined);
+    assert.equal(result.records[2].attributes["pi.bash.output.redacted"], undefined);
+  } finally {
+    if (previousSalt === undefined) delete process.env.OBSERVME_HASH_SALT;
+    else process.env.OBSERVME_HASH_SALT = previousSalt;
+  }
 });
 
 test("backfill record building enforces export rate limits", () => {
@@ -326,10 +430,12 @@ test("/obs backfill cancellation during export attempts shutdown and reports par
   assert.equal(records.at(-1).shutdown, true);
 });
 
-test("/obs backfill bounds stuck exporters and still attempts shutdown", async () => {
+test("/obs backfill aborts timed-out emit work and preserves the original timeout", async () => {
   const notifications = [];
   const records = [];
   const config = cloneDefaultConfig();
+  let emitSignalAborted = false;
+  let shutdownCalls = 0;
 
   const summary = await runObsBackfill(createContext([userEntry("a1", "2026-07-07T11:30:00.000Z", "one")], notifications), {
     currentSession: true,
@@ -338,8 +444,57 @@ test("/obs backfill bounds stuck exporters and still attempts shutdown", async (
   }, {
     loadConfig: async () => config,
     createExporter: () => ({
-      emit: () => new Promise(() => { /* never resolves */ }),
-      shutdown: () => records.push({ shutdown: true }),
+      emit: (record, options) => new Promise(resolve => {
+        options.signal.addEventListener("abort", () => {
+          emitSignalAborted = options.signal.aborted;
+          resolve();
+        }, { once: true });
+        setTimeout(() => {
+          if (!options.signal.aborted) records.push(record);
+          resolve();
+        }, 30).unref?.();
+      }),
+      shutdown: () => {
+        shutdownCalls += 1;
+        throw new Error("shutdown should not mask emit timeout");
+      },
+    }),
+    now: () => now,
+    maxRecords: 10,
+    exportOperationTimeoutMs: 10,
+  });
+
+  await delay(40);
+
+  assert.equal(summary.status, "cancelled");
+  assert.match(summary.reason, /export emit timed out/u);
+  assert.equal(summary.recordsExported, 0);
+  assert.equal(summary.recordsSkipped, 1);
+  assert.equal(emitSignalAborted, true);
+  assert.equal(shutdownCalls, 1);
+  assert.equal(records.filter(record => record.eventName).length, 0);
+});
+
+test("/obs backfill aborts timed-out exporter setup and counts all records unexported", async () => {
+  const notifications = [];
+  const records = [];
+  const config = cloneDefaultConfig();
+  let setupSignalAborted = false;
+
+  const summary = await runObsBackfill(createContext([
+    userEntry("a1", "2026-07-07T11:20:00.000Z", "one"),
+    userEntry("a2", "2026-07-07T11:30:00.000Z", "two"),
+  ], notifications), {
+    currentSession: true,
+    since: "1h",
+    sinceMs: 60 * 60 * 1000,
+  }, {
+    loadConfig: async () => config,
+    createExporter: (_config, _ctx, options) => new Promise(resolve => {
+      options.signal.addEventListener("abort", () => {
+        setupSignalAborted = options.signal.aborted;
+        resolve(createExporter(records));
+      }, { once: true });
     }),
     now: () => now,
     maxRecords: 10,
@@ -347,9 +502,78 @@ test("/obs backfill bounds stuck exporters and still attempts shutdown", async (
   });
 
   assert.equal(summary.status, "cancelled");
-  assert.match(summary.reason, /timed out/u);
+  assert.match(summary.reason, /exporter setup timed out/u);
   assert.equal(summary.recordsExported, 0);
-  assert.equal(records.at(-1).shutdown, true);
+  assert.equal(summary.recordsSkipped, 2);
+  assert.equal(setupSignalAborted, true);
+  assert.equal(records.length, 0);
+});
+
+test("/obs backfill reports flush failures with emitted counts and one shutdown", async () => {
+  const notifications = [];
+  const records = [];
+  const config = cloneDefaultConfig();
+  let shutdownCalls = 0;
+
+  const summary = await runObsBackfill(createContext([
+    userEntry("a1", "2026-07-07T11:20:00.000Z", "one"),
+    userEntry("a2", "2026-07-07T11:30:00.000Z", "two"),
+  ], notifications), {
+    currentSession: true,
+    since: "1h",
+    sinceMs: 60 * 60 * 1000,
+  }, {
+    loadConfig: async () => config,
+    createExporter: () => ({
+      emit: record => records.push(record),
+      flush: () => {
+        throw new Error("flush failed");
+      },
+      shutdown: () => {
+        shutdownCalls += 1;
+      },
+    }),
+    now: () => now,
+    maxRecords: 10,
+  });
+
+  assert.equal(summary.status, "cancelled");
+  assert.equal(summary.reason, "export flush failed");
+  assert.equal(summary.recordsExported, 2);
+  assert.equal(summary.recordsSkipped, 0);
+  assert.equal(records.filter(record => record.eventName).length, 2);
+  assert.equal(shutdownCalls, 1);
+});
+
+test("/obs backfill reports shutdown-only failures after successful emits", async () => {
+  const notifications = [];
+  const records = [];
+  const config = cloneDefaultConfig();
+  let shutdownCalls = 0;
+
+  const summary = await runObsBackfill(createContext([userEntry("a1", "2026-07-07T11:30:00.000Z", "one")], notifications), {
+    currentSession: true,
+    since: "1h",
+    sinceMs: 60 * 60 * 1000,
+  }, {
+    loadConfig: async () => config,
+    createExporter: () => ({
+      emit: record => records.push(record),
+      flush: () => undefined,
+      shutdown: () => {
+        shutdownCalls += 1;
+        throw new Error("shutdown failed");
+      },
+    }),
+    now: () => now,
+    maxRecords: 10,
+  });
+
+  assert.equal(summary.status, "cancelled");
+  assert.equal(summary.reason, "export shutdown failed");
+  assert.equal(summary.recordsExported, 1);
+  assert.equal(summary.recordsSkipped, 0);
+  assert.equal(shutdownCalls, 1);
 });
 
 test("/obs backfill exporter errors are reported without secret-bearing details", async () => {
@@ -369,8 +593,9 @@ test("/obs backfill exporter errors are reported without secret-bearing details"
     maxRecords: 10,
   });
 
-  assert.equal(notifications.at(-1).type, "error");
-  assert.match(notifications.at(-1).message, /operation failed/u);
+  assert.equal(notifications.at(-1).type, "warning");
+  assert.match(notifications.at(-1).message, /ObservMe backfill cancelled: export emit failed/u);
+  assert.match(notifications.at(-1).message, /Records not exported: 1/u);
   assert.doesNotMatch(notifications.at(-1).message, /abc123|private\.env|OBSERVME_TOKEN|prompt text/u);
   assert.equal(records.at(-1).shutdown, true);
 });

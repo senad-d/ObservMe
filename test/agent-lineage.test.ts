@@ -37,6 +37,8 @@ const sensitiveIdentityInputs = [
   "host-prod-17",
 ];
 const forbiddenMetricLabelValues = ["workflow-unit", "agent-root", "agent-parent", "agent-child", "spawn-unit"];
+const staleTraceparent = "00-cccccccccccccccccccccccccccccccc-dddddddddddddddd-01";
+const expectedTraceparent = `00-${validSpanContext.traceId}-${validSpanContext.spanId}-01`;
 
 function cloneConfig(overrides: Record<string, unknown> = {}) {
   return mergeConfig(structuredClone(defaultObservMeConfig), overrides);
@@ -189,7 +191,7 @@ function createSpanRegistry() {
 
 interface SubagentSessionOptions {
   readonly config?: ReturnType<typeof cloneConfig>;
-  readonly lineage?: ReturnType<typeof makeRootLineage>;
+  readonly lineage?: ReturnType<typeof makeRootLineage> | ReturnType<typeof createAgentLineageContext>;
   readonly spanContext?: typeof validSpanContext;
 }
 
@@ -253,6 +255,26 @@ function assertNoForbiddenLineageLabelValues(record: TestMetricRecord): void {
   }
 }
 
+function stalePropagationEnvironment(): NodeJS.ProcessEnv {
+  return {
+    OBSERVME_WORKFLOW_ID: "workflow-stale",
+    OBSERVME_AGENT_ID: "agent-stale",
+    OBSERVME_PARENT_AGENT_ID: "parent-stale",
+    OBSERVME_ROOT_AGENT_ID: "root-stale",
+    OBSERVME_PARENT_SESSION_ID: "session-stale",
+    OBSERVME_PARENT_TRACE_ID: "cccccccccccccccccccccccccccccccc",
+    OBSERVME_PARENT_SPAN_ID: "dddddddddddddddd",
+    OBSERVME_AGENT_DEPTH: "41",
+    OBSERVME_SPAWN_ID: "spawn-stale",
+    OBSERVME_AGENT_CAPABILITY: "capability-stale",
+    traceparent: staleTraceparent,
+    tracestate: "stale=state",
+    TRACEPARENT: staleTraceparent,
+    TRACESTATE: "upper=stale",
+    SAFE_ENV: "kept",
+  };
+}
+
 test("workflow and agent IDs are generated and never derived from sensitive local identity inputs", () => {
   const lineage = createAgentLineageContext({
     config: defaultObservMeConfig,
@@ -293,6 +315,105 @@ test("subagent without W3C trace context still propagates safe workflow, parent,
   assert.equal(observed?.rootAgentId, "agent-root");
   assert.equal(observed?.orphaned, false);
   assert.equal(metricSum(session.metricRecords, OBSERVME_COUNTER_METRIC_NAMES.TRACE_CONTEXT_PROPAGATION_FAILURES_TOTAL), 1);
+  assertNoUnsafeMetricLabels(session.metricRecords);
+});
+
+test("subagent propagation clears stale ObservMe and W3C context when trace propagation is disabled", () => {
+  const session = createSubagentSession({ config: cloneConfig({ agent: { propagateTraceContext: false } }) });
+  const started = startSubagentSpawn(session, {
+    spawnId: "spawn-current-disabled-context",
+    spawnType: "command",
+    env: stalePropagationEnvironment(),
+  });
+  const observedLineage = createAgentLineageContext({
+    config: session.config,
+    env: started.env,
+    trustedParentContext: true,
+    generateId: () => "observed-child",
+  });
+  const observed = observeTrustedSubagentLineage(session, started.env, { generateId: () => "observed-child" });
+
+  assert.equal(started.traceContextPropagated, false);
+  assert.equal(started.env.SAFE_ENV, "kept");
+  assert.equal(started.env.OBSERVME_WORKFLOW_ID, "workflow-unit");
+  assert.equal(started.env.OBSERVME_PARENT_AGENT_ID, "agent-root");
+  assert.equal(started.env.OBSERVME_ROOT_AGENT_ID, "agent-root");
+  assert.equal(started.env.OBSERVME_PARENT_SESSION_ID, "session-lineage-unit");
+  assert.equal(started.env.OBSERVME_SPAWN_ID, "spawn-current-disabled-context");
+  assert.equal(started.env.OBSERVME_AGENT_ID, undefined);
+  assert.equal(started.env.OBSERVME_PARENT_TRACE_ID, undefined);
+  assert.equal(started.env.OBSERVME_PARENT_SPAN_ID, undefined);
+  assert.equal(started.env.traceparent, undefined);
+  assert.equal(started.env.tracestate, undefined);
+  assert.equal(started.env.TRACEPARENT, undefined);
+  assert.equal(started.env.TRACESTATE, undefined);
+  assert.equal(observedLineage.agentId, "agent-observed-child");
+  assert.equal(observedLineage.parentAgentId, "agent-root");
+  assert.equal(observedLineage.rootAgentId, "agent-root");
+  assert.equal(observedLineage.spawnId, "spawn-current-disabled-context");
+  assert.equal(observedLineage.parentTraceId, undefined);
+  assert.equal(observedLineage.parentSpanId, undefined);
+  assert.equal(observed?.agentId, observedLineage.agentId);
+  assertNoUnsafeMetricLabels(session.metricRecords);
+});
+
+test("nested subagent propagation replaces stale inherited context with current lineage", () => {
+  const config = cloneConfig();
+  const rootSession = createSubagentSession({ config });
+  const childStarted = startSubagentSpawn(rootSession, { spawnId: "spawn-child-current", env: stalePropagationEnvironment() });
+  const childLineage = createAgentLineageContext({
+    config,
+    env: childStarted.env,
+    trustedParentContext: true,
+    generateId: () => "child-generated",
+  });
+  const childSession = createSubagentSession({ config, lineage: childLineage });
+  const grandchildStarted = startSubagentSpawn(childSession, {
+    spawnId: "spawn-grandchild-current",
+    env: { ...childStarted.env, ...stalePropagationEnvironment() },
+  });
+  const grandchildLineage = observeTrustedSubagentLineage(childSession, grandchildStarted.env, {
+    generateId: () => "grandchild-generated",
+  });
+
+  assert.equal(childStarted.env.OBSERVME_AGENT_ID, undefined);
+  assert.equal(childStarted.env.traceparent, expectedTraceparent);
+  assert.equal(childStarted.env.TRACEPARENT, undefined);
+  assert.equal(childLineage.agentId, "agent-child-generated");
+  assert.equal(grandchildStarted.env.OBSERVME_WORKFLOW_ID, childLineage.workflowId);
+  assert.equal(grandchildStarted.env.OBSERVME_PARENT_AGENT_ID, childLineage.agentId);
+  assert.equal(grandchildStarted.env.OBSERVME_ROOT_AGENT_ID, childLineage.rootAgentId);
+  assert.equal(grandchildStarted.env.OBSERVME_AGENT_DEPTH, String(childLineage.depth));
+  assert.equal(grandchildStarted.env.OBSERVME_SPAWN_ID, "spawn-grandchild-current");
+  assert.equal(grandchildStarted.env.OBSERVME_AGENT_ID, undefined);
+  assert.equal(grandchildStarted.env.OBSERVME_PARENT_TRACE_ID, validSpanContext.traceId);
+  assert.equal(grandchildStarted.env.OBSERVME_PARENT_SPAN_ID, validSpanContext.spanId);
+  assert.equal(grandchildStarted.env.traceparent, expectedTraceparent);
+  assert.equal(grandchildStarted.env.tracestate, undefined);
+  assert.equal(grandchildStarted.env.TRACEPARENT, undefined);
+  assert.equal(grandchildStarted.env.TRACESTATE, undefined);
+  assert.equal(grandchildLineage?.agentId, "agent-grandchild-generated");
+  assert.equal(grandchildLineage?.parentAgentId, childLineage.agentId);
+  assert.equal(grandchildLineage?.rootAgentId, childLineage.rootAgentId);
+  assert.equal(grandchildLineage?.depth, childLineage.depth + 1);
+  assertNoUnsafeMetricLabels(rootSession.metricRecords);
+  assertNoUnsafeMetricLabels(childSession.metricRecords);
+});
+
+test("malformed propagated lineage records failure telemetry without raw inherited environment values", () => {
+  const session = createSubagentSession();
+  const observed = observeTrustedSubagentLineage(session, {
+    OBSERVME_WORKFLOW_ID: "bad/workflow",
+    OBSERVME_AGENT_ID: "agent-stale-secret",
+    COMMAND_LINE: "pi subagent --prompt private customer incident",
+  });
+  const serializedLogs = JSON.stringify(session.logger.records);
+
+  assert.equal(observed, undefined);
+  assert.equal(metricSum(session.metricRecords, OBSERVME_COUNTER_METRIC_NAMES.TRACE_CONTEXT_PROPAGATION_FAILURES_TOTAL), 1);
+  assert.equal(serializedLogs.includes("bad/workflow"), false);
+  assert.equal(serializedLogs.includes("agent-stale-secret"), false);
+  assert.equal(serializedLogs.includes("private customer incident"), false);
   assertNoUnsafeMetricLabels(session.metricRecords);
 });
 

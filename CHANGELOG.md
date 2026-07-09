@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Added a post-remediation review-closure validation matrix that maps every review task to focused checks, smoke commands, integration categories, or documented blockers.
+- Extended the Pi RPC runtime smoke with credential-free sanitized event-shape coverage for model/thinking changes, agent turns, built-in tool lifecycle events, `message_end`, and documented `user_bash` interactive-only validation.
+- Bounded `/obs agents` recent-child rendering for large agent trees while preserving latest-child, wait/join, aggregate, and drill-down summaries.
+- Made `/obs backfill` export operations use a per-run abort signal with timeout cleanup, bounded OTEL flush/shutdown helpers, and partial failure summaries.
+- Serialized ObservMe session start, shutdown, reload, and replacement lifecycle transitions through one queue with delayed-start regression coverage.
+- Added fallback-path coverage for partial/out-of-order Pi turn and tool events, including drops for missing turn/tool state instead of silent synthetic success telemetry.
+- Aligned npm package contents with README-promised dashboards, examples, images, and production docs while keeping local-stack secrets/state and planning specs repository-only.
+- Made lifecycle smoke validation offline by disabling telemetry exporters through an explicit test config and documenting ignored coverage artifacts.
+- Repaired README validation-command drift by adding the documented `lint:fix` script, removing the stale TUI artifact script, and testing README/package script consistency.
+- Consolidated sensitive query/session-id rejection and diagnostic redaction through a shared corpus used by Grafana, Prometheus, Loki, Tempo, and `/obs` commands.
+- Centralized content-capture policy so live telemetry and `/obs backfill` consistently omit disabled content, redact enabled content, drop redaction failures, or export raw truncated content only under explicit unsafe capture.
+- Sanitized health, Grafana transport, trusted-project bootstrap, and OTEL shutdown diagnostics before rendering or logging failure details.
+- Cleared stale ObservMe and W3C propagation variables before building subagent environments so child runs never inherit unrelated agent or trace context.
+- Stopped treating Pi `user_bash` pre-execution events as completed bash runs; completed bash spans now require a real result event.
+- Rejected production HTTP transport for OTLP signal-specific endpoints and Grafana query URLs unless insecure transport is explicitly allowed.
+- Salted telemetry, redaction, and subagent command hashes with the configured tenant salt and made missing hash salt fail closed without exporting raw values.
 - Refreshed the review-validation checklist to reference the current review spec files and final-pass validation/audit commands.
 - Extended the Pi RPC runtime smoke to verify extension reload and `new_session` replacement keep ObservMe `/obs status` and `/obs session` usable with fresh runtime state.
 - Hardened parallel Pi tool lifecycle handling so ambiguous missing tool IDs are dropped with diagnostics instead of mutating sibling spans.

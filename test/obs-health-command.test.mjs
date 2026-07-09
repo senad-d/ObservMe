@@ -183,6 +183,31 @@ test("/obs health diagnostics do not render configured header secrets", async ()
   assert.doesNotMatch(notifications[0].message, /otlp-header-secret|grafana-token-secret|grafana-password-secret|private\.env/u);
 });
 
+test("/obs health stores sanitized failure details before rendering", async () => {
+  const config = cloneDefaultConfig();
+  config.otlp.endpoint = "http://collector.local:4318";
+  config.query.grafana.url = "http://grafana.local:3000";
+  config.query.grafana.token = "grafana-token";
+
+  const snapshot = await getObsHealthSnapshot(createCommandContext([]), {
+    loadConfig: async () => config,
+    fetch: async input => {
+      if (String(input) === "http://collector.local:4318") {
+        throw new Error(
+          "Authorization: Basic private-basic password=collector-password /Users/senad/private.env rm -rf /tmp/demo OBSERVME_TOKEN=collector-token",
+        );
+      }
+
+      return createHealthyResponse();
+    },
+    timeoutMs: 25,
+  });
+
+  assert.equal(snapshot.checks[0].status, "failed");
+  assert.match(snapshot.checks[0].detail, /\[redacted\]/u);
+  assert.doesNotMatch(snapshot.checks[0].detail, /private-basic|collector-password|private\.env|rm -rf|collector-token/u);
+});
+
 test("root obs command dispatches status and health subcommands", async () => {
   const pi = createFakeCommandPi();
   const config = cloneDefaultConfig();

@@ -68,6 +68,7 @@ export interface ObsAgentsSnapshot {
   readonly aggregateRows: ObsAgentsAggregateRows;
   readonly tempoSearchAttributes: Record<string, string>;
   readonly traces: readonly TraceSummary[];
+  readonly recentChildrenLimit?: number;
 }
 
 export type ObsAgentsConfigLoader = (options: LoadSessionConfigOptions) => Promise<ObservMeConfig>;
@@ -108,6 +109,7 @@ const OBS_AGENTS_ERROR_NEXT_ACTION = "run /obs health and verify Grafana credent
 const OBS_AGENTS_PROMETHEUS_NEXT_ACTION = "verify the Metrics datasource with /obs health, then rerun /obs agents.";
 const OBS_AGENTS_TEMPO_NEXT_ACTION = "verify the Tempo datasource with /obs health, then rerun /obs agents.";
 const DEFAULT_TRACE_SEARCH_RANGE_HOURS = 24;
+const DEFAULT_RECENT_CHILDREN_RENDER_LIMIT = 10;
 const millisecondsPerHour = 60 * 60 * 1000;
 const emptyAgentTreeSummary = {
   activeChildren: 0,
@@ -178,7 +180,7 @@ export async function getObsAgentsSnapshot(
     queryObsAgentsTempoTraces(config, runtime, options),
   ]);
 
-  return buildObsAgentsSnapshot(runtime, aggregateResults, traces);
+  return buildObsAgentsSnapshot(runtime, aggregateResults, traces, config.query.maxAgents);
 }
 
 export function renderObsAgents(snapshot: ObsAgentsSnapshot): string {
@@ -186,10 +188,10 @@ export function renderObsAgents(snapshot: ObsAgentsSnapshot): string {
   const lines = [
     `Workflow: ${formatUnknown(snapshot.workflowId)} root=${formatUnknown(snapshot.workflowRootAgentId ?? snapshot.rootAgentId)}`,
     `Agent: ${formatUnknown(snapshot.agentId)} (${snapshot.role} depth=${snapshot.depth})`,
-    `Session: ${formatUnknown(snapshot.sessionId)}`,
+    `Session: ${formatUnknown(normalizeOptionalString(snapshot.sessionId))}`,
     `Subagents spawned in current trace: ${snapshot.fanoutCount}`,
     `Current tree: depth=${snapshot.treeDepth} width=${snapshot.treeWidth} active=${snapshot.activeChildren} orphaned=${snapshot.orphanCount}`,
-    `Recent children: ${renderRecentChildren(snapshot.children)}`,
+    `Recent children: ${renderRecentChildren(snapshot.children, snapshot.recentChildrenLimit)}`,
   ];
 
   if (latestChild) lines.push(`Latest child: ${renderLatestChild(latestChild, snapshot.waitJoinHints)}`);
@@ -263,6 +265,7 @@ function buildObsAgentsSnapshot(
   runtime: ObsAgentsRuntimeSnapshot,
   aggregateResults: ObsAgentsQueryResults,
   traces: readonly TraceSummary[],
+  maxRecentChildren: number | undefined,
 ): ObsAgentsSnapshot {
   const lineage = runtime.lineage;
   const currentAgent = runtime.currentAgent;
@@ -295,6 +298,7 @@ function buildObsAgentsSnapshot(
     },
     tempoSearchAttributes: createTempoSearchAttributes(runtime),
     traces,
+    recentChildrenLimit: normalizeRecentChildrenLimit(maxRecentChildren),
   };
 }
 
@@ -348,9 +352,28 @@ function readLatestChild(children: readonly ObsAgentChildRow[]): ObsAgentChildRo
   return children.at(-1);
 }
 
-function renderRecentChildren(children: readonly ObsAgentChildRow[]): string {
+function renderRecentChildren(children: readonly ObsAgentChildRow[], limit: number | undefined): string {
   if (children.length === 0) return "none";
-  return children.map(renderRecentChild).join("; ");
+
+  const selection = selectRecentChildrenForRender(children, limit);
+  const rendered = selection.children.map(renderRecentChild).join("; ");
+  if (selection.omittedCount === 0) return rendered;
+  return `${rendered}; omitted ${selection.omittedCount} child row(s)`;
+}
+
+function selectRecentChildrenForRender(
+  children: readonly ObsAgentChildRow[],
+  limit: number | undefined,
+): { readonly children: readonly ObsAgentChildRow[]; readonly omittedCount: number } {
+  const normalizedLimit = normalizeRecentChildrenLimit(limit);
+  if (children.length <= normalizedLimit) return { children, omittedCount: 0 };
+
+  if (normalizedLimit === 1) return { children: children.slice(-1), omittedCount: children.length - 1 };
+
+  const firstCount = Math.floor(normalizedLimit / 2);
+  const lastCount = normalizedLimit - firstCount;
+  const visibleChildren = [...children.slice(0, firstCount), ...children.slice(-lastCount)];
+  return { children: visibleChildren, omittedCount: children.length - visibleChildren.length };
 }
 
 function renderRecentChild(child: ObsAgentChildRow): string {
@@ -394,7 +417,7 @@ function renderAggregateRows(rows: ObsAgentsAggregateRows): string {
 function renderLineageDrilldown(snapshot: ObsAgentsSnapshot): string {
   const attrs = Object.keys(snapshot.tempoSearchAttributes).join(", ") || "none";
   const traceCount = snapshot.traces.length;
-  const latestTrace = snapshot.traces[0]?.traceId ?? snapshot.traceId;
+  const latestTrace = normalizeOptionalString(snapshot.traces[0]?.traceId) ?? normalizeOptionalString(snapshot.traceId);
   const traceSuffix = latestTrace ? ` latest_trace=${latestTrace}` : "";
   return `Tempo attributes ${attrs} traces=${traceCount}${traceSuffix}`;
 }
@@ -422,6 +445,11 @@ function parseMetricValue(value: string | number | undefined): number | undefine
 function normalizeCount(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value) || value < 0) return 0;
   return Math.trunc(value);
+}
+
+function normalizeRecentChildrenLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value < 1) return DEFAULT_RECENT_CHILDREN_RENDER_LIMIT;
+  return Math.min(Math.trunc(value), DEFAULT_RECENT_CHILDREN_RENDER_LIMIT);
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {

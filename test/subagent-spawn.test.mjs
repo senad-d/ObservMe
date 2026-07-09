@@ -18,6 +18,8 @@ import {
 } from "../src/semconv/metrics.ts";
 import { SPAN_NAMES } from "../src/semconv/spans.ts";
 
+process.env.OBSERVME_HASH_SALT = "subagent-spawn-test-salt";
+
 const validSpanContext = {
   traceId: "11111111111111111111111111111111",
   spanId: "2222222222222222",

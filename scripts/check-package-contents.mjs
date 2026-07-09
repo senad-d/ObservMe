@@ -9,11 +9,30 @@ const hiddenEnvironmentFilePattern = /(^|\/)\.env(?:$|\.)/u;
 const secretMaterialFilePattern = /(?:^|\/)(?:id_(?:rsa|dsa|ecdsa|ed25519)|[^/]+\.(?:pem|key|p12|pfx|jks|keystore))(?:$|\/)$/iu;
 const secretDirectoryPattern = /(^|\/)(?:secrets?|credentials?)(?:\/|$)/iu;
 const allowedEnvironmentExampleFiles = new Set([".env.example"]);
+const requiredPackagedFiles = [
+  ".env.example",
+  "README.md",
+  "LICENSE",
+  "SECURITY.md",
+  "CHANGELOG.md",
+  "docs/configuration.md",
+  "docs/compatibility-matrix.md",
+  "ObservMe-Production-Docs/00-README.md",
+  "ObservMe-Production-Docs/12-configuration-reference.md",
+  "dashboards/observme-overview.json",
+  "dashboards/observme-trace-journey.json",
+  "dashboards/observme-alerts.yaml",
+  "dashboards/observme-slos.yaml",
+  "examples/observme.yaml",
+  "examples/collector.yaml",
+  "img/icon.svg",
+  "img/demo.gif",
+];
 
 const forbiddenChecks = [
   { label: "environment files", test: path => hiddenEnvironmentFilePattern.test(path) && !allowedEnvironmentExampleFiles.has(fileName(path)) },
   { label: "secret material", test: path => secretMaterialFilePattern.test(path) || secretDirectoryPattern.test(path) },
-  { label: "project-local pi state", test: path => path === ".pi" || path.startsWith(".pi/") },
+  { label: "project-local pi state", test: path => path === ".pi" || path.startsWith(".pi/") || path.includes("/.pi/") },
   { label: "node_modules", test: path => path.startsWith("node_modules/") || path.includes("/node_modules/") },
   { label: "planning specs", test: path => path.startsWith("specs/") || path.includes("/specs/") },
   { label: "local caches", test: path => /(^|\/)(\.cache|\.local|\.trivycache)(\/|$)/u.test(path) },
@@ -38,6 +57,11 @@ export function findForbiddenPackageFiles(files) {
   return violations;
 }
 
+export function findMissingRequiredPackageFiles(files) {
+  const packagedFiles = new Set(files);
+  return requiredPackagedFiles.filter(file => !packagedFiles.has(file));
+}
+
 export function readPackFiles() {
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const output = execFileSync(npmCommand, ["pack", "--dry-run", "--json"], {
@@ -55,9 +79,15 @@ export function readPackFiles() {
 export function runPackageContentsCheck(log = console.log, error = console.error) {
   const files = readPackFiles();
   const violations = findForbiddenPackageFiles(files);
+  const missingRequiredFiles = findMissingRequiredPackageFiles(files);
 
   log(`${pkg.name} package dry-run contains ${files.length} file(s).`);
   for (const file of files) log(`- ${file}`);
+
+  if (missingRequiredFiles.length > 0) {
+    error("\nRequired package contents are missing:");
+    for (const file of missingRequiredFiles) error(`- ${file}`);
+  }
 
   if (violations.length > 0) {
     error("\nForbidden package contents detected:");
@@ -66,7 +96,7 @@ export function runPackageContentsCheck(log = console.log, error = console.error
     }
   }
 
-  return { files, violations };
+  return { files, violations, missingRequiredFiles };
 }
 
 function isCliEntrypoint() {
@@ -75,5 +105,5 @@ function isCliEntrypoint() {
 
 if (isCliEntrypoint()) {
   const result = runPackageContentsCheck();
-  if (result.violations.length > 0) process.exitCode = 1;
+  if (result.violations.length > 0 || result.missingRequiredFiles.length > 0) process.exitCode = 1;
 }

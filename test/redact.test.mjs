@@ -7,6 +7,12 @@ import {
 } from "../src/privacy/redact.ts";
 import { SECRET_TYPES } from "../src/privacy/secret-patterns.ts";
 
+const tenantSaltSource = {
+  secureRuntimeConfig: {
+    tenantSalt: "redact-test-salt",
+  },
+};
+
 const expectedPipelineStages = [
   "size_guard",
   "secret_detector",
@@ -22,6 +28,7 @@ function defaultOptions(overrides = {}) {
   return {
     pathMode: "hash",
     customRedactionPatterns: [],
+    tenantSaltSource,
     ...overrides,
   };
 }
@@ -60,19 +67,42 @@ test("built-in secret detector redacts values with documented replacement shape"
   assert.equal(result.dropped, false);
   assert.equal(
     result.value,
-    `Authorization: [REDACTED:${SECRET_TYPES.GENERIC_BEARER_TOKEN}:${sha256Prefix(tokenValue)}]`,
+    `Authorization: [REDACTED:${SECRET_TYPES.GENERIC_BEARER_TOKEN}:${sha256Prefix(tokenValue, tenantSaltSource)}]`,
   );
 });
 
 test("path redaction hash mode matches documented home-path transformations", () => {
   assert.equal(
-    redactPath("/home/alice/projects/customer-x/app.ts", "hash"),
-    `/<home>/${sha256Prefix("/home/alice/projects/customer-x")}/app.ts`,
+    redactPath("/home/alice/projects/customer-x/app.ts", "hash", tenantSaltSource),
+    `/<home>/${sha256Prefix("/home/alice/projects/customer-x", tenantSaltSource)}/app.ts`,
   );
   assert.equal(
-    redactPath("/Users/alice/work/acme-secret/main.py", "hash"),
-    `/<home>/${sha256Prefix("/Users/alice/work/acme-secret")}/main.py`,
+    redactPath("/Users/alice/work/acme-secret/main.py", "hash", tenantSaltSource),
+    `/<home>/${sha256Prefix("/Users/alice/work/acme-secret", tenantSaltSource)}/main.py`,
   );
+});
+
+test("redaction replacement hashes are tenant salted and fail closed when salt is missing", () => {
+  const first = redactValue("secret token", defaultOptions({
+    piiEnabled: true,
+    piiDetector: () => [{ type: "token", value: "secret", start: 0, end: 6 }],
+  }));
+  const second = redactValue("secret token", defaultOptions({
+    piiEnabled: true,
+    piiDetector: () => [{ type: "token", value: "secret", start: 0, end: 6 }],
+    tenantSaltSource: { secureRuntimeConfig: { tenantSalt: "other-redact-test-salt" } },
+  }));
+  const missing = redactValue("secret token", {
+    pathMode: "hash",
+    customRedactionPatterns: [],
+    piiEnabled: true,
+    piiDetector: () => [{ type: "token", value: "secret", start: 0, end: 6 }],
+  });
+
+  assert.notEqual(first.value, second.value);
+  assert.equal(missing.dropped, true);
+  assert.equal(missing.value, undefined);
+  assert.match(missing.errors[0], /tenant salt source is required/u);
 });
 
 test("path redaction supports basename, full, and drop modes", () => {
@@ -140,5 +170,5 @@ test("truncation happens before hashing and records original length", () => {
   assert.equal(result.value, "abc");
   assert.equal(result.truncated, true);
   assert.equal(result.originalLength, 6);
-  assert.equal(result.hash, sha256Prefix("abc") + result.hash?.slice(12));
+  assert.equal(result.hash, sha256Prefix("abc", tenantSaltSource) + result.hash?.slice(12));
 });

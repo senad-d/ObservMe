@@ -5,6 +5,7 @@ Working on code for Pi extension and Pi tools.
 - Focus on completing one task at a time and mark it with an "x" when the acceptance criteria are met.
 - Update CHANGELOG.md
 - Avoid nesting functions.
+- Avoid mentioning spec-review-pi-extension-* in other files.
 
 ## Task golden standard example:
 ```

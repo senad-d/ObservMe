@@ -137,15 +137,15 @@ test("searchTempo rejects raw prompts, commands, paths, environment values, and 
   );
   await assert.rejects(
     searchTempo(config, { "pi.bash.command.hash": "rm -rf /tmp/demo" }, defaultRange, { fetch: fetcher }),
-    /raw prompts, commands, paths, and environment values/u,
+    /raw prompts, commands, paths, and (?:inherited )?environment values/u,
   );
   await assert.rejects(
     searchTempo(config, { "pi.cwd.hash": "/Users/example/.ssh/id_rsa" }, defaultRange, { fetch: fetcher }),
-    /raw prompts, commands, paths, and environment values/u,
+    /raw prompts, commands, paths, and (?:inherited )?environment values/u,
   );
   await assert.rejects(
     searchTempo(config, { "pi.agent.id": "OBSERVME_PARENT_AGENT_ID=agent-1" }, defaultRange, { fetch: fetcher }),
-    /raw prompts, commands, paths, and environment values/u,
+    /raw prompts, commands, paths, and (?:inherited )?environment values/u,
   );
   await assert.rejects(
     searchTempo(config, { "pi.tool.name": "bash" }, defaultRange, { fetch: fetcher }),

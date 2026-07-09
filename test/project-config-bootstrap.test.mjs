@@ -124,6 +124,26 @@ test("bootstrapProjectObservMeConfig centralizes project path, trust, and notifi
   ]);
 });
 
+test("bootstrapProjectObservMeConfig sanitizes failure notifications", async () => {
+  const context = createContext("/workspace/demo", true);
+  const result = await bootstrapProjectObservMeConfig(context, {
+    ensureProjectConfig: async () => {
+      throw new Error(
+        "Authorization: Bearer bootstrap-token password=bootstrap-password /Users/senad/private.env npm run secret OBSERVME_TOKEN=env-secret",
+      );
+    },
+  });
+
+  assert.equal(result, undefined);
+  assert.equal(context.notifications.length, 1);
+  assert.equal(context.notifications[0].level, "warning");
+  assert.match(context.notifications[0].message, /ObservMe could not create the project config file/u);
+  assert.doesNotMatch(
+    context.notifications[0].message,
+    /bootstrap-token|bootstrap-password|private\.env|npm run secret|env-secret/u,
+  );
+});
+
 test("registerHandlers creates the project file before loading session config", async () => {
   const pi = createFakePi();
   const order = [];

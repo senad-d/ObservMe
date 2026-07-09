@@ -26,13 +26,16 @@ import {
   extractAssistantText,
   extractPayloadPromptText,
   hashValue,
+  hasBashCompletionResult,
   isAssistantMessage,
   llmMetricLabels,
   metricLabels,
   readMessage,
+  recordOptionalBashContent,
   recordOptionalLlmContent,
   recordOptionalPromptContent,
   recordOptionalToolArguments,
+  recordOptionalToolResult,
   safeJsonLength,
   toolMetricLabels,
 } from "../src/pi/handler-internals.ts";
@@ -42,6 +45,7 @@ import type { TestLogRecord } from "./support/telemetry-types.ts";
 
 const hexadecimalHash = /^[a-f0-9]{64}$/u;
 const lowCardinalityLabelKeys = ["environment", "agent_role"];
+process.env.OBSERVME_HASH_SALT = "handler-internals-test-salt";
 const sessionAttributes = {
   "pi.session.id": "session-123",
   "pi.model.provider.current": "anthropic",
@@ -207,19 +211,26 @@ test("LLM parser and attribute helpers isolate message, prompt, usage, and cost 
 });
 
 test("tool attribute builders normalize identity, result payloads, failures, and labels", () => {
-  const callAttributes = buildToolCallInputAttributes({
-    toolCall: { name: "Read.File", input: { path: "/Users/alice/private.txt" } },
-  });
+  const session = createSession();
+  const callAttributes = buildToolCallInputAttributes(
+    {
+      toolCall: { name: "Read.File", input: { path: "/Users/alice/private.txt" } },
+    },
+    session.config,
+  );
 
   assert.equal(callAttributes[TOOL_ATTRIBUTES.PI_TOOL_NAME], "read.file");
   assert.equal(callAttributes[TOOL_ATTRIBUTES.PI_TOOL_CATEGORY], "filesystem");
   assert.match(String(callAttributes[TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_HASH]), hexadecimalHash);
   assert.equal(callAttributes[TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_SIZE], JSON.stringify({ path: "/Users/alice/private.txt" }).length);
 
-  const resultAttributes = buildToolResultAttributes({
-    name: "curl.fetch",
-    result: { ok: false, token: "internal_token=abc123" },
-  });
+  const resultAttributes = buildToolResultAttributes(
+    {
+      name: "curl.fetch",
+      result: { ok: false, token: "internal_token=abc123" },
+    },
+    session.config,
+  );
 
   assert.equal(resultAttributes[TOOL_ATTRIBUTES.PI_TOOL_NAME], "curl.fetch");
   assert.equal(resultAttributes[TOOL_ATTRIBUTES.PI_TOOL_CATEGORY], "network");
@@ -267,23 +278,32 @@ test("bash payload normalization handles nested messages, streams, status, and p
   assert.equal(bashExecutionFailed(event), true);
   assert.equal(bashErrorClass(event), "non_zero_exit");
 
-  const partialAttributes = buildBashExecutionAttributes({ message: { role: "user", content: "not bash" } }, session);
+  const partialEvent = { message: { role: "user", content: "not bash" } };
+  const partialAttributes = buildBashExecutionAttributes(partialEvent, session);
   assert.equal(partialAttributes[BASH_ATTRIBUTES.PI_BASH_COMMAND_HASH], undefined);
   assert.equal(partialAttributes[BASH_ATTRIBUTES.PI_BASH_OUTPUT_HASH], undefined);
   assert.equal(partialAttributes[BASH_ATTRIBUTES.PI_BASH_CANCELLED], false);
   assert.equal(partialAttributes[BASH_ATTRIBUTES.PI_BASH_FULL_OUTPUT_PATH_PRESENT], false);
+  assert.equal(hasBashCompletionResult({ command: "echo ok", cwd: "/workspace/demo" }), false);
+  assert.equal(hasBashCompletionResult(partialEvent), false);
+  assert.equal(hasBashCompletionResult(event), true);
+  assert.equal(hasBashCompletionResult({ role: "bashExecution", command: "echo ok", output: "ok" }), true);
+  assert.equal(hasBashCompletionResult({ role: "bashExecution", command: "echo ok", result: { exitCode: 0 } }), true);
 });
 
 test("branch and compaction builders hash summaries and paths while preserving structural fields", () => {
   const session = createSession();
-  session.currentBranchPreparation = buildBranchPreparationState({
-    preparation: {
-      targetId: "target-entry",
-      oldLeafId: "old-entry",
-      commonAncestorId: "root-entry",
-      branchPath: ["root-entry", "old-entry", "target-entry"],
+  session.currentBranchPreparation = buildBranchPreparationState(
+    {
+      preparation: {
+        targetId: "target-entry",
+        oldLeafId: "old-entry",
+        commonAncestorId: "root-entry",
+        branchPath: ["root-entry", "old-entry", "target-entry"],
+      },
     },
-  });
+    session.config,
+  );
 
   const branchAttributes = buildBranchAttributes(
     {
@@ -303,7 +323,7 @@ test("branch and compaction builders hash summaries and paths while preserving s
   assert.equal(branchAttributes[BRANCH_ATTRIBUTES.PI_BRANCH_TO_ID], "summary-entry");
   assert.equal(branchAttributes[BRANCH_ATTRIBUTES.PI_BRANCH_COMMON_ANCESTOR_ID], "root-entry");
   assert.match(String(branchAttributes[BRANCH_ATTRIBUTES.PI_BRANCH_PATH_HASH]), hexadecimalHash);
-  assert.equal(branchAttributes[BRANCH_ATTRIBUTES.PI_BRANCH_SUMMARY_HASH], hashValue("private summary with /Users/alice/project"));
+  assert.equal(branchAttributes[BRANCH_ATTRIBUTES.PI_BRANCH_SUMMARY_HASH], hashValue("private summary with /Users/alice/project", session.config));
   assert.equal(branchAttributes[BRANCH_ATTRIBUTES.PI_BRANCH_SUMMARY_LENGTH], "private summary with /Users/alice/project".length);
   assert.equal(branchAttributes[BRANCH_ATTRIBUTES.PI_BRANCH_READ_FILES_COUNT], 2);
   assert.equal(branchAttributes[BRANCH_ATTRIBUTES.PI_BRANCH_MODIFIED_FILES_COUNT], 1);
@@ -329,10 +349,40 @@ test("branch and compaction builders hash summaries and paths while preserving s
   assert.equal(compactionAttributes[COMMON_SPAN_ATTRIBUTES.PI_ENTRY_ID], "compact-1");
   assert.equal(compactionAttributes[COMPACTION_ATTRIBUTES.PI_COMPACTION_FIRST_KEPT_ENTRY_ID], "kept-1");
   assert.equal(compactionAttributes[COMPACTION_ATTRIBUTES.PI_COMPACTION_TOKENS_BEFORE], 42);
-  assert.equal(compactionAttributes[COMPACTION_ATTRIBUTES.PI_COMPACTION_SUMMARY_HASH], hashValue("private summary with internal_token=abc123"));
+  assert.equal(compactionAttributes[COMPACTION_ATTRIBUTES.PI_COMPACTION_SUMMARY_HASH], hashValue("private summary with internal_token=abc123", session.config));
   assert.equal(compactionAttributes[COMPACTION_ATTRIBUTES.PI_COMPACTION_READ_FILES_COUNT], 1);
   assert.equal(compactionAttributes[COMPACTION_ATTRIBUTES.PI_COMPACTION_MODIFIED_FILES_COUNT], 2);
   assertNoRawPrivateContent(compactionAttributes);
+});
+
+test("telemetry hashes use tenant salt and fail closed when salt is missing", () => {
+  const config = cloneConfig();
+  const previousSalt = process.env.OBSERVME_HASH_SALT;
+
+  try {
+    process.env.OBSERVME_HASH_SALT = "tenant-a";
+    const firstHash = hashValue("same private value", config);
+    const firstAttributes = buildToolCallInputAttributes({ input: "same private value" }, config);
+
+    process.env.OBSERVME_HASH_SALT = "tenant-b";
+    const differentTenantHash = hashValue("same private value", config);
+
+    process.env.OBSERVME_HASH_SALT = "tenant-a";
+    const stableHash = hashValue("same private value", config);
+
+    delete process.env.OBSERVME_HASH_SALT;
+    const missingSaltAttributes = buildToolCallInputAttributes({ input: "same private value" }, config);
+
+    assert.equal(firstHash, stableHash);
+    assert.notEqual(firstHash, differentTenantHash);
+    assert.equal(firstAttributes[TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_HASH], firstHash);
+    assert.equal(missingSaltAttributes[TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_HASH], undefined);
+    assert.equal(missingSaltAttributes[TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_SIZE], "same private value".length);
+    assert.doesNotMatch(JSON.stringify(missingSaltAttributes), /same private value/u);
+  } finally {
+    if (previousSalt === undefined) delete process.env.OBSERVME_HASH_SALT;
+    else process.env.OBSERVME_HASH_SALT = previousSalt;
+  }
 });
 
 test("optional content capture redacts values and metric labels stay low-cardinality", () => {
@@ -388,6 +438,61 @@ test("optional content capture redacts values and metric labels stay low-cardina
     model: "claude",
   });
   assert.equal(Object.keys(llmMetricLabels(session, {})).includes(LOG_ATTRIBUTES.PI_SESSION_ID), false);
+});
+
+test("unsafe live content capture exports the same truncated raw policy for prompt, tool result, and bash output", () => {
+  const session = createSession({
+    config: {
+      capture: { prompts: true, toolResults: true, bashOutput: true },
+      limits: { maxPromptChars: 12, maxToolResultChars: 12, maxBashOutputChars: 12 },
+      privacy: { redactionEnabled: false, allowUnsafeCapture: true },
+    },
+  });
+  const promptSpan = createFakeSpan();
+  const toolSpan = createFakeSpan();
+  const bashSpan = createFakeSpan();
+
+  recordOptionalPromptContent(session, promptSpan as never, { payload: { messages: [{ content: "password=prompt-secret" }] } });
+  recordOptionalToolResult(session, toolSpan as never, { result: "api_key=tool-secret" });
+  recordOptionalBashContent(session, bashSpan as never, { output: "token=bash-secret" });
+
+  assert.equal(promptSpan.attributes[LLM_ATTRIBUTES.PI_LLM_PROMPT_REDACTED], "password=pro");
+  assert.equal(toolSpan.attributes[TOOL_ATTRIBUTES.PI_TOOL_RESULT_REDACTED], "api_key=tool");
+  assert.equal(toolSpan.attributes[TOOL_ATTRIBUTES.GEN_AI_TOOL_CALL_RESULT], "api_key=tool");
+  assert.equal(bashSpan.attributes[BASH_ATTRIBUTES.PI_BASH_OUTPUT_REDACTED], "token=bash-s");
+  assert.equal(promptSpan.attributes[COMMON_SPAN_ATTRIBUTES.OBSERVME_TRUNCATED], true);
+  assert.equal(toolSpan.attributes[COMMON_SPAN_ATTRIBUTES.OBSERVME_TRUNCATED], true);
+  assert.equal(bashSpan.attributes[BASH_ATTRIBUTES.PI_BASH_TRUNCATED], true);
+  assert.equal((session.metrics.redactionFailures as ReturnType<typeof createFakeCounter>).records.length, 0);
+});
+
+test("live content capture drops prompt, tool result, and bash output when redaction fails", () => {
+  const previousSalt = process.env.OBSERVME_HASH_SALT;
+  delete process.env.OBSERVME_HASH_SALT;
+
+  try {
+    const session = createSession({
+      config: {
+        capture: { prompts: true, toolResults: true, bashOutput: true },
+        privacy: { redactionEnabled: true, allowUnsafeCapture: false },
+      },
+    });
+    const promptSpan = createFakeSpan();
+    const toolSpan = createFakeSpan();
+    const bashSpan = createFakeSpan();
+
+    recordOptionalPromptContent(session, promptSpan as never, { payload: { messages: [{ content: "password=prompt-secret" }] } });
+    recordOptionalToolResult(session, toolSpan as never, { result: "api_key=tool-secret" });
+    recordOptionalBashContent(session, bashSpan as never, { output: "token=bash-secret" });
+
+    assert.equal(promptSpan.attributes[LLM_ATTRIBUTES.PI_LLM_PROMPT_REDACTED], undefined);
+    assert.equal(toolSpan.attributes[TOOL_ATTRIBUTES.PI_TOOL_RESULT_REDACTED], undefined);
+    assert.equal(bashSpan.attributes[BASH_ATTRIBUTES.PI_BASH_OUTPUT_REDACTED], undefined);
+    assert.equal((session.metrics.redactionFailures as ReturnType<typeof createFakeCounter>).records.length, 3);
+  } finally {
+    if (previousSalt === undefined) delete process.env.OBSERVME_HASH_SALT;
+    else process.env.OBSERVME_HASH_SALT = previousSalt;
+  }
 });
 
 test("LLM response and thinking capture emit redacted content logs with truncation metadata", () => {

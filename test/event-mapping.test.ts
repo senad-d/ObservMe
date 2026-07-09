@@ -72,6 +72,8 @@ const forbiddenMetricLabelKeys = [
   "raw_error",
 ];
 const hiddenContentPattern = /hidden-|private-repo|do not export/u;
+process.env.OBSERVME_HASH_SALT = "event-mapping-test-salt";
+
 const validSpanContext: TestSpanContext = {
   traceId: "11111111111111111111111111111111",
   spanId: "2222222222222222",

@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
 import type { Counter, Histogram, Span } from "@opentelemetry/api";
 import { context as otelContext, SpanStatusCode, trace } from "@opentelemetry/api";
 import { recordObsSessionCost, recordObsSessionToolCall } from "../commands/obs-session.ts";
 import { recordObsStatusQueueDrop } from "../commands/obs-status.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
-import { redactValue } from "../privacy/redact.ts";
+import { trySha256 } from "../privacy/hash.ts";
+import { applyContentCapturePolicy } from "../privacy/content-capture.ts";
 import {
   AGENT_RUN_ATTRIBUTES,
   BASH_ATTRIBUTES,
@@ -302,7 +302,7 @@ export function buildAgentRunAttributes(event: unknown, session: ObservMeTelemet
     [AGENT_RUN_ATTRIBUTES.PI_AGENT_RUN_ID]: runId,
     [AGENT_RUN_ATTRIBUTES.PI_AGENT_RUN_INDEX]: session.agentRunSequence,
     [AGENT_RUN_ATTRIBUTES.PI_AGENT_RUN_SOURCE]: readString(event, "source") ?? "unknown",
-    [AGENT_RUN_ATTRIBUTES.PI_AGENT_RUN_PROMPT_HASH]: prompt ? hashValue(prompt) : undefined,
+    [AGENT_RUN_ATTRIBUTES.PI_AGENT_RUN_PROMPT_HASH]: prompt ? hashValue(prompt, session.config) : undefined,
     [AGENT_RUN_ATTRIBUTES.PI_AGENT_RUN_PROMPT_LENGTH]: prompt?.length,
     [AGENT_RUN_ATTRIBUTES.GEN_AI_AGENT_ID]: session.lineage.agentId,
   });
@@ -322,8 +322,8 @@ export function buildTurnAttributes(
     [COMMON_SPAN_ATTRIBUTES.PI_AGENT_RUN_ID]: runId,
     [TURN_ATTRIBUTES.PI_TURN_ID]: turnId,
     [TURN_ATTRIBUTES.PI_TURN_INDEX]: turnIndex,
-    [TURN_ATTRIBUTES.PI_TURN_BRANCH_PATH_HASH]: readString(event, "branchPath") ? hashValue(readString(event, "branchPath")!) : undefined,
-    [TURN_ATTRIBUTES.PI_TURN_USER_MESSAGE_HASH]: userMessage ? hashValue(userMessage) : undefined,
+    [TURN_ATTRIBUTES.PI_TURN_BRANCH_PATH_HASH]: readString(event, "branchPath") ? hashValue(readString(event, "branchPath")!, session.config) : undefined,
+    [TURN_ATTRIBUTES.PI_TURN_USER_MESSAGE_HASH]: userMessage ? hashValue(userMessage, session.config) : undefined,
     [TURN_ATTRIBUTES.PI_TURN_USER_MESSAGE_LENGTH]: userMessage?.length,
     [TURN_ATTRIBUTES.PI_TURN_USER_MESSAGE_IMAGE_COUNT]: readInteger(event, "imageCount") ?? 0,
     [TURN_ATTRIBUTES.PI_MODEL_PROVIDER_CURRENT]: resolveSessionModelProvider(event, {}, session),
@@ -391,7 +391,7 @@ export function buildLlmFinalAttributes(message: Record<string, unknown>, sessio
     [LLM_ATTRIBUTES.ERROR_TYPE]: isLlmError(message) ? "provider_error" : undefined,
     [LLM_ATTRIBUTES.PI_LLM_API]: readString(message, "api"),
     [LLM_ATTRIBUTES.PI_LLM_STOP_REASON]: stopReason,
-    [LLM_ATTRIBUTES.PI_LLM_ERROR_MESSAGE_HASH]: errorMessage ? hashValue(errorMessage) : undefined,
+    [LLM_ATTRIBUTES.PI_LLM_ERROR_MESSAGE_HASH]: errorMessage ? hashValue(errorMessage, session.config) : undefined,
     [LLM_ATTRIBUTES.PI_LLM_USAGE_TOTAL_TOKENS]: readNumber(usage, "totalTokens"),
     [LLM_ATTRIBUTES.PI_LLM_USAGE_CACHE_WRITE_1H_TOKENS]: readNumber(usage, "cacheWrite1h"),
     [LLM_ATTRIBUTES.PI_LLM_COST_INPUT_USD]: readNumber(cost, "input"),
@@ -408,21 +408,21 @@ export function buildToolStartAttributes(event: unknown, session: ObservMeTeleme
     [COMMON_SPAN_ATTRIBUTES.PI_AGENT_RUN_ID]: session.currentAgentRunId,
     [LOG_ATTRIBUTES.PI_TURN_ID]: session.currentTurnId,
     ...buildRequiredToolIdentityAttributes(event, toolCallId),
-    ...buildToolArgumentsAttributes(event),
+    ...buildToolArgumentsAttributes(event, session.config),
   });
 }
 
-export function buildToolCallInputAttributes(event: unknown): AttributeMap {
+export function buildToolCallInputAttributes(event: unknown, config: ObservMeConfig): AttributeMap {
   return withoutUndefinedAttributes({
     ...buildOptionalToolIdentityAttributes(event),
-    ...buildToolArgumentsAttributes(event),
+    ...buildToolArgumentsAttributes(event, config),
   });
 }
 
-export function buildToolResultAttributes(event: unknown): AttributeMap {
+export function buildToolResultAttributes(event: unknown, config: ObservMeConfig): AttributeMap {
   return withoutUndefinedAttributes({
     ...buildOptionalToolIdentityAttributes(event),
-    ...buildToolResultPayloadAttributes(event),
+    ...buildToolResultPayloadAttributes(event, config),
   });
 }
 
@@ -467,21 +467,21 @@ export function buildOptionalToolIdentityAttributes(event: unknown): AttributeMa
   });
 }
 
-export function buildToolArgumentsAttributes(event: unknown): AttributeMap {
+export function buildToolArgumentsAttributes(event: unknown, config: ObservMeConfig): AttributeMap {
   const value = readToolArgumentsText(event);
 
-  return buildToolPayloadAttributes(value, TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_HASH, TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_SIZE);
+  return buildToolPayloadAttributes(value, TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_HASH, TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_SIZE, config);
 }
 
-export function buildToolResultPayloadAttributes(event: unknown): AttributeMap {
+export function buildToolResultPayloadAttributes(event: unknown, config: ObservMeConfig): AttributeMap {
   const value = readToolResultText(event);
 
-  return buildToolPayloadAttributes(value, TOOL_ATTRIBUTES.PI_TOOL_RESULT_HASH, TOOL_ATTRIBUTES.PI_TOOL_RESULT_SIZE);
+  return buildToolPayloadAttributes(value, TOOL_ATTRIBUTES.PI_TOOL_RESULT_HASH, TOOL_ATTRIBUTES.PI_TOOL_RESULT_SIZE, config);
 }
 
-export function buildToolPayloadAttributes(value: string | undefined, hashKey: string, sizeKey: string): AttributeMap {
+export function buildToolPayloadAttributes(value: string | undefined, hashKey: string, sizeKey: string, config: ObservMeConfig): AttributeMap {
   return withoutUndefinedAttributes({
-    [hashKey]: value === undefined ? undefined : hashValue(value),
+    [hashKey]: value === undefined ? undefined : hashValue(value, config),
     [sizeKey]: value?.length,
   });
 }
@@ -604,14 +604,15 @@ export function recordRedactedBashContent(
   value: string,
   kind: "command" | "output",
 ): void {
-  const result = redactValue(value, {
-    pathMode: session.config.privacy.pathMode,
-    customRedactionPatterns: session.config.privacy.customRedactionPatterns,
-    maxOutputChars: kind === "output" ? session.config.limits.maxBashOutputChars : session.config.limits.maxLogBodyChars,
+  const result = applyContentCapturePolicy({
+    captureEnabled: true,
+    value,
+    kind: kind === "output" ? "bashOutput" : "logBody",
+    config: session.config,
   });
 
-  if (result.dropped || result.value === undefined) {
-    recordRedactionFailure(session, "bash_content_capture", result.failureMetrics.redactionFailures || 1);
+  if (!result.captured || result.value === undefined) {
+    recordRedactionFailure(session, "bash_content_capture", result.redactionFailures);
     return;
   }
 
@@ -635,20 +636,21 @@ export function recordRedactedToolContent(
   value: string,
   kind: "toolArgument" | "toolResult",
 ): void {
-  const result = redactValue(value, {
-    pathMode: session.config.privacy.pathMode,
-    customRedactionPatterns: session.config.privacy.customRedactionPatterns,
-    maxOutputChars: kind === "toolArgument" ? session.config.limits.maxToolArgumentChars : session.config.limits.maxToolResultChars,
+  const result = applyContentCapturePolicy({
+    captureEnabled: true,
+    value,
+    kind,
+    config: session.config,
   });
 
-  if (result.dropped || result.value === undefined) {
-    recordRedactionFailure(session, "tool_content_capture", result.failureMetrics.redactionFailures || 1);
+  if (!result.captured || result.value === undefined) {
+    recordRedactionFailure(session, "tool_content_capture", result.redactionFailures);
     return;
   }
 
   span.setAttribute(attributeKey, result.value);
   span.setAttribute(aliasAttributeKey, result.value);
-  if (result.truncated) span.setAttributes({ [COMMON_SPAN_ATTRIBUTES.OBSERVME_TRUNCATED]: true, [COMMON_SPAN_ATTRIBUTES.OBSERVME_ORIGINAL_LENGTH]: result.originalLength ?? value.length });
+  if (result.truncated) span.setAttributes(result.attributes);
 }
 
 export function recordRedactedSpanContent(
@@ -658,19 +660,20 @@ export function recordRedactedSpanContent(
   value: string,
   kind: LlmContentKind,
 ): CapturedLlmContent | undefined {
-  const result = redactValue(value, {
-    pathMode: session.config.privacy.pathMode,
-    customRedactionPatterns: session.config.privacy.customRedactionPatterns,
-    maxOutputChars: kind === "prompt" ? session.config.limits.maxPromptChars : session.config.limits.maxResponseChars,
+  const result = applyContentCapturePolicy({
+    captureEnabled: true,
+    value,
+    kind: kind === "prompt" ? "prompt" : "response",
+    config: session.config,
   });
 
-  if (result.dropped || result.value === undefined) {
-    recordRedactionFailure(session, "llm_content_capture", result.failureMetrics.redactionFailures || 1);
+  if (!result.captured || result.value === undefined) {
+    recordRedactionFailure(session, "llm_content_capture", result.redactionFailures);
     return undefined;
   }
 
   span.setAttribute(attributeKey, result.value);
-  if (result.truncated) span.setAttributes({ [COMMON_SPAN_ATTRIBUTES.OBSERVME_TRUNCATED]: true, [COMMON_SPAN_ATTRIBUTES.OBSERVME_ORIGINAL_LENGTH]: result.originalLength ?? value.length });
+  if (result.truncated) span.setAttributes(result.attributes);
 
   return {
     value: result.value,
@@ -878,14 +881,14 @@ export function buildThinkingLevelChangeAttributes(event: unknown, ctx: ObservMe
   });
 }
 
-export function buildBranchPreparationState(event: unknown): BranchPreparationState {
+export function buildBranchPreparationState(event: unknown, config: ObservMeConfig): BranchPreparationState {
   const preparation = readBranchPreparation(event);
 
   return {
     targetId: readBranchTargetId(preparation),
     oldLeafId: readBranchOldLeafId(preparation),
     commonAncestorId: readBranchCommonAncestorIdFromValue(preparation),
-    pathHash: readBranchPathHashFromValue(preparation),
+    pathHash: readBranchPathHashFromValue(preparation, config),
   };
 }
 
@@ -896,7 +899,7 @@ export function buildBranchAttributes(event: unknown, session: ObservMeTelemetry
   const toId = readBranchToId(event, summaryEntry, session.currentBranchPreparation);
   const leafId = readBranchLeafId(event, summaryEntry, toId);
   const commonAncestorId = readBranchCommonAncestorId(event, session.currentBranchPreparation);
-  const pathHash = readBranchPathHash(event, session.currentBranchPreparation, fromId, toId, leafId, commonAncestorId);
+  const pathHash = readBranchPathHash(event, session.currentBranchPreparation, fromId, toId, leafId, commonAncestorId, session.config);
   const entry = summaryEntry ?? readUnknown(event, "entry");
 
   return withoutUndefinedAttributes({
@@ -911,7 +914,7 @@ export function buildBranchAttributes(event: unknown, session: ObservMeTelemetry
     [BRANCH_ATTRIBUTES.PI_BRANCH_COMMON_ANCESTOR_ID]: commonAncestorId,
     [BRANCH_ATTRIBUTES.PI_BRANCH_PATH_HASH]: pathHash,
     [BRANCH_ATTRIBUTES.PI_LEAF_ID]: leafId,
-    [BRANCH_ATTRIBUTES.PI_BRANCH_SUMMARY_HASH]: summary ? hashValue(summary) : undefined,
+    [BRANCH_ATTRIBUTES.PI_BRANCH_SUMMARY_HASH]: summary ? hashValue(summary, session.config) : undefined,
     [BRANCH_ATTRIBUTES.PI_BRANCH_SUMMARY_LENGTH]: summary?.length,
     [BRANCH_ATTRIBUTES.PI_BRANCH_FROM_HOOK]: readBranchFromHook(summaryEntry, event),
     [BRANCH_ATTRIBUTES.PI_BRANCH_READ_FILES_COUNT]: readBranchFileCount(summaryEntry ?? event, "read"),
@@ -994,23 +997,24 @@ export function readBranchPathHash(
   toId: string | undefined,
   leafId: string | undefined,
   commonAncestorId: string | undefined,
+  config: ObservMeConfig,
 ): string | undefined {
-  const pathHash = readBranchPathHashFromValue(event) ?? readBranchPathHashFromValue(readBranchPreparation(event)) ?? preparation?.pathHash;
+  const pathHash = readBranchPathHashFromValue(event, config) ?? readBranchPathHashFromValue(readBranchPreparation(event), config) ?? preparation?.pathHash;
   if (pathHash !== undefined) return pathHash;
 
-  return hashBranchIds([fromId, toId, leafId, commonAncestorId]);
+  return hashBranchIds([fromId, toId, leafId, commonAncestorId], config);
 }
 
-export function readBranchPathHashFromValue(value: unknown): string | undefined {
+export function readBranchPathHashFromValue(value: unknown, config: ObservMeConfig): string | undefined {
   const explicitHash = readString(value, "pathHash") ?? readString(value, "path_hash") ?? readString(value, "branchPathHash") ?? readString(value, "branch_path_hash");
-  if (explicitHash !== undefined) return normalizeBranchPathHash(explicitHash);
+  if (explicitHash !== undefined) return normalizeBranchPathHash(explicitHash, config);
 
   const pathText = readBranchPathText(value);
-  return pathText === undefined ? undefined : hashValue(pathText);
+  return pathText === undefined ? undefined : hashValue(pathText, config);
 }
 
-export function normalizeBranchPathHash(value: string): string {
-  return /^[a-f0-9]{64}$/u.test(value) ? value : hashValue(value);
+export function normalizeBranchPathHash(value: string, config: ObservMeConfig): string | undefined {
+  return hashValue(value, config);
 }
 
 export function readBranchPathText(value: unknown): string | undefined {
@@ -1040,9 +1044,9 @@ export function branchPathItemId(item: unknown): string | undefined {
   return readTreeId(item, "id");
 }
 
-export function hashBranchIds(ids: Array<string | undefined>): string | undefined {
+export function hashBranchIds(ids: Array<string | undefined>, config: ObservMeConfig): string | undefined {
   const presentIds = ids.filter((id): id is string => id !== undefined);
-  return presentIds.length === 0 ? undefined : hashValue(presentIds.join("->"));
+  return presentIds.length === 0 ? undefined : hashValue(presentIds.join("->"), config);
 }
 
 export function readBranchFromHook(summaryEntry: unknown, event: unknown): boolean | undefined {
@@ -1079,7 +1083,7 @@ export function buildCompactionAttributes(event: unknown, session: ObservMeTelem
     [COMMON_SPAN_ATTRIBUTES.PI_ENTRY_TYPE]: readString(entry, "type") ?? "compaction",
     [COMPACTION_ATTRIBUTES.PI_COMPACTION_FIRST_KEPT_ENTRY_ID]: readCompactionFirstKeptEntryId(entry, event),
     [COMPACTION_ATTRIBUTES.PI_COMPACTION_TOKENS_BEFORE]: readCompactionTokensBefore(entry, event),
-    [COMPACTION_ATTRIBUTES.PI_COMPACTION_SUMMARY_HASH]: summary ? hashValue(summary) : undefined,
+    [COMPACTION_ATTRIBUTES.PI_COMPACTION_SUMMARY_HASH]: summary ? hashValue(summary, session.config) : undefined,
     [COMPACTION_ATTRIBUTES.PI_COMPACTION_SUMMARY_LENGTH]: summary?.length,
     [COMPACTION_ATTRIBUTES.PI_COMPACTION_FROM_HOOK]: readCompactionFromHook(entry, event),
     [COMPACTION_ATTRIBUTES.PI_COMPACTION_REASON]: readCompactionReason(entry, event),
@@ -1242,12 +1246,12 @@ export function buildBashExecutionAttributes(event: unknown, session: ObservMeTe
     ...buildCommonSessionSpanAttributes(resolveCurrentSessionId(session), session.config, session.lineage),
     [COMMON_SPAN_ATTRIBUTES.PI_AGENT_RUN_ID]: session.currentAgentRunId,
     [LOG_ATTRIBUTES.PI_TURN_ID]: session.currentTurnId,
-    [BASH_ATTRIBUTES.PI_BASH_COMMAND_HASH]: command === undefined ? undefined : hashValue(command),
+    [BASH_ATTRIBUTES.PI_BASH_COMMAND_HASH]: command === undefined ? undefined : hashValue(command, session.config),
     [BASH_ATTRIBUTES.PI_BASH_EXIT_CODE]: readBashExitCode(event),
     [BASH_ATTRIBUTES.PI_BASH_CANCELLED]: readBashCancelled(event) ?? false,
     [BASH_ATTRIBUTES.PI_BASH_TRUNCATED]: readBashTruncated(event) ?? false,
     [BASH_ATTRIBUTES.PI_BASH_OUTPUT_SIZE]: output === undefined ? undefined : output.length,
-    [BASH_ATTRIBUTES.PI_BASH_OUTPUT_HASH]: output === undefined ? undefined : hashValue(output),
+    [BASH_ATTRIBUTES.PI_BASH_OUTPUT_HASH]: output === undefined ? undefined : hashValue(output, session.config),
     [BASH_ATTRIBUTES.PI_BASH_FULL_OUTPUT_PATH_PRESENT]: readBashFullOutputPathPresent(event),
     [BASH_ATTRIBUTES.PI_BASH_EXCLUDE_FROM_CONTEXT]: readBashExcludeFromContext(event) ?? false,
   });
@@ -1346,6 +1350,23 @@ export function readBashFullOutputPathPresent(event: unknown): boolean {
 export function readBashExcludeFromContext(event: unknown): boolean | undefined {
   const payload = readBashPayload(event);
   return readBoolean(payload, "excludeFromContext") ?? readBoolean(payload, "exclude_from_context");
+}
+
+export function hasBashCompletionResult(event: unknown): boolean {
+  const payload = readBashPayload(event);
+  const status = normalizedStatus(readString(payload, "status"));
+
+  return (
+    readBashExitCode(payload) !== undefined ||
+    readBashCancelled(payload) !== undefined ||
+    readBashTruncated(payload) !== undefined ||
+    readBashOutput(payload) !== undefined ||
+    readBoolean(payload, "failed") !== undefined ||
+    status === "ok" ||
+    status === "success" ||
+    status === "completed" ||
+    statusIndicatesToolFailure(status)
+  );
 }
 
 export function bashExecutionFailed(event: unknown): boolean {
@@ -1745,8 +1766,8 @@ export function withoutUndefinedAttributes(attributes: Record<string, AttributeP
   return Object.fromEntries(Object.entries(attributes).filter((entry): entry is [string, AttributePrimitive] => entry[1] !== undefined));
 }
 
-export function hashValue(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
+export function hashValue(value: string, config: ObservMeConfig): string | undefined {
+  return trySha256(value, config);
 }
 
 export function readString(value: unknown, key: string): string | undefined {

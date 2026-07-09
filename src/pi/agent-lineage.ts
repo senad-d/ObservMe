@@ -148,10 +148,12 @@ export function createPropagationEnvironment(
   config: ObservMeConfig,
   extra: NodeJS.ProcessEnv = {},
 ): NodeJS.ProcessEnv {
-  if (!config.workflow.enabled || !config.agent.propagateToSubagents) return { ...extra };
+  const sanitizedExtra = sanitizePropagationEnvironment(config, extra);
+
+  if (!config.workflow.enabled || !config.agent.propagateToSubagents) return sanitizedExtra;
 
   return {
-    ...extra,
+    ...sanitizedExtra,
     [config.workflow.idEnv]: lineage.workflowId,
     [config.agent.parentIdEnv]: lineage.agentId,
     [config.agent.rootIdEnv]: lineage.rootAgentId,
@@ -160,10 +162,39 @@ export function createPropagationEnvironment(
   };
 }
 
+export function sanitizePropagationEnvironment(config: ObservMeConfig, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const sanitized = { ...env };
+
+  for (const key of propagationEnvironmentKeys(config)) delete sanitized[key];
+
+  return sanitized;
+}
+
 export function isHighCardinalityLineageKey(key: string): boolean {
   return /(?:workflow|session|trace|span|entry|spawn|tool_call)[._-]id|agent[._-](?:id|parent[._-]id|root[._-]id|child[._-]id)|(?:parent|child|root)[._-]agent[._-]id|(?:^|[._-])id$/iu.test(
     key,
   );
+}
+
+function propagationEnvironmentKeys(config: ObservMeConfig): string[] {
+  return [
+    ...new Set([
+      config.workflow.idEnv,
+      config.agent.idEnv,
+      config.agent.parentIdEnv,
+      config.agent.rootIdEnv,
+      config.agent.parentSessionIdEnv,
+      config.agent.parentTraceIdEnv,
+      config.agent.parentSpanIdEnv,
+      config.agent.depthEnv,
+      config.agent.spawnIdEnv,
+      config.agent.capabilityEnv,
+      "traceparent",
+      "tracestate",
+      "TRACEPARENT",
+      "TRACESTATE",
+    ]),
+  ];
 }
 
 function assertValidPropagatedLineage(config: ObservMeConfig, env: NodeJS.ProcessEnv): void {

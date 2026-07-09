@@ -82,6 +82,7 @@ import {
   evictToolCallState,
   evictWaitJoinState,
   hashValue,
+  hasBashCompletionResult,
   isAssistantMessage,
   isBashExecutionMessage,
   isLlmError,
@@ -359,14 +360,15 @@ export function registerHandlers(pi: unknown, options: RegisterHandlersOptions =
   const loadConfigFn = options.loadConfig ?? loadSessionConfig;
   const startTelemetryFn = options.startTelemetry ?? startSessionTelemetry;
   const errorRecorder = createStatefulHandlerErrorRecorder(() => session, options.onHandlerError);
+  const lifecycleQueue = new SerializedLifecycleQueue();
 
   defaultHandlerErrorRecorder = errorRecorder;
-  registerSerializedObservedHandler(
+  registerObservedHandler(
     api,
     "session_start",
-    createSessionStartHandler(() => session, loadConfigFn, startTelemetryFn, options, value => {
+    lifecycleQueue.wrap(createSessionStartHandler(() => session, loadConfigFn, startTelemetryFn, options, value => {
       session = value;
-    }),
+    })),
     () => session,
     errorRecorder,
   );
@@ -379,7 +381,7 @@ export function registerHandlers(pi: unknown, options: RegisterHandlersOptions =
   registerObservedHandler(api, "tool_call", createToolCallHandler(() => session), () => session, errorRecorder);
   registerObservedHandler(api, "tool_result", createToolResultHandler(() => session), () => session, errorRecorder);
   registerObservedHandler(api, "tool_execution_end", createToolExecutionEndHandler(() => session), () => session, errorRecorder);
-  registerObservedHandler(api, "user_bash", createBashExecutionHandler(() => session), () => session, errorRecorder);
+  registerObservedHandler(api, "user_bash", createUserBashPreExecutionHandler(() => session), () => session, errorRecorder);
   registerObservedHandler(api, "bashExecution", createBashExecutionHandler(() => session), () => session, errorRecorder);
   registerObservedHandler(api, "model_select", createModelChangeHandler(() => session), () => session, errorRecorder);
   registerObservedHandler(api, "model_change", createModelChangeHandler(() => session), () => session, errorRecorder);
@@ -390,9 +392,9 @@ export function registerHandlers(pi: unknown, options: RegisterHandlersOptions =
   registerObservedHandler(api, "session_compact", createCompactionHandler(() => session), () => session, errorRecorder);
   registerObservedHandler(api, "turn_end", createTurnEndHandler(() => session), () => session, errorRecorder);
   registerObservedHandler(api, "agent_end", createAgentEndHandler(() => session), () => session, errorRecorder);
-  registerObservedHandler(api, "session_shutdown", createSessionShutdownHandler(() => session, value => {
+  registerObservedHandler(api, "session_shutdown", lifecycleQueue.wrap(createSessionShutdownHandler(() => session, value => {
     session = value;
-  }), () => session, errorRecorder);
+  })), () => session, errorRecorder);
 }
 
 function resolveObservMePiApi(pi: unknown): ObservMePiApi {
@@ -406,16 +408,6 @@ function resolveObservMePiApi(pi: unknown): ObservMePiApi {
       on.call(pi, eventName, handler);
     },
   };
-}
-
-function registerSerializedObservedHandler(
-  api: ObservMePiApi,
-  name: string,
-  handler: Handler,
-  getSession: () => ObservMeTelemetrySession | undefined,
-  errorRecorder: HandlerErrorRecorder,
-): void {
-  registerObservedHandler(api, name, createSerializedHandler(handler), getSession, errorRecorder);
 }
 
 function registerObservedHandler(
@@ -481,14 +473,20 @@ export function safeHandler(name: string, fn: Handler, recorder: HandlerErrorRec
   };
 }
 
-function createSerializedHandler(fn: Handler): Handler {
-  let previous = Promise.resolve();
+class SerializedLifecycleQueue {
+  #previous = Promise.resolve();
 
-  return async (event, ctx) => {
-    const current = previous.then(() => Promise.resolve(fn(event, ctx)));
-    previous = current.catch(() => undefined);
-    await current;
-  };
+  wrap(fn: Handler): Handler {
+    // Pi docs guarantee /new, /resume, and /fork emit session_shutdown before session_start;
+    // ctx.reload() emits session_shutdown then session_start while the old command call frame can
+    // continue. ObservMe queues both lifecycle handlers together so async startup, shutdown,
+    // reload, and replacement state transitions cannot clear or replace shared runtime state out of order.
+    return async (event, ctx) => {
+      const current = this.#previous.then(() => Promise.resolve(fn(event, ctx)));
+      this.#previous = current.catch(() => undefined);
+      await current;
+    };
+  }
 }
 
 export async function startSessionTelemetry(options: StartSessionTelemetryOptions): Promise<ObservMeTelemetrySession> {
@@ -674,10 +672,10 @@ export function buildSessionAttributes(
   return withoutUndefinedAttributes({
     [sessionAttributeKeys.SESSION_ID]: sessionId,
     [sessionAttributeKeys.SESSION_NAME]: readString(event, "sessionName") ?? readString(event, "name") ?? "unknown",
-    [sessionAttributeKeys.SESSION_CWD_HASH]: hashValue(cwd),
-    [sessionAttributeKeys.SESSION_PARENT_SESSION_HASH]: parentSessionId ? hashValue(parentSessionId) : "",
+    [sessionAttributeKeys.SESSION_CWD_HASH]: hashValue(cwd, config),
+    [sessionAttributeKeys.SESSION_PARENT_SESSION_HASH]: parentSessionId ? hashValue(parentSessionId, config) : "",
     [sessionAttributeKeys.SESSION_PERSISTED]: readBoolean(event, "persisted") ?? recovery?.resumed ?? false,
-    [sessionAttributeKeys.SESSION_FILE_HASH]: sessionFile ? hashValue(sessionFile) : "",
+    [sessionAttributeKeys.SESSION_FILE_HASH]: sessionFile ? hashValue(sessionFile, config) : "",
     [sessionAttributeKeys.SESSION_VERSION]: readString(recovery?.header, "version") ?? readString(event, "sessionVersion") ?? readString(event, "version") ?? "unknown",
     [sessionAttributeKeys.MODEL_PROVIDER_CURRENT]: resolveModelProvider(event, ctx),
     [sessionAttributeKeys.MODEL_ID_CURRENT]: resolveModelId(event, ctx),
@@ -1085,7 +1083,9 @@ function createTurnStartHandler(getSession: () => ObservMeTelemetrySession | und
     const session = getSession();
     if (!session) return;
 
-    const runId = session.currentAgentRunId ?? nextAgentRunId(session, { source: "unknown" });
+    const hadCurrentAgentRun = session.currentAgentRunId !== undefined;
+    const runId = session.currentAgentRunId ?? nextAgentRunId(session, event);
+    if (!hadCurrentAgentRun) recordTelemetryDrop(session, "agent_run_id_missing_turn_start", { operation: "turn_start" });
     const runSpan = session.spans.activeAgentRuns.get(runId) ?? session.sessionSpan;
     const turnIndex = nextTurnIndex(session, runId, event);
     const turnId = deriveTurnId(runId, turnIndex);
@@ -1195,7 +1195,7 @@ function createToolCallHandler(getSession: () => ObservMeTelemetrySession | unde
 
     const toolCallId = resolveCurrentToolCallId(session, event) ?? nextToolCallId(session, event);
     const state = resolveToolCallState(session, event) ?? startToolCallState(session, event, toolCallId);
-    const attributes = buildToolCallInputAttributes(event);
+    const attributes = buildToolCallInputAttributes(event, session.config);
 
     state.span.setAttributes(attributes);
     mergeToolStateLabels(state, attributes);
@@ -1212,7 +1212,7 @@ function createToolResultHandler(getSession: () => ObservMeTelemetrySession | un
     const state = resolveToolCallState(session, event);
     if (!state) return;
 
-    const attributes = buildToolResultAttributes(event);
+    const attributes = buildToolResultAttributes(event, session.config);
     state.span.setAttributes(attributes);
     mergeToolStateLabels(state, attributes);
     recordOptionalToolResult(session, state.span, event);
@@ -1225,9 +1225,14 @@ function createToolExecutionEndHandler(getSession: () => ObservMeTelemetrySessio
     if (!session) return;
     if (dropAmbiguousToolLifecycleEvent(session, event, "tool_execution_end")) return;
 
-    const toolCallId = resolveCurrentToolCallId(session, event) ?? nextToolCallId(session, event);
-    const state = resolveToolCallState(session, event) ?? startToolCallState(session, event, toolCallId);
-    const resultAttributes = buildToolResultAttributes(event);
+    const toolCallId = resolveCurrentToolCallId(session, event);
+    const state = toolCallId ? resolveToolCallState(session, event) : undefined;
+    if (!toolCallId || !state) {
+      recordTelemetryDrop(session, "tool_call_missing_end", { operation: "tool_execution_end" });
+      return;
+    }
+
+    const resultAttributes = buildToolResultAttributes(event, session.config);
     const finalAttributes = buildToolFinalAttributes(event);
     const failed = finalAttributes[TOOL_ATTRIBUTES.PI_TOOL_SUCCESS] === false;
 
@@ -1248,6 +1253,12 @@ function createToolExecutionEndHandler(getSession: () => ObservMeTelemetrySessio
     recordSpanDurationMs(state.span, session.metrics.toolDurationMs, state.labels);
     endActiveSpan(session, state.span);
     deleteCurrentToolCall(session, toolCallId);
+  };
+}
+
+function createUserBashPreExecutionHandler(getSession: () => ObservMeTelemetrySession | undefined): Handler {
+  return (_event, _ctx) => {
+    if (!getSession()) return;
   };
 }
 
@@ -1296,7 +1307,7 @@ function createSessionBeforeTreeHandler(getSession: () => ObservMeTelemetrySessi
     const session = getSession();
     if (!session) return;
 
-    session.currentBranchPreparation = buildBranchPreparationState(event);
+    session.currentBranchPreparation = buildBranchPreparationState(event, session.config);
   };
 }
 
@@ -1360,6 +1371,11 @@ function recordCompactionTokensBefore(
 
 function recordBashExecution(session: ObservMeTelemetrySession, event: unknown): void {
   const payload = readBashPayload(event);
+  if (!hasBashCompletionResult(payload)) {
+    recordTelemetryDrop(session, "bash_completion_incomplete", { operation: "bash_execution" });
+    return;
+  }
+
   const attributes = buildBashExecutionAttributes(payload, session);
   const span = startActiveChildSpan(session, SPAN_NAMES.PI_BASH_EXECUTION, resolveToolParentSpan(session), attributes, "bash_execution");
   const failed = bashExecutionFailed(payload);
@@ -1380,21 +1396,46 @@ function recordBashExecution(session: ObservMeTelemetrySession, event: unknown):
   emitLifecycleLog(session.logger, LOG_EVENT_NAMES.BASH_COMPLETED, attributes, failed ? "ERROR" : "INFO");
 }
 
+function readRunIdFromTurnId(turnId: string): string | undefined {
+  const separator = "-turn-";
+  const separatorIndex = turnId.lastIndexOf(separator);
+  if (separatorIndex <= 0) return undefined;
+  return turnId.slice(0, separatorIndex);
+}
+
 function createTurnEndHandler(getSession: () => ObservMeTelemetrySession | undefined): Handler {
   return (event, _ctx) => {
     const session = getSession();
     if (!session) return;
 
-    const runId = readString(event, "agentRunId") ?? readString(event, "runId") ?? session.currentAgentRunId;
-    if (!runId) return;
+    const explicitTurnId = readString(event, "turnId") ?? readString(event, "turn_id");
+    let turnId = explicitTurnId;
+    let runId = readString(event, "agentRunId") ?? readString(event, "runId") ?? session.currentAgentRunId;
+    if (!runId && !turnId && session.currentTurnId) {
+      turnId = session.currentTurnId;
+      runId = readRunIdFromTurnId(turnId);
+    }
+    if (!runId) {
+      recordTelemetryDrop(session, "turn_run_id_missing", { operation: "turn_end" });
+      return;
+    }
 
     const turnIndex = readInteger(event, "turnIndex") ?? readInteger(event, "turn_index") ?? session.turnSequences.get(runId);
-    if (!turnIndex) return;
+    if (!turnId) {
+      if (!turnIndex) {
+        recordTelemetryDrop(session, "turn_index_missing", { operation: "turn_end" });
+        return;
+      }
+      turnId = deriveTurnId(runId, turnIndex);
+    }
 
-    const turnId = readString(event, "turnId") ?? readString(event, "turn_id") ?? deriveTurnId(runId, turnIndex);
     const span = session.spans.activeTurns.get(turnId);
+    if (!span) {
+      recordTelemetryDrop(session, "turn_span_missing", { operation: "turn_end" });
+      return;
+    }
 
-    if (workflowFailed(event)) span?.setStatus({ code: SpanStatusCode.ERROR });
+    if (workflowFailed(event)) span.setStatus({ code: SpanStatusCode.ERROR });
     recordSpanDurationMs(span, session.metrics.turnDurationMs, metricLabels(session.config, session.lineage));
     endActiveSpan(session, span);
     session.spans.activeTurns.delete(turnId);

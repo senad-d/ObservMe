@@ -5,6 +5,12 @@ export interface EnvTenantSaltSource {
   readonly envName: string;
 }
 
+export interface TenantSaltConfig {
+  readonly privacy: {
+    readonly tenantSaltEnv: string;
+  };
+}
+
 export interface SecureRuntimeTenantSaltSource {
   readonly secureRuntimeConfig: {
     readonly tenantSalt: string;
@@ -19,6 +25,25 @@ export function sha256(value: string, source: TenantSaltSource): string {
 
 export function hmac_sha256(value: string, source: TenantSaltSource): string {
   return createHmac("sha256", resolveTenantSalt(source)).update(value).digest("hex");
+}
+
+export function createEnvTenantSaltSource(
+  config: TenantSaltConfig,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): EnvTenantSaltSource {
+  return { env, envName: config.privacy.tenantSaltEnv };
+}
+
+export function trySha256(
+  value: string,
+  config: TenantSaltConfig,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string | undefined {
+  try {
+    return sha256(value, createEnvTenantSaltSource(config, env));
+  } catch (_error) {
+    return undefined;
+  }
 }
 
 export function resolveTenantSalt(source: TenantSaltSource): string {

@@ -100,15 +100,30 @@ function validateRedactionBoundary(config: ObservMeConfig): ValidationIssue[] {
 }
 
 function validateTransportSecurity(config: ObservMeConfig): ValidationIssue[] {
-  const productionHttp = config.environment === "production" && config.otlp.endpoint.startsWith("http://");
-  if (!productionHttp || config.privacy.allowInsecureTransport) return [];
+  if (config.environment !== "production" || config.privacy.allowInsecureTransport) return [];
+
+  return [
+    ...validateProductionHttpEndpoint("otlp.endpoint", config.otlp.endpoint),
+    ...validateProductionHttpEndpoint("otlp.signalEndpoints.traces", config.otlp.signalEndpoints?.traces),
+    ...validateProductionHttpEndpoint("otlp.signalEndpoints.metrics", config.otlp.signalEndpoints?.metrics),
+    ...validateProductionHttpEndpoint("otlp.signalEndpoints.logs", config.otlp.signalEndpoints?.logs),
+    ...validateProductionHttpEndpoint("query.grafana.url", config.query.grafana.url),
+  ];
+}
+
+function validateProductionHttpEndpoint(name: string, endpoint: string | undefined): ValidationIssue[] {
+  if (!endpoint || !isHttpEndpoint(endpoint)) return [];
 
   return [
     {
       code: "insecure_production_transport",
-      message: "Production OTLP endpoint must not use http:// unless privacy.allowInsecureTransport is true.",
+      message: `${name} must not use http:// in production unless privacy.allowInsecureTransport is true.`,
     },
   ];
+}
+
+function isHttpEndpoint(endpoint: string): boolean {
+  return endpoint.trim().toLowerCase().startsWith("http://");
 }
 
 function validateSignalEndpoints(config: ObservMeConfig): ValidationIssue[] {

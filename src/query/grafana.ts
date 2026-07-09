@@ -1,4 +1,6 @@
 import type { ObservMeConfig } from "../config/schema.ts";
+import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
+import { assertNoSensitiveQueryInput } from "../safety/sensitive-input.ts";
 import type { GrafanaTransportClient, GrafanaTransportOptions } from "./grafana-transport.ts";
 import { createGrafanaTransport } from "./grafana-transport.ts";
 import type { GrafanaQueryDatasourceKey } from "./grafana-readiness.ts";
@@ -72,12 +74,6 @@ const traceIdPattern = /^[a-f0-9]{32}$/iu;
 const zeroTraceIdPattern = /^0{32}$/u;
 const traceIdTemplatePattern = /\{\{\s*traceId\s*\}\}|\{traceId\}|\$\{traceId\}|%TRACE_ID%/u;
 const fallbackTraceTemplateMarkerPattern = /\.\.\./u;
-const sensitiveQueryValuePatterns = [
-  /(?:^|\b)(?:prompt|system prompt|user prompt|assistant response|thinking|raw content)(?:\b|:)/iu,
-  /(?:^|\s)(?:sudo|rm|mv|cp|curl|wget|npm|pnpm|yarn|node|python3?|bash|sh|git)\s+\S+/iu,
-  /(?:^|[\s=:])(?:~|\.{1,2}|\/|[A-Za-z]:\\|\\\\)\S*/u,
-  /\b[A-Z][A-Z0-9_]{2,}=[^\s]+/u,
-] as const;
 const datasourceDefinitions = [
   { label: "Tempo datasource", key: "tempo", fallbackHealthPath: "/ready" },
   { label: "Loki datasource", key: "loki", fallbackHealthPath: undefined },
@@ -341,7 +337,7 @@ function createTraceTemplateValues(config: ObservMeConfig, traceId: string): Tra
 
 function normalizeTraceId(traceId: string): string {
   const trimmed = traceId.trim();
-  assertNoSensitiveRawQueryInput(trimmed, "traceId");
+  assertNoSensitiveQueryInput(trimmed, "Grafana traceId");
 
   if (!traceIdPattern.test(trimmed) || zeroTraceIdPattern.test(trimmed)) {
     throw new Error(
@@ -350,18 +346,6 @@ function normalizeTraceId(traceId: string): string {
   }
 
   return trimmed.toLowerCase();
-}
-
-function assertNoSensitiveRawQueryInput(value: string, label: string): void {
-  if (!isSensitiveRawQueryInput(value)) return;
-
-  throw new Error(
-    `Unsafe Grafana ${label}: raw prompts, commands, paths, and inherited environment values are not query inputs.`,
-  );
-}
-
-function isSensitiveRawQueryInput(value: string): boolean {
-  return sensitiveQueryValuePatterns.some(pattern => pattern.test(value));
 }
 
 function hasTraceIdTemplatePlaceholder(template: string): boolean {
@@ -377,5 +361,5 @@ function formatHealthFailure(error: unknown): string {
 }
 
 function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return sanitizeDiagnosticText(readDiagnosticMessage(error));
 }

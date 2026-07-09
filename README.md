@@ -55,7 +55,7 @@ ObservMe is a Pi extension for **observability of Pi agent sessions**. It reads 
 
 ## Implementation Status
 
-This checkout implements the ObservMe MVP scope from `ObservMe-Production-Docs/00-README.md`:
+This checkout implements the ObservMe MVP scope from the packaged `ObservMe-Production-Docs/00-README.md` design overview:
 
 - Extension load checks and `/obs health` backend checks.
 - Session, workflow, agent-run, turn, LLM, tool, bash, subagent-spawn, wait/join, compaction, branch, model-change, and thinking-level telemetry.
@@ -146,7 +146,7 @@ Grafana
 
 The extension factory in `src/extension.ts` only registers handlers and commands. OTEL SDK startup happens from `session_start`, and bounded flush/shutdown happens from `session_shutdown`, so importing or registering the extension does not open exporters, timers, or sockets.
 
-See `ObservMe-Production-Docs/02-reference-architecture.md` for the full architecture and `specs/spec-architecture.md` for the implementation-oriented module breakdown. A reference Docker Compose deployment of the Grafana/Tempo/Loki/Prometheus/Collector stack lives in `observability-stack/`.
+See the packaged `ObservMe-Production-Docs/02-reference-architecture.md` for the full architecture. Implementation planning specs are repository-only and live at <https://github.com/senad-d/ObservMe/tree/main/specs>. A reference Docker Compose deployment of the Grafana/Tempo/Loki/Prometheus/Collector stack is also repository-only at <https://github.com/senad-d/ObservMe/tree/main/observability-stack> because it contains generated local credentials and state placeholders.
 
 ## Configuration and Privacy
 
@@ -180,7 +180,7 @@ workflow:
   enabled: true
 ```
 
-When optional content capture is enabled, the redaction pipeline applies size guards, secret detection, optional PII detection, path scrubbing (`hash`, `basename`, `full`, or `drop`), custom regex redactors, truncation metadata, and tenant-salted hashing before export. Hash salts are read from secure environment/runtime config, not hardcoded.
+When optional content capture is enabled, live telemetry and `/obs backfill` use the same policy. With `privacy.redactionEnabled: true`, the redaction pipeline applies size guards, secret detection, optional PII detection, path scrubbing (`hash`, `basename`, `full`, or `drop`), custom regex redactors, truncation metadata, and tenant-salted hashing before export. Redaction failures drop content. With `privacy.redactionEnabled: false` and `privacy.allowUnsafeCapture: true`, captured content is exported raw but still truncated to the configured limit. Hash salts are read from secure environment/runtime config, not hardcoded.
 
 Metadata such as token counts, duration, status, model/provider, tool name, and agent role/depth is captured by default. High-cardinality identifiers (session IDs, workflow IDs, agent IDs, trace/span IDs, entry IDs) are allowed on spans/logs for drill-down but are blocked from Prometheus metric labels.
 
@@ -188,7 +188,7 @@ Grafana-backed query commands use the Grafana HTTP API, so browser login cookies
 
 ### Supported local-stack query profile
 
-The bundled `observability-stack/` supports `/obs` query commands through authenticated Grafana behind nginx HTTPS at `https://observability.local`. The default Compose stack does not publish Grafana on `localhost:3000`; use that direct HTTP path only if you add your own override.
+The repository-only local stack at <https://github.com/senad-d/ObservMe/tree/main/observability-stack> supports `/obs` query commands through authenticated Grafana behind nginx HTTPS at `https://observability.local`. The default Compose stack does not publish Grafana on `localhost:3000`; use that direct HTTP path only if you add your own override.
 
 ```yaml
 query:
@@ -210,7 +210,7 @@ query:
       preferIPv4: true
 ```
 
-Create a Grafana service-account token in Grafana (Administration → Users and access → Service accounts → Add service account/token; Viewer is enough for read-only datasource queries) and export it as `OBSERVME_GRAFANA_TOKEN`, or for local-only Basic auth export `OBSERVME_GRAFANA_PASSWORD="$(cat observability-stack/secrets/grafana_admin_password)"`. If you prefer a project-local env file, run `cp .env.example .env`, fill either `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_PASSWORD`, then restart Pi from that project. The local Collector and Loki profile uses `service.name=observme-pi-extension`; Loki queries use normalized labels such as `service_name`, `pi_session_id`, `pi_agent_id`, `pi_agent_run_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, run `/obs health` and check extension env loading, Grafana auth, datasource UIDs, TLS, and DNS details.
+Create a Grafana service-account token in Grafana (Administration → Users and access → Service accounts → Add service account/token; Viewer is enough for read-only datasource queries) and export it as `OBSERVME_GRAFANA_TOKEN`, or for local-only Basic auth read the generated admin password from the repository-only local stack's secrets directory. If you prefer a project-local env file, run `cp .env.example .env`, fill either `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_PASSWORD`, then restart Pi from that project. The local Collector and Loki profile uses `service.name=observme-pi-extension`; Loki queries use normalized labels such as `service_name`, `pi_session_id`, `pi_agent_id`, `pi_agent_run_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, run `/obs health` and check extension env loading, Grafana auth, datasource UIDs, TLS, and DNS details.
 
 ### Show LLM chat content in Grafana
 
@@ -242,6 +242,8 @@ See [`SECURITY.md`](SECURITY.md) and `ObservMe-Production-Docs/06-security-priva
 
 ## Dashboards and Examples
 
+These assets are included in the npm package:
+
 - Grafana dashboards: `dashboards/observme-*.json`, including `dashboards/observme-trace-journey.json` for trace travel and agent lineage drill-downs.
 - Alert rules: `dashboards/observme-alerts.yaml`.
 - SLO definitions: `dashboards/observme-slos.yaml`.
@@ -249,9 +251,11 @@ See [`SECURITY.md`](SECURITY.md) and `ObservMe-Production-Docs/06-security-priva
 - Production Collector config with high-cardinality and content-drop processors: `examples/collector.yaml`.
 - Compatibility matrix: `docs/compatibility-matrix.md`.
 
+The Docker Compose local stack is intentionally repository-only at <https://github.com/senad-d/ObservMe/tree/main/observability-stack> so packaged installs do not contain generated credentials, certificates, or local Pi state.
+
 ## Documentation Set
 
-The full production design lives in `ObservMe-Production-Docs/`:
+The full production design is included in the npm package under `ObservMe-Production-Docs/`:
 
 | File | Purpose |
 |---|---|
@@ -269,7 +273,7 @@ The full production design lives in `ObservMe-Production-Docs/`:
 | `12-configuration-reference.md` | Full configuration schema |
 | `13-source-notes.md` | External documentation cross-check notes |
 
-Implementation specs live in `specs/`: `project-definition-brief.md`, `spec-architecture.md`, `spec-guidelines.md`, `spec-tasks.md`. User-facing configuration guidance is in [`docs/configuration.md`](docs/configuration.md). Review-task validation and current `*-2.md` review-spec ordering are documented in [`docs/review-validation.md`](docs/review-validation.md).
+Implementation specs are repository-only at <https://github.com/senad-d/ObservMe/tree/main/specs>: `project-definition-brief.md`, `spec-architecture.md`, `spec-guidelines.md`, `spec-tasks.md`. User-facing configuration guidance is in [`docs/configuration.md`](docs/configuration.md). Review-task validation and current `*-2.md` review-spec ordering are documented in [`docs/review-validation.md`](docs/review-validation.md).
 
 ## Development
 
@@ -284,7 +288,7 @@ Useful checks:
 npm run typecheck
 npm run typecheck:test
 npm run lint        # TypeScript, test TypeScript, ESLint, formatting, and script syntax checks
-npm run lint:fix    # optional auto-fix pass
+npm run lint:fix    # ESLint auto-fix pass
 npm run format:check
 npm run test
 npm run test:integration:collector
@@ -295,7 +299,9 @@ npm run validate:grafana-obs
 pi --no-extensions -e .
 ```
 
-`npm run smoke:pi-runtime` launches a real Pi RPC process against a temporary trusted project, verifies `/obs` discovery plus `/obs status` and `/obs session` routing after `session_start`, and exercises a bounded `/obs cost` timeout against a local deterministic Grafana backend.
+`npm run smoke:pi-lifecycle` runs lifecycle handlers with traces, metrics, logs, and query integration disabled through an explicit offline test config. `npm run smoke:pi-runtime` launches a real Pi RPC process against a temporary trusted project, verifies `/obs` discovery plus `/obs status` and `/obs session` routing after `session_start`, and exercises a bounded `/obs cost` timeout against a local deterministic Grafana backend.
+
+`npm run test:coverage` writes `coverage/node-test-coverage.txt`; `coverage/` is git-ignored, and `rm -rf coverage` removes generated coverage artifacts after review.
 
 End-to-end troubleshooting flow: [`docs/validation-flow.md`](docs/validation-flow.md) provides a deterministic, secret-safe checklist and script for the common user-facing case where Grafana has data but `/obs` commands are failing.
 

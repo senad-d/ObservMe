@@ -3,6 +3,7 @@ import type { LoadSessionConfigOptions } from "../config/load-config.ts";
 import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import { createGrafanaQueryClient, type GrafanaFetch } from "../query/grafana.ts";
+import { normalizeObservMeSessionId } from "../safety/sensitive-input.ts";
 import type { TimeRange, TraceSummary } from "../query/tempo.ts";
 import {
   completeObsSubcommand,
@@ -91,13 +92,6 @@ const OBS_TRACE_NOT_FOUND_NEXT_ACTION = "check the session id, wait for trace ex
 const OBS_TRACE_ACTIVE_SESSION_NOTE = "Trace visibility: active sessions may show ended child spans before the root pi.session span; the root is exported after session_shutdown.";
 const DEFAULT_TRACE_SEARCH_RANGE_HOURS = 24;
 const millisecondsPerHour = 60 * 60 * 1000;
-const safeSessionIdPattern = /^[A-Za-z0-9._:-]{1,256}$/u;
-const sensitiveSessionIdValuePatterns = [
-  /(?:^|\b)(?:prompt|system prompt|user prompt|assistant response|thinking|raw content)(?:\b|:)/iu,
-  /(?:^|\s)(?:sudo|rm|mv|cp|curl|wget|npm|pnpm|yarn|node|python3?|bash|sh|git)\s+\S+/iu,
-  /(?:^|[\s=:])(?:~|\.{1,2}\/|\/|[A-Za-z]:\\|\\\\)\S*/u,
-  /\b[A-Z][A-Z0-9_]{2,}=[^\s]+/u,
-] as const;
 const defaultObsTraceRequest = { scope: "current-session" } as const satisfies ObsTraceRequest;
 
 export function registerObsTraceCommand(pi: ExtensionAPI, options: RegisterObsTraceCommandOptions = {}): void {
@@ -317,20 +311,7 @@ function resolveLocalTraceIdForSession(sessionId: string, session: ObsTraceSessi
 }
 
 function normalizeObsTraceSessionId(value: string | undefined): string {
-  const sessionId = normalizeOptionalString(value);
-
-  if (!sessionId) throw new Error("Unsafe ObservMe session id: empty values are not query inputs.");
-  if (!safeSessionIdPattern.test(sessionId) || isSensitiveSessionIdValue(sessionId)) {
-    throw new Error(
-      "Unsafe ObservMe session id: only generated session IDs may be used; raw prompts, commands, paths, and environment values are not query inputs.",
-    );
-  }
-
-  return sessionId;
-}
-
-function isSensitiveSessionIdValue(value: string): boolean {
-  return sensitiveSessionIdValuePatterns.some(pattern => pattern.test(value));
+  return normalizeObservMeSessionId(value, { emptyMessage: "Unsafe ObservMe session id: empty values are not query inputs." });
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {

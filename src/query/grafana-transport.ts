@@ -3,6 +3,8 @@ import { request as requestHttp } from "node:http";
 import type { RequestOptions as HttpsRequestOptions } from "node:https";
 import { request as requestHttps } from "node:https";
 import type { ObservMeConfig } from "../config/schema.ts";
+import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
+import { hasUnresolvedEnvironmentPlaceholder } from "../safety/sensitive-input.ts";
 
 export type GrafanaFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 export type GrafanaAuthMode = "bearer" | "basic" | "none";
@@ -33,9 +35,9 @@ interface GrafanaResponseBodyLimitError extends Error {
 }
 
 export const MAX_GRAFANA_RESPONSE_BODY_BYTES = 5 * 1024 * 1024;
+export { hasUnresolvedEnvironmentPlaceholder };
 
 const minimumTimeoutMs = 1;
-const unresolvedEnvironmentPlaceholderPattern = /\$\{[A-Z0-9_]+\}/u;
 const tlsErrorCodes = new Set<string>([
   "DEPTH_ZERO_SELF_SIGNED_CERT",
   "SELF_SIGNED_CERT_IN_CHAIN",
@@ -171,10 +173,6 @@ export function formatGrafanaFetchFailure(error: unknown): string {
   if (code && connectionTimeoutErrorCodes.has(code)) return "Grafana connection timed out.";
   if (code === "GRAFANA_RESPONSE_BODY_TOO_LARGE") return formatError(error);
   return formatError(error);
-}
-
-export function hasUnresolvedEnvironmentPlaceholder(value: string): boolean {
-  return unresolvedEnvironmentPlaceholderPattern.test(value);
 }
 
 export function normalizeConfiguredGrafanaSecret(value: string): string | undefined {
@@ -461,7 +459,7 @@ function isNamedError(error: unknown): error is { name: string } {
 }
 
 function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return sanitizeDiagnosticText(readDiagnosticMessage(error));
 }
 
 function noop(): void {}
