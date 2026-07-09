@@ -1,0 +1,743 @@
+{
+  "__requires": [
+    {
+      "id": "grafana",
+      "name": "Grafana",
+      "type": "grafana",
+      "version": "10.0.0"
+    },
+    {
+      "id": "prometheus",
+      "name": "Prometheus",
+      "type": "datasource",
+      "version": "1.0.0"
+    },
+    {
+      "id": "row",
+      "name": "Row",
+      "type": "panel",
+      "version": ""
+    },
+    {
+      "id": "stat",
+      "name": "Stat",
+      "type": "panel",
+      "version": ""
+    },
+    {
+      "id": "bargauge",
+      "name": "Bar gauge",
+      "type": "panel",
+      "version": ""
+    },
+    {
+      "id": "text",
+      "name": "Text",
+      "type": "panel",
+      "version": ""
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Overview",
+      "tooltip": "Open the ObservMe Overview with the current time range.",
+      "type": "link",
+      "url": "/d/observme-overview/observme-overview?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Export Health",
+      "tooltip": "Open Export Health for the underlying liveness, drop, export-error, and redaction signals.",
+      "type": "link",
+      "url": "/d/observme-export-health/observme-export-health?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Agents",
+      "tooltip": "Open Agents for lineage and subagent reliability drill-down.",
+      "type": "link",
+      "url": "/d/observme-agents/observme-agents?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Trace Journey",
+      "tooltip": "Open Trace Journey for metric-to-log-to-trace drill-down.",
+      "type": "link",
+      "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Errors",
+      "tooltip": "Open Errors for parsed failure log tables and trace links.",
+      "type": "link",
+      "url": "/d/observme-errors/observme-errors?${__url_time_range}"
+    }
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "SLOs",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "30-day Observability Export SLO from observme-slos.yaml. A value of 1 means no local telemetry drops were observed; no workload in the window is treated as healthy idle.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.99
+              },
+              {
+                "color": "green",
+                "value": 0.999
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Export Health",
+          "url": "/d/observme-export-health/observme-export-health?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "clamp_max(clamp_min(1 - ((sum(increase(observme_telemetry_dropped_total[30d])) or vector(0)) / clamp_min((sum(increase(observme_events_observed_total[30d])) or vector(0)), 1)), 0), 1)",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Observability Export SLO (30d)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "30-day Agent Lineage SLO from observme-slos.yaml. Failures include missing-lineage spawn failures, orphan agents, and trace-context propagation failures over known subagent spawns.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.99
+              },
+              {
+                "color": "green",
+                "value": 0.999
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 5,
+        "y": 1
+      },
+      "id": 2,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Agents",
+          "url": "/d/observme-agents/observme-agents?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "clamp_max(clamp_min(1 - (((sum(increase(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[30d])) or vector(0)) + (sum(increase(observme_orphan_agents_total[30d])) or vector(0)) + (sum(increase(observme_trace_context_propagation_failures_total[30d])) or vector(0))) / clamp_min((sum(increase(observme_subagents_spawned_total[30d])) or vector(0)), 1)), 0), 1)",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Agent Lineage SLO (30d)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "30-day Workflow Completion SLO from observme-slos.yaml. Workflows satisfy the SLO when started workflows produce terminal completed or failed telemetry; no started workflows in the window is healthy idle.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.99
+              },
+              {
+                "color": "green",
+                "value": 0.999
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 10,
+        "y": 1
+      },
+      "id": 3,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "clamp_max(((((sum(increase(observme_workflows_completed_total[30d])) or vector(0)) + (sum(increase(observme_workflow_errors_total[30d])) or vector(0))) / clamp_min((sum(increase(observme_workflows_started_total[30d])) or vector(0)), 1)) + (((sum(increase(observme_workflows_started_total[30d])) or vector(0)) == bool 0)), 1)",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Workflow Completion SLO (30d)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Instrumentation Overhead SLO scorecard: p99 handler duration over 30 days should stay under 10 ms.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 15,
+        "y": 1
+      },
+      "id": 4,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Export Health",
+          "url": "/d/observme-export-health/observme-export-health?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum(rate(observme_handler_duration_ms_bucket[30d])) by (le)) or vector(0)",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Instrumentation Overhead SLO p99 (30d)",
+      "type": "stat"
+    },
+    {
+      "description": "The Redaction SLO is a CI/test-time objective, not a runtime metric. Use the repository redaction tests for the 100% configured secret-pattern target; runtime redaction failures are still surfaced on Export Health and the Errors dashboard.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "id": 5,
+      "options": {
+        "code": {
+          "language": "markdown",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "### Redaction SLO (CI/test)\n\nTarget: **100%** of configured secret test patterns are redacted in CI.\n\nRuntime companion: open **Export Health** for `observme_redaction_failures_total` and failure logs.",
+        "mode": "markdown"
+      },
+      "pluginVersion": "11.1.0",
+      "title": "Redaction SLO (CI/test)",
+      "type": "text"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "id": 101,
+      "panels": [],
+      "title": "Burn rates",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Short-window SLO burn rates normalized by a 1% error budget. Values above 1 consume error budget faster than target; empty/idle runtime signals render as zero burn.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 7
+      },
+      "id": 6,
+      "options": {
+        "displayMode": "gradient",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "((sum(rate(observme_telemetry_dropped_total[1h])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[1h])) or vector(0)), 1e-9)) / 0.01",
+          "instant": true,
+          "legendFormat": "export drops",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "((((sum(rate(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[1h])) or vector(0)) + (sum(rate(observme_orphan_agents_total[1h])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[1h])) or vector(0))) / clamp_min((sum(rate(observme_subagents_spawned_total[1h])) or vector(0)), 1e-9))) / 0.01",
+          "instant": true,
+          "legendFormat": "agent lineage",
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "clamp_min(1 - ((((sum(rate(observme_workflows_completed_total[1h])) or vector(0)) + (sum(rate(observme_workflow_errors_total[1h])) or vector(0))) / clamp_min((sum(rate(observme_workflows_started_total[1h])) or vector(0)), 1e-9)), 0) / 0.01",
+          "instant": true,
+          "legendFormat": "workflow terminal telemetry",
+          "range": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[1h])) or vector(0)) / clamp_min((sum(rate(observme_handler_duration_ms_count[1h])) or vector(0)), 1e-9)), 0) / 0.01",
+          "instant": true,
+          "legendFormat": "handler >10ms",
+          "range": false,
+          "refId": "D"
+        }
+      ],
+      "title": "Runtime SLO burn rate (1h)",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Long-window SLO burn rates normalized by a 1% error budget. This pairs with the 1h view to distinguish brief spikes from sustained SLO risk.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 7
+      },
+      "id": 7,
+      "options": {
+        "displayMode": "gradient",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "((sum(rate(observme_telemetry_dropped_total[30d])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[30d])) or vector(0)), 1e-9)) / 0.01",
+          "instant": true,
+          "legendFormat": "export drops",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "((((sum(rate(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[30d])) or vector(0)) + (sum(rate(observme_orphan_agents_total[30d])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[30d])) or vector(0))) / clamp_min((sum(rate(observme_subagents_spawned_total[30d])) or vector(0)), 1e-9))) / 0.01",
+          "instant": true,
+          "legendFormat": "agent lineage",
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "clamp_min(1 - ((((sum(rate(observme_workflows_completed_total[30d])) or vector(0)) + (sum(rate(observme_workflow_errors_total[30d])) or vector(0))) / clamp_min((sum(rate(observme_workflows_started_total[30d])) or vector(0)), 1e-9)), 0) / 0.01",
+          "instant": true,
+          "legendFormat": "workflow terminal telemetry",
+          "range": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[30d])) or vector(0)) / clamp_min((sum(rate(observme_handler_duration_ms_count[30d])) or vector(0)), 1e-9)), 0) / 0.01",
+          "instant": true,
+          "legendFormat": "handler >10ms",
+          "range": false,
+          "refId": "D"
+        }
+      ],
+      "title": "Runtime SLO burn rate (30d)",
+      "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 102,
+      "panels": [],
+      "title": "Alert thresholds",
+      "type": "row"
+    },
+    {
+      "description": "Alert thresholds mirrored from dashboards/observme-alerts.yaml so operators can discover when dashboard values become pages or warnings.",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 8,
+      "options": {
+        "code": {
+          "language": "markdown",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "### Runtime alert threshold reference\n\n- **ObservMeHighLlmErrorRate:** LLM error ratio > **5%** for 10m.\n- **ObservMeHighToolFailureRate:** per-tool failure ratio > **10%** for 10m.\n- **ObservMeSubagentSpawnFailures:** any subagent spawn failures for 10m.\n- **ObservMeExportDropsDetected:** `sum(rate(observme_telemetry_dropped_total[5m])) > 0` for 5m.\n- **ObservMeCostSpike:** LLM spend increase > **$50** in 1h for 15m; tune per budget.\n- **ObservMeRedactionFailures:** `sum(rate(observme_redaction_failures_total[5m])) > 0` for 5m.\n- **ObservMeRunawayAgentFanOut:** p95 fan-out > **20** over 10m.\n- **ObservMeExcessiveAgentTreeDepth:** p95 tree depth > **5** over 10m.\n- **ObservMeOrphanAgentsDetected:** orphan-agent rate over 10m is warning.\n- **ObservMeTraceContextPropagationFailures:** propagation failures over 10m are warning.\n- **ObservMeActiveAgentsStuckHigh:** active agents > **100** for 30m; tune per deployment.",
+        "mode": "markdown"
+      },
+      "pluginVersion": "11.1.0",
+      "title": "Alert threshold reference",
+      "type": "text"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "observme",
+    "slo-health"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "ObservMe SLO Health",
+  "uid": "observme-slo-health",
+  "version": 1,
+  "weekStart": ""
+}

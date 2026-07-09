@@ -254,7 +254,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Model and thinking-level changes that explain later cost or behavior shifts.",
+      "description": "Model and thinking-level changes that explain later cost, latency, or behavior shifts. The Cost, Models, and Latency dashboards also render these signals as annotations.",
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -314,7 +314,24 @@
         }
       ],
       "title": "Model changes and thinking level changes",
-      "type": "timeseries"
+      "type": "timeseries",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Cost annotations",
+          "url": "/d/observme-cost/observme-cost?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Model annotations",
+          "url": "/d/observme-models/observme-models?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Latency annotations",
+          "url": "/d/observme-latency/observme-latency?${__url_time_range}"
+        }
+      ]
     },
     {
       "datasource": {

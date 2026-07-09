@@ -50,7 +50,18 @@
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "targetBlank": false,
+      "title": "Trace Journey",
+      "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+    },
+    {
+      "targetBlank": false,
+      "title": "Open Agent Node Graphs",
+      "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}"
+    }
+  ],
   "liveNow": false,
   "panels": [
     {
@@ -111,7 +122,19 @@
         }
       ],
       "title": "Agent runs by role",
-      "type": "timeseries"
+      "type": "timeseries",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Agent Node Graphs",
+          "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}"
+        }
+      ]
     },
     {
       "datasource": {
@@ -171,7 +194,19 @@
         }
       ],
       "title": "Subagent spawns by depth and spawn type",
-      "type": "timeseries"
+      "type": "timeseries",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Agent Node Graphs",
+          "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}"
+        }
+      ]
     },
     {
       "datasource": {
@@ -231,7 +266,19 @@
         }
       ],
       "title": "Subagent spawn failures",
-      "type": "timeseries"
+      "type": "timeseries",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Agent Node Graphs",
+          "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}"
+        }
+      ]
     },
     {
       "datasource": {
@@ -355,66 +402,6 @@
     },
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "description": "Loki drill-down table for agent-tree events using provisioned service_name and event_category labels; lineage IDs are kept out of Prometheus metric labels.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 24,
-        "x": 0,
-        "y": 45
-      },
-      "id": 6,
-      "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": [
-            "sum"
-          ],
-          "show": false
-        },
-        "showHeader": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", event_category=\"agent-tree\"}",
-          "range": true,
-          "refId": "A",
-          "legendFormat": "{{pi_agent_parent_id}} -> {{pi_agent_id}}"
-        }
-      ],
-      "title": "Parent/child trace links",
-      "type": "table"
-    },
-    {
-      "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
@@ -478,11 +465,11 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 tree depth and width without workflow or agent IDs in metric labels.",
+      "description": "p95 tree depth and width without workflow or agent IDs in metric labels. The constant depth=5 line matches the ObservMeExcessiveAgentTreeDepth alert threshold.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
           },
           "mappings": [],
           "thresholds": {
@@ -491,6 +478,10 @@
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "red",
+                "value": 5
               }
             ]
           },
@@ -539,21 +530,44 @@
           "range": true,
           "refId": "B",
           "legendFormat": "width p95 {{subagent_depth}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "vector(5)",
+          "refId": "C",
+          "legendFormat": "alert threshold depth 5",
+          "range": true
         }
       ],
       "title": "Agent-tree depth and width",
-      "type": "timeseries"
+      "type": "timeseries",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Agent Node Graphs",
+          "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}"
+        }
+      ]
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 child fan-out grouped only by subagent depth.",
+      "description": "p95 child fan-out grouped only by subagent depth. The constant fan-out=20 line matches the ObservMeRunawayAgentFanOut alert threshold.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
           },
           "mappings": [],
           "thresholds": {
@@ -562,6 +576,10 @@
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "red",
+                "value": 20
               }
             ]
           },
@@ -599,10 +617,33 @@
           "range": true,
           "refId": "A",
           "legendFormat": "depth {{subagent_depth}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "vector(20)",
+          "refId": "B",
+          "legendFormat": "alert threshold fan-out 20",
+          "range": true
         }
       ],
       "title": "Fan-out per parent operation",
-      "type": "timeseries"
+      "type": "timeseries",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Agent Node Graphs",
+          "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}"
+        }
+      ]
     },
     {
       "datasource": {
@@ -662,7 +703,19 @@
         }
       ],
       "title": "Orphan agents",
-      "type": "timeseries"
+      "type": "timeseries",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Agent Node Graphs",
+          "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}"
+        }
+      ]
     },
     {
       "datasource": {
@@ -722,7 +775,19 @@
         }
       ],
       "title": "Trace-context propagation failures",
-      "type": "timeseries"
+      "type": "timeseries",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Agent Node Graphs",
+          "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}"
+        }
+      ]
     },
     {
       "datasource": {
@@ -864,7 +929,752 @@
         }
       ],
       "title": "Child-agent failures and recovered child failures",
-      "type": "timeseries"
+      "type": "timeseries",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Agent Node Graphs",
+          "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Subagent spawn failures divided by subagent spawn attempts over the selected range. Non-zero values align with the ObservMeSubagentSpawnFailures alert.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 40
+      },
+      "id": 14,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(increase(observme_subagent_spawn_failures_total[$__range])) or vector(0)) / clamp_min((sum(increase(observme_subagents_spawned_total[$__range])) or vector(0)), 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Spawn failure ratio",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Orphan agents divided by observed subagent spawns plus agent runs. This keeps orphan pressure visible even when a child runtime starts without a tracked spawn.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 40
+      },
+      "id": 15,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(increase(observme_orphan_agents_total[$__range])) or vector(0)) / clamp_min((sum(increase(observme_subagents_spawned_total[$__range])) or vector(0)) + (sum(increase(observme_agent_runs_total[$__range])) or vector(0)), 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Orphan ratio vs spawns/runs",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Trace-context propagation failures divided by subagent spawns for the selected range. Use Trace Journey to inspect the failed handoff logs.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 40
+      },
+      "id": 16,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(increase(observme_trace_context_propagation_failures_total[$__range])) or vector(0)) / clamp_min((sum(increase(observme_subagents_spawned_total[$__range])) or vector(0)), 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Propagation failure ratio",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Parent recoveries divided by child-agent failures. Low values mean child failures are not being recovered by parent orchestration.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "green",
+                "value": 0.9
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 40
+      },
+      "id": 17,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(increase(observme_parent_recovered_from_child_failure_total[$__range])) or vector(0)) / clamp_min((sum(increase(observme_child_agent_failures_total[$__range])) or vector(0)), 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Child recovery ratio",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Top agent roles by p95 run duration, paired with range run volume to avoid over-reading sparse percentile series.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 45
+      },
+      "id": 18,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "topk(10, histogram_quantile(0.95, sum(rate(observme_agent_run_duration_ms_bucket[$__rate_interval])) by (agent_role, le)))",
+          "refId": "A",
+          "legendFormat": "p95 {{agent_role}}",
+          "format": "table",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "topk(10, sum(increase(observme_agent_runs_total[$__range])) by (agent_role))",
+          "refId": "B",
+          "legendFormat": "runs {{agent_role}}",
+          "format": "table",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Top slow agent roles",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Top subagent spawn failures by bounded depth, type, reason, and error class. Use the handoff table below for matching logs and traces.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 45
+      },
+      "id": 19,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "topk(10, sum(increase(observme_subagent_spawn_failures_total[$__range])) by (subagent_depth, spawn_type, spawn_reason, error_class))",
+          "refId": "A",
+          "legendFormat": "depth {{subagent_depth}} {{spawn_type}} {{spawn_reason}} {{error_class}}",
+          "format": "table",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Failing spawn reasons",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Top orphan-producing role/depth/reason combinations over the selected range. Missing role/depth labels still render as aggregate orphan pressure.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 53
+      },
+      "id": 20,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "topk(10, sum(increase(observme_orphan_agents_total[$__range])) by (agent_role, subagent_depth, status, reason))",
+          "refId": "A",
+          "legendFormat": "{{agent_role}} depth {{subagent_depth}} {{status}} {{reason}}",
+          "format": "table",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Orphan-prone depths",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Top p95 fan-out by role and depth, with the same fan-out=20 alert threshold available in the time-series panel above.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 53
+      },
+      "id": 21,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "topk(10, histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket[$__rate_interval])) by (agent_role, subagent_depth, le)))",
+          "refId": "A",
+          "legendFormat": "{{agent_role}} depth {{subagent_depth}}",
+          "format": "table",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "vector(20)",
+          "refId": "B",
+          "legendFormat": "alert threshold fan-out 20",
+          "format": "table",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "High fan-out roles",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Parsed Loki table for agent-tree handoffs and lineage failures. Labels provide event, parent, child, and agent-run columns; trace_id fields link to Tempo when present. Empty means no matching handoff or lineage-failure logs in the selected range.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 61
+      },
+      "id": 6,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", event_category=\"agent-tree\", event_name=~\"agent[.]spawn[.](started|completed|failed)|agent[.](wait|join)[.](started|completed)|agent[.]orphaned|trace_context[.]propagation_failed\"}",
+          "range": true,
+          "refId": "A",
+          "legendFormat": "{{event_name}} {{pi_agent_parent_id}} -> {{pi_agent_id}}"
+        }
+      ],
+      "title": "Parent/child handoffs with trace links",
+      "type": "table",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open matching Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "event_name": "event",
+              "pi_agent_parent_id": "parent_agent",
+              "pi_agent_id": "agent",
+              "pi_agent_run_id": "agent_run",
+              "trace_id": "trace_id",
+              "span_id": "span_id"
+            }
+          }
+        }
+      ]
     }
   ],
   "refresh": "30s",

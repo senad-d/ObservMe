@@ -44,7 +44,28 @@
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Trace Journey",
+      "tooltip": "Open trace/log drill-downs with the current time range.",
+      "type": "link",
+      "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Export Health",
+      "tooltip": "Open export and handler self-observability panels.",
+      "type": "link",
+      "url": "/d/observme-export-health/observme-export-health?${__url_time_range}"
+    }
+  ],
   "liveNow": false,
   "panels": [
     {
@@ -279,7 +300,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Failure, dropped-telemetry, and orphan-agent logs using the provisioned event_name Loki label.",
+      "description": "Broad failure, dropped-telemetry, and orphan-agent log table. Specific parsed log tables below expose labels as columns and link trace_id fields to Tempo when present.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -306,51 +327,66 @@
         }
       ],
       "title": "Error logs",
-      "type": "table"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "description": "Tool failure log events using event_name, not the dotted event.name attribute.",
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 8
-      },
-      "id": 6,
-      "options": {
-        "showHeader": true
-      },
-      "targets": [
+      "type": "table",
+      "links": [
         {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "{service_name=\"observme-pi-extension\", event_name=\"tool.call.failed\"}",
-          "queryType": "range",
-          "refId": "A"
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
         }
       ],
-      "title": "Tool failure logs",
-      "type": "table"
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        }
+      ]
     },
     {
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
-      "description": "LLM request failure log events using normalized Loki attributes.",
+      "description": "Parsed LLM failure logs. Labels expose event, session, agent, agent run, and stop reason columns; trace_id links open Tempo when present.",
       "fieldConfig": {
-        "defaults": {},
-        "overrides": []
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -358,33 +394,112 @@
         "x": 0,
         "y": 16
       },
-      "id": 7,
+      "id": 6,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
       "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
         "showHeader": true
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
             "type": "loki",
             "uid": "loki"
           },
+          "editorMode": "code",
           "expr": "{service_name=\"observme-pi-extension\", event_name=\"llm.request.failed\"}",
+          "legendFormat": "{{event_name}}",
           "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
-      "title": "LLM failure logs",
-      "type": "table"
+      "title": "Parsed LLM failure logs",
+      "type": "table",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "event_name": "event",
+              "event_category": "category",
+              "pi_session_id": "session",
+              "pi_agent_id": "agent",
+              "pi_agent_parent_id": "parent_agent",
+              "pi_agent_run_id": "agent_run",
+              "pi_llm_stop_reason": "stop_reason",
+              "pi_bash_exit_code": "bash_exit_code",
+              "trace_id": "trace_id",
+              "span_id": "span_id"
+            }
+          }
+        }
+      ]
     },
     {
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Export failure log events for backend diagnosis.",
+      "description": "Parsed tool failure logs with event/session/agent labels and Tempo trace links when trace_id is present.",
       "fieldConfig": {
-        "defaults": {},
-        "overrides": []
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -392,23 +507,407 @@
         "x": 12,
         "y": 16
       },
-      "id": 8,
+      "id": 7,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
       "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
         "showHeader": true
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\", event_name=\"export.failed\"}",
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"tool.call.failed\"}",
+          "legendFormat": "{{event_name}}",
           "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
-      "title": "Export failure logs",
-      "type": "table"
+      "title": "Parsed tool failure logs",
+      "type": "table",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "event_name": "event",
+              "event_category": "category",
+              "pi_session_id": "session",
+              "pi_agent_id": "agent",
+              "pi_agent_parent_id": "parent_agent",
+              "pi_agent_run_id": "agent_run",
+              "pi_llm_stop_reason": "stop_reason",
+              "pi_bash_exit_code": "bash_exit_code",
+              "trace_id": "trace_id",
+              "span_id": "span_id"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Parsed export failure logs for backend/export diagnosis, with session and trace links when available.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 24
+      },
+      "id": 8,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"export.failed\"}",
+          "legendFormat": "{{event_name}}",
+          "queryType": "range",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Parsed export failure logs",
+      "type": "table",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "event_name": "event",
+              "event_category": "category",
+              "pi_session_id": "session",
+              "pi_agent_id": "agent",
+              "pi_agent_parent_id": "parent_agent",
+              "pi_agent_run_id": "agent_run",
+              "pi_llm_stop_reason": "stop_reason",
+              "pi_bash_exit_code": "bash_exit_code",
+              "trace_id": "trace_id",
+              "span_id": "span_id"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Parsed ObservMe handler failure logs for runtime self-observability.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 24
+      },
+      "id": 9,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"handler.failed\"}",
+          "legendFormat": "{{event_name}}",
+          "queryType": "range",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Parsed handler failure logs",
+      "type": "table",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "event_name": "event",
+              "event_category": "category",
+              "pi_session_id": "session",
+              "pi_agent_id": "agent",
+              "pi_agent_parent_id": "parent_agent",
+              "pi_agent_run_id": "agent_run",
+              "pi_llm_stop_reason": "stop_reason",
+              "pi_bash_exit_code": "bash_exit_code",
+              "trace_id": "trace_id",
+              "span_id": "span_id"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Parsed trace-context propagation failure logs for agent lineage troubleshooting.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 24
+      },
+      "id": 10,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"trace_context.propagation_failed\"}",
+          "legendFormat": "{{event_name}}",
+          "queryType": "range",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Parsed propagation failure logs",
+      "type": "table",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "event_name": "event",
+              "event_category": "category",
+              "pi_session_id": "session",
+              "pi_agent_id": "agent",
+              "pi_agent_parent_id": "parent_agent",
+              "pi_agent_run_id": "agent_run",
+              "pi_llm_stop_reason": "stop_reason",
+              "pi_bash_exit_code": "bash_exit_code",
+              "trace_id": "trace_id",
+              "span_id": "span_id"
+            }
+          }
+        }
+      ]
     }
   ],
   "refresh": "30s",

@@ -246,12 +246,16 @@ See [`SECURITY.md`](SECURITY.md) and `ObservMe-Production-Docs/06-security-priva
 
 These assets are included in the npm package:
 
-- Grafana dashboards: `dashboards/observme-*.json`, including `dashboards/observme-trace-journey.json` for trace travel and agent lineage drill-downs.
+- Grafana dashboards: `dashboards/observme-*.json`, including Overview, SLO Health, Export Health, Trace Journey, Agents, Agent Node Graphs, Cost, Models, Latency, Tools, Errors, Logs and LLM I/O, LLM Conversations, and Branches/Compactions.
 - Alert rules: `dashboards/observme-alerts.yaml`.
 - SLO definitions: `dashboards/observme-slos.yaml`.
 - Supported local-stack ObservMe config: `examples/observme.yaml`.
 - Production Collector config with high-cardinality and content-drop processors: `examples/collector.yaml`.
 - Compatibility matrix: `docs/compatibility-matrix.md`.
+
+Open **ObservMe Overview** first for health/SLO chips, workload, cost, latency, agent-lineage status, and time-preserving links to focused dashboards. Use **Trace Journey** to follow a session/workflow/agent/run across Prometheus aggregates, Loki logs, and Tempo traces. Use **LLM Conversations** only for redacted opt-in content; raw prompt, response, command, path, and error-message values should never be placed in dashboard URLs or Prometheus labels. Empty failure tables normally mean no matching failures in the selected range, while optional content panels can be empty because capture is disabled by default.
+
+The full dashboard map, standard variables, drill-down workflow, threshold colors, and zero-state semantics are documented in `ObservMe-Production-Docs/09-dashboards-alerts-slos.md`.
 
 The Docker Compose local stack is intentionally repository-only at <https://github.com/senad-d/ObservMe/tree/main/observability-stack> so packaged installs do not contain generated credentials, certificates, or local Pi state.
 

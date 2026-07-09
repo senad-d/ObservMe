@@ -44,7 +44,34 @@
     }
   ],
   "annotations": {
-    "list": []
+    "list": [
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "rgba(31, 120, 193, 1)",
+        "name": "Model changes",
+        "expr": "sum(increase(observme_model_changes_total[$__interval])) by (provider, model) > 0",
+        "titleFormat": "Model change",
+        "textFormat": "{{provider}} / {{model}}"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "rgba(245, 183, 0, 1)",
+        "name": "Thinking level changes",
+        "expr": "sum(increase(observme_thinking_level_changes_total[$__interval])) by (environment) > 0",
+        "titleFormat": "Thinking level change",
+        "textFormat": "{{environment}}"
+      }
+    ]
   },
   "editable": true,
   "fiscalYearStartMonth": 0,
@@ -238,7 +265,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Stop-reason distribution from provisioned Loki labels on completed LLM request logs.",
+      "description": "Selected-range stop-reason totals from provisioned Loki labels on completed LLM request logs.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -290,10 +317,11 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (pi_llm_stop_reason) (count_over_time({service_name=\"observme-pi-extension\", event_name=\"llm.request.completed\", pi_llm_stop_reason!=\"\"}[$__interval]))",
-          "range": true,
+          "expr": "sum by (pi_llm_stop_reason) (count_over_time({service_name=\"observme-pi-extension\", event_name=\"llm.request.completed\", pi_llm_stop_reason!=\"\"}[$__range]))",
+          "range": false,
           "refId": "A",
-          "legendFormat": "{{pi_llm_stop_reason}}"
+          "legendFormat": "{{pi_llm_stop_reason}}",
+          "instant": true
         }
       ],
       "title": "Stop reason distribution",
@@ -304,7 +332,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Rolling LLM cost normalized by completed turns and grouped by provider/model.",
+      "description": "Rolling LLM cost normalized by LLM request volume for each provider/model. This replaces the previous model-cost-per-global-turn denominator.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -350,14 +378,87 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "1000 * sum(rate(observme_llm_cost_usd_total[$__rate_interval])) by (provider, model) / clamp_min(sum(rate(observme_turns_completed_total[$__rate_interval])), 1e-9)",
+          "expr": "1000 * sum(rate(observme_llm_cost_usd_total[$__rate_interval])) by (provider, model) / clamp_min(sum(rate(observme_llm_requests_total[$__rate_interval])) by (provider, model), 1e-9)",
+          "legendFormat": "{{provider}} / {{model}}",
           "range": true,
-          "refId": "A",
-          "legendFormat": "{{provider}} / {{model}}"
+          "refId": "A"
         }
       ],
-      "title": "Cost per 1k turns",
+      "title": "Cost per 1k LLM requests",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Selected-range total LLM cost divided by completed turns. This is intentionally overall, not model-attributed, because turn metrics do not carry provider/model labels.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.1
+              },
+              {
+                "color": "red",
+                "value": 0.5
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(increase(observme_llm_cost_usd_total[$__range])) or vector(0)) / clamp_min((sum(increase(observme_turns_completed_total[$__range])) or vector(0)), 1)",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Overall cost per completed turn",
+      "type": "stat"
     }
   ],
   "refresh": "30s",

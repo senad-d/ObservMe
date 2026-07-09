@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Updated the LLM Conversations dashboard log panels to render only captured message bodies by default while preserving expanded log details for the full structured payload.
+- Updated dashboard documentation, README guidance, and multi-agent navigation notes for the improved dashboard map, drill-down workflows, variables, and zero-state semantics.
+- Improved LLM conversation and log drill-down dashboards with session/workflow/agent/run/provider/model/content-kind filters, canonical redacted content navigation, and Tempo trace links.
+- Added an ObservMe SLO Health dashboard and improved Export Health with SLO scorecards, 1h/30d burn rates, composite export health inputs, handler p99 latency, and alert-threshold references.
+- Improved latency, tool, error, and LLM log dashboards with percentile/volume tables, tool failure severity rankings, parsed failure log tables with trace links, and character-size units.
+- Improved LLM cost/model dashboards with burn-rate and budget forecast chips, corrected cost-efficiency denominators, expanded token/cache panels, stop-reason totals, and model/thinking-change annotations.
+- Improved Agents, Trace Journey, and Agent Node Graph dashboards with lineage ratios, fan-out/depth alert references, top offender tables, handoff trace links, and red health-count nodes for spawn/lineage issues.
+- Reworked the Overview dashboard into an operator landing page with health/SLO chips, compact workload/cost/latency/agent-lineage rows, and time-preserving drill-down links.
+- Improved the Trace Journey dashboard with failed-workflow stats, a workflow completion ratio, logs-backed journey events, and session/agent-preserving trace/log links.
+- Documented shared Grafana dashboard UX conventions for standard variables, row names, drill-down links, thresholds, and healthy empty states.
+- Added dashboard structural validation for all provisioned JSON dashboards and fixed the Trace Journey active-agents stat target/title.
+- Added a dashboard insight-improvement spec covering panel-by-panel Grafana review, multi-agent/subagent drill-downs, SLO visibility, and metric/log/trace correlation improvements.
 - Remediated the latest SonarQube findings by replacing Unicode-insensitive character helpers, removing backtracking-prone regexes, simplifying default assignment, and preserving diagnostic URL credential redaction without regex backtracking.
 - Restored LLM conversation capture by letting trusted project `.env` hash salts drive redaction, surfacing content-capture failure reasons, and extending the LLM Conversations dashboard default range.
 - Completed SonarQube batch 4 remediation by handling ignored fallbacks, simplifying bounded regex and default-assignment findings, using precise type-check errors, and reducing query parsing complexity.

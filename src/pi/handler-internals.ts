@@ -719,6 +719,8 @@ export function buildCapturedContentLogAttributes(
     ...buildLineageMetricSafeLogAttributes(session),
     [COMMON_SPAN_ATTRIBUTES.PI_AGENT_RUN_ID]: session.currentAgentRunId,
     [LOG_ATTRIBUTES.PI_TURN_ID]: session.currentTurnId,
+    [LLM_ATTRIBUTES.GEN_AI_PROVIDER_NAME]: readString(session.sessionAttributes, sessionAttributeKeys.MODEL_PROVIDER_CURRENT),
+    [LLM_ATTRIBUTES.GEN_AI_REQUEST_MODEL]: readString(session.sessionAttributes, sessionAttributeKeys.MODEL_ID_CURRENT),
     [LLM_ATTRIBUTES.PI_LLM_CONTENT_KIND]: kind,
     [LOG_ATTRIBUTES.TRACE_ID]: readSpanTraceId(span),
     [LOG_ATTRIBUTES.SPAN_ID]: readSpanId(span),

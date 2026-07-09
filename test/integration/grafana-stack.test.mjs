@@ -34,6 +34,7 @@ const dashboardFiles = [
   "dashboards/observme-errors.json",
   "dashboards/observme-branches-compactions.json",
   "dashboards/observme-export-health.json",
+  "dashboards/observme-slo-health.json",
   "dashboards/observme-logs-llm.json",
   "dashboards/observme-llm-conversations.json",
   "dashboards/observme-trace-journey.json",

@@ -429,6 +429,8 @@ test("optional content capture redacts values and metric labels stay low-cardina
   const promptLog = (session.logger as ReturnType<typeof createFakeLogger>).records.find(record => record.attributes?.[LOG_ATTRIBUTES.EVENT_NAME] === LOG_EVENT_NAMES.LLM_PROMPT_CAPTURED);
   assert.equal(promptLog?.body, promptSpan.attributes[LLM_ATTRIBUTES.PI_LLM_PROMPT_REDACTED]);
   assert.equal(promptLog?.attributes?.[LOG_ATTRIBUTES.EVENT_CATEGORY], "llm_content");
+  assert.equal(promptLog?.attributes?.[LLM_ATTRIBUTES.GEN_AI_PROVIDER_NAME], "anthropic");
+  assert.equal(promptLog?.attributes?.[LLM_ATTRIBUTES.GEN_AI_REQUEST_MODEL], "claude-3");
   assert.equal(promptLog?.attributes?.[LLM_ATTRIBUTES.PI_LLM_CONTENT_KIND], "prompt");
   assert.equal(promptLog?.attributes?.[LOG_ATTRIBUTES.TRACE_ID], "11111111111111111111111111111111");
   assert.equal(promptLog?.attributes?.[LOG_ATTRIBUTES.SPAN_ID], "2222222222222222");

@@ -915,6 +915,24 @@ Pi command:
 /obs agents
 ```
 
+### Dashboard navigation note
+
+Use the improved dashboards in this order when validating a root-agent/subagent scenario:
+
+1. Start in **ObservMe Overview** and confirm the `Agent lineage` and `Health` rows are green or intentionally idle.
+2. Open **Trace Journey** with the same time range and apply Loki/Tempo-only `session_id`, `workflow_id`, `agent_id`, or `agent_run_id` filters to follow one execution.
+3. Open **Agents and Subagents** for spawn failure, orphan, propagation, child recovery, wait/join, fan-out, and depth ratios, then use the handoff rows to jump back to Trace Journey or Tempo.
+4. Open **Agent Node Graphs** only for aggregate topology; it shows selected-range counts and red health nodes/edges, not a single trace tree.
+5. Open **SLO Health** or **Export Health** when lineage panels look empty or stale, because healthy idle ranges, missing optional child telemetry, and export failures have different meanings.
+
+High-cardinality identifiers remain log/trace filters only. Prometheus panels should continue to use bounded labels such as `agent_role`, `subagent_depth`, `spawn_type`, `spawn_reason`, `status`, `reason`, and `error_class`.
+
+### Dashboard implementation note
+
+The Agents and Agent Node Graphs dashboards now surface the main operator questions directly: spawn failure ratio, orphan pressure, trace-context propagation failure ratio, child recovery ratio, depth/fan-out alert references, slow/failing/orphan/high-fan-out top tables, and Loki handoff rows with Trace Journey/Tempo drill-down links. The node graphs also include red health nodes/edges for failed spawns, orphan lineage, and propagation failures alongside selected-range counts.
+
+`agent_capability` remains deliberately absent from dashboard filters until a launcher emits a bounded capability label consistently. Keep capability detail in Loki/Tempo or orchestration-local state unless the launcher maps names into a documented low-cardinality enum.
+
 ## 12. Current implementation checkpoints and gaps
 
 These are documentation findings from reading the current code and dashboards. They are not code changes.

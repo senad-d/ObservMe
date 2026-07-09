@@ -19,6 +19,12 @@
       "version": "1.0.0"
     },
     {
+      "id": "row",
+      "name": "Row",
+      "type": "panel",
+      "version": ""
+    },
+    {
       "id": "timeseries",
       "name": "Time series",
       "type": "panel",
@@ -31,8 +37,20 @@
       "version": ""
     },
     {
+      "id": "bargauge",
+      "name": "Bar gauge",
+      "type": "panel",
+      "version": ""
+    },
+    {
       "id": "table",
       "name": "Table",
+      "type": "panel",
+      "version": ""
+    },
+    {
+      "id": "text",
+      "name": "Text",
       "type": "panel",
       "version": ""
     }
@@ -44,15 +62,59 @@
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "SLO Health",
+      "tooltip": "Open SLO scorecards, burn rates, and alert thresholds with the current time range.",
+      "type": "link",
+      "url": "/d/observme-slo-health/observme-slo-health?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Errors",
+      "tooltip": "Open parsed failure logs and trace links.",
+      "type": "link",
+      "url": "/d/observme-errors/observme-errors?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Trace Journey",
+      "tooltip": "Open trace/log drill-downs for propagation failures.",
+      "type": "link",
+      "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+    }
+  ],
   "liveNow": false,
   "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "Health",
+      "type": "row"
+    },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Recent ObservMe handler activity from observme_events_observed_total. A zero value means no matching events were observed in the selected range rather than a dashboard import failure.",
+      "description": "Recent ObservMe handler activity from observme_events_observed_total. A zero value means the selected range is idle or no matching events have been observed; use the adjacent failure chips to distinguish healthy idle from unhealthy export behavior.",
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -60,8 +122,12 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
+              },
+              {
+                "color": "green",
+                "value": 1e-9
               }
             ]
           },
@@ -70,10 +136,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
+        "h": 4,
+        "w": 4,
         "x": 0,
-        "y": 0
+        "y": 1
       },
       "id": 10,
       "options": {
@@ -113,6 +179,742 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
+      "description": "Composite runtime export score: healthy idle is green when no events and no failures exist; active ranges are degraded by telemetry drops, export errors, and redaction failures. The adjacent chips show which input moved the score.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.99
+              },
+              {
+                "color": "green",
+                "value": 0.999
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "id": 5,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open SLO Health",
+          "url": "/d/observme-slo-health/observme-slo-health?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "clamp_max(((((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)) > bool 0) * clamp_min(1 - ((((sum(rate(observme_telemetry_dropped_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_export_errors_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_redaction_failures_total[$__rate_interval])) or vector(0))) / clamp_min((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)), 1e-9)), 0)) + ((((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)) == bool 0) * ((((sum(rate(observme_telemetry_dropped_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_export_errors_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_redaction_failures_total[$__rate_interval])) or vector(0))) == bool 0))), 1)",
+          "legendFormat": "clean export score",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Collector/export health",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Local telemetry drop ratio for the selected window. Zero is healthy; if event liveness is zero, zero means healthy idle rather than a missing dashboard query.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1e-9
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "id": 12,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open drop logs",
+          "url": "/d/observme-export-health/observme-export-health?${__url_time_range}&viewPanel=8"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(rate(observme_telemetry_dropped_total[$__rate_interval])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)), 1)",
+          "legendFormat": "drop ratio",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Telemetry drop ratio",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Exporter/backend error rate. Zero means no export errors were observed in the selected range.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1e-9
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "id": 13,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(rate(observme_export_errors_total[$__rate_interval])) or vector(0))",
+          "legendFormat": "export errors",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Export error rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Redaction failure rate. Zero is healthy; any non-zero value is critical when content capture is enabled.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1e-9
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "id": 14,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(rate(observme_redaction_failures_total[$__rate_interval])) or vector(0))",
+          "legendFormat": "redaction failures",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Redaction failure rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Instrumentation overhead chip: p99 handler lifecycle latency should stay under the 10 ms SLO threshold.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "id": 15,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum(rate(observme_handler_duration_ms_bucket[$__rate_interval])) by (le)) or vector(0)",
+          "legendFormat": "handler p99",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Handler p99 latency",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "id": 101,
+      "panels": [],
+      "title": "SLOs",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "30-day Observability Export SLO from observme-slos.yaml. No workload in the window is healthy idle; non-zero drops lower this score.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.99
+              },
+              {
+                "color": "green",
+                "value": 0.999
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 6
+      },
+      "id": 16,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open SLO Health",
+          "url": "/d/observme-slo-health/observme-slo-health?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "clamp_max(clamp_min(1 - ((sum(increase(observme_telemetry_dropped_total[30d])) or vector(0)) / clamp_min((sum(increase(observme_events_observed_total[30d])) or vector(0)), 1)), 0), 1)",
+          "instant": true,
+          "legendFormat": "export SLO",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Observability Export SLO (30d)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Instrumentation Overhead SLO scorecard: p99 handler duration over 30 days should stay under 10 ms.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 6
+      },
+      "id": 17,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open SLO Health",
+          "url": "/d/observme-slo-health/observme-slo-health?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum(rate(observme_handler_duration_ms_bucket[30d])) by (le)) or vector(0)",
+          "instant": true,
+          "legendFormat": "handler p99",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Instrumentation Overhead SLO p99 (30d)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Short-window burn rates normalized by a 1% error budget. Values above 1 consume error budget faster than target.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 6
+      },
+      "id": 18,
+      "options": {
+        "displayMode": "gradient",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "((sum(rate(observme_telemetry_dropped_total[1h])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[1h])) or vector(0)), 1e-9)) / 0.01",
+          "instant": true,
+          "legendFormat": "export drops",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[1h])) or vector(0)) / clamp_min((sum(rate(observme_handler_duration_ms_count[1h])) or vector(0)), 1e-9)), 0) / 0.01",
+          "instant": true,
+          "legendFormat": "handler >10ms",
+          "range": false,
+          "refId": "B"
+        }
+      ],
+      "title": "Runtime SLO burn rate (1h)",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Long-window burn rates normalized by a 1% error budget. Pair with the 1h view to identify sustained SLO risk.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 6
+      },
+      "id": 19,
+      "options": {
+        "displayMode": "gradient",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "((sum(rate(observme_telemetry_dropped_total[30d])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[30d])) or vector(0)), 1e-9)) / 0.01",
+          "instant": true,
+          "legendFormat": "export drops",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[30d])) or vector(0)) / clamp_min((sum(rate(observme_handler_duration_ms_count[30d])) or vector(0)), 1e-9)), 0) / 0.01",
+          "instant": true,
+          "legendFormat": "handler >10ms",
+          "range": false,
+          "refId": "B"
+        }
+      ],
+      "title": "Runtime SLO burn rate (30d)",
+      "type": "bargauge"
+    },
+    {
+      "description": "Alert thresholds mirrored from dashboards/observme-alerts.yaml for quick operational context.",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "id": 20,
+      "options": {
+        "code": {
+          "language": "markdown",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "### Alert threshold reference\n\n- **ObservMeExportDropsDetected:** any local telemetry drops for 5m.\n- **ObservMeRedactionFailures:** any redaction failures for 5m.\n- **ObservMeTraceContextPropagationFailures:** any trace-context propagation failures for 10m.\n- **ObservMeActiveAgentsStuckHigh:** active agents > **100** for 30m.\n- Agent orchestration thresholds: p95 fan-out > **20** and p95 tree depth > **5** for 10m.",
+        "mode": "markdown"
+      },
+      "pluginVersion": "11.1.0",
+      "title": "Alert threshold reference",
+      "type": "text"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 102,
+      "panels": [],
+      "title": "Signals",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "description": "Sessions started and shut down in the selected time range. Zero means no matching session lifecycle samples exist for the range.",
       "fieldConfig": {
         "defaults": {
@@ -133,8 +935,8 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 8,
-        "y": 0
+        "x": 0,
+        "y": 18
       },
       "id": 11,
       "options": {
@@ -185,71 +987,6 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Short-window export health score: 1 when ObservMe events are being observed and no local drops are recorded; 0 when no activity exists in range or local drops consume all observed activity.",
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 0.99
-              }
-            ]
-          },
-          "unit": "percentunit"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 0
-      },
-      "id": 5,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)) > bool 0) * clamp_min(1 - ((sum(rate(observme_telemetry_dropped_total[$__rate_interval])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)), 1e-9)), 0))",
-          "legendFormat": "not dropped",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Collector/export health",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
       "description": "Telemetry drop rate grouped by bounded drop reason. The zero fallback means no local drops were observed in the selected range.",
       "fieldConfig": {
         "defaults": {
@@ -274,8 +1011,8 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 0,
-        "y": 8
+        "x": 8,
+        "y": 18
       },
       "id": 1,
       "options": {
@@ -310,66 +1047,6 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Redaction failure rate. The zero fallback means no redaction failures were observed in the selected range.",
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1e-9
-              }
-            ]
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 8
-      },
-      "id": 2,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(sum(rate(observme_redaction_failures_total[$__rate_interval])) or vector(0))",
-          "legendFormat": "redaction failures",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Redaction failures",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
       "description": "Exporter/backend failure rate grouped by bounded reason. The zero fallback means no export failures were observed in the selected range.",
       "fieldConfig": {
         "defaults": {
@@ -395,7 +1072,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 8
+        "y": 18
       },
       "id": 3,
       "options": {
@@ -430,6 +1107,66 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
+      "description": "Redaction failure rate. The zero fallback means no redaction failures were observed in the selected range.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1e-9
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 26
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(rate(observme_redaction_failures_total[$__rate_interval])) or vector(0))",
+          "legendFormat": "redaction failures",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Redaction failures",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "description": "Active spans by bounded operation as an SDK pressure signal. Zero means no active spans are currently exposed for the selected range.",
       "fieldConfig": {
         "defaults": {
@@ -450,8 +1187,8 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 0,
-        "y": 16
+        "x": 8,
+        "y": 26
       },
       "id": 4,
       "options": {
@@ -510,8 +1247,8 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 8,
-        "y": 16
+        "x": 16,
+        "y": 26
       },
       "id": 6,
       "options": {
@@ -542,6 +1279,19 @@
       "type": "timeseries"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "id": 103,
+      "panels": [],
+      "title": "Logs",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -555,7 +1305,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 24
+        "y": 35
       },
       "id": 7,
       "options": {
@@ -589,7 +1339,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 24
+        "y": 35
       },
       "id": 8,
       "options": {
@@ -623,7 +1373,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 24
+        "y": 35
       },
       "id": 9,
       "options": {
@@ -661,6 +1411,6 @@
   "timezone": "browser",
   "title": "ObservMe Export Health",
   "uid": "observme-export-health",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

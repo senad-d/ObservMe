@@ -49,12 +49,6 @@
       "version": ""
     },
     {
-      "id": "state-timeline",
-      "name": "State timeline",
-      "type": "panel",
-      "version": ""
-    },
-    {
       "id": "table",
       "name": "Table",
       "type": "panel",
@@ -80,7 +74,13 @@
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "targetBlank": false,
+      "title": "Open matching LLM Conversations",
+      "url": "/d/observme-llm-conversations/observme-llm-conversations?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
+    }
+  ],
   "liveNow": false,
   "panels": [
     {
@@ -115,7 +115,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Currently active ObservMe sessions, counted from the active runtime gauge instead of the started/shutdown counter estimate.",
+      "description": "Currently active ObservMe agent runtimes, counted from the active runtime gauge instead of the started/shutdown counter estimate.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -137,7 +137,7 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 3,
         "x": 0,
         "y": 5
       },
@@ -166,13 +166,13 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(sum(observme_active_agents) or vector(0))"},{
+          "expr": "(sum(observme_active_agents) or vector(0))",
           "instant": true,
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "Active sessions",
+      "title": "Active agents",
       "type": "stat"
     },
     {
@@ -180,7 +180,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Completed workflows during the selected dashboard range.",
+      "description": "Completed workflows during the selected dashboard range. Empty ranges render as zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -202,8 +202,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 4,
+        "w": 3,
+        "x": 3,
         "y": 5
       },
       "id": 3,
@@ -231,13 +231,155 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_workflows_completed_total[$__range]))",
+          "expr": "sum(increase(observme_workflows_completed_total[$__range])) or vector(0)",
           "instant": true,
           "range": false,
           "refId": "A"
         }
       ],
       "title": "Completed workflows",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Failed workflows during the selected dashboard range. Any non-zero value should be investigated with the ordered logs and Tempo traces below.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 6,
+        "y": 5
+      },
+      "id": 16,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(observme_workflow_errors_total[$__range])) or vector(0)",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Failed workflows",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Completed workflows divided by completed plus failed workflows for the selected range; use beside the failed-workflow stat for terminal workflow health.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.95
+              },
+              {
+                "color": "green",
+                "value": 0.99
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 9,
+        "y": 5
+      },
+      "id": 17,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "((sum(increase(observme_workflows_completed_total[$__range])) or vector(0)) / clamp_min(((sum(increase(observme_workflows_completed_total[$__range])) or vector(0)) + (sum(increase(observme_workflow_errors_total[$__range])) or vector(0)), 1))",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Workflow completion ratio",
       "type": "stat"
     },
     {
@@ -267,8 +409,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 8,
+        "w": 3,
+        "x": 12,
         "y": 5
       },
       "id": 4,
@@ -332,8 +474,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 12,
+        "w": 3,
+        "x": 15,
         "y": 5
       },
       "id": 5,
@@ -397,8 +539,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 16,
+        "w": 3,
+        "x": 18,
         "y": 5
       },
       "id": 6,
@@ -466,8 +608,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 20,
+        "w": 3,
+        "x": 21,
         "y": 5
       },
       "id": 7,
@@ -795,7 +937,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Shape of the agent tree over time without using workflow or agent IDs as metric labels.",
+      "description": "Shape of the agent tree over time without using workflow or agent IDs as metric labels. Constant reference lines mirror the depth=5 and fan-out=20 alert thresholds.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -910,17 +1052,51 @@
           "legendFormat": "fan-out p95",
           "range": true,
           "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "vector(5)",
+          "refId": "E",
+          "legendFormat": "depth alert threshold 5",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "vector(20)",
+          "refId": "F",
+          "legendFormat": "fan-out alert threshold 20",
+          "range": true
         }
       ],
       "title": "Agent tree shape",
-      "type": "timeseries"
+      "type": "timeseries",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Agents dashboard",
+          "url": "/d/observme-agents/observme-agents?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Agent Node Graphs",
+          "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}"
+        }
+      ]
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Subagent handoff volume by depth and reason across the selected range.",
+      "description": "Subagent handoff volume by depth and reason across the selected range, with failed spawn volume beside successful handoffs when failure labels are emitted.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1001,17 +1177,36 @@
           "legendFormat": "depth {{subagent_depth}} / {{spawn_reason}}",
           "range": false,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(observme_subagent_spawn_failures_total[$__range])) by (subagent_depth, spawn_reason, error_class)",
+          "refId": "B",
+          "legendFormat": "failed depth {{subagent_depth}} {{spawn_reason}} {{error_class}}",
+          "instant": true,
+          "range": false
         }
       ],
       "title": "Subagent handoffs by depth and reason",
-      "type": "barchart"
+      "type": "barchart",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Agents dashboard",
+          "url": "/d/observme-agents/observme-agents?${__url_time_range}"
+        }
+      ]
     },
     {
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
-      "description": "A chronological state view of ObservMe journey events from Loki. Filter by Session ID, Agent ID, or Agent run ID to follow one request.",
+      "description": "Chronological ObservMe journey events from Loki. Filter by Session ID, Agent ID, or Agent run ID to follow one request; this uses a logs panel because Loki log streams do not provide state-timeline frames without extra transforms.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1049,19 +1244,14 @@
       },
       "id": 12,
       "options": {
-        "alignValue": "left",
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "mergeValues": true,
-        "rowHeight": 0.9,
-        "showValue": "always",
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
       },
       "targets": [
         {
@@ -1070,13 +1260,20 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_name=~\"session[.](started|shutdown)|workflow[.](started|completed|failed)|agent[.](run[.](started|completed|failed)|spawn[.](started|completed|failed)|wait[.](started|completed)|join[.](started|completed)|orphaned)|trace_context[.]propagation_failed|turn[.](started|completed)|llm[.]request[.](started|completed|failed)|tool[.]call[.](started|completed|failed)|bash[.]completed|branch[.]created|compaction[.]created\"}",
+          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_name=~\"session[.](started|shutdown)|workflow[.](started|completed|failed)|agent[.](run[.](started|completed|failed)|spawn[.](started|completed|failed)|wait[.](started|completed)|join[.](started|completed)|orphaned)|trace_context[.]propagation_failed|turn[.](started|completed)|llm[.]request[.](started|completed|failed)|tool[.]call[.](started|completed|failed)|bash[.]completed|branch[.]created|compaction[.]created\"}",
           "queryType": "range",
           "refId": "A"
         }
       ],
-      "title": "Execution journey timeline",
-      "type": "state-timeline"
+      "title": "Execution journey events",
+      "type": "logs",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open matching LLM Conversations",
+          "url": "/d/observme-llm-conversations/observme-llm-conversations?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
+        }
+      ]
     },
     {
       "datasource": {
@@ -1129,7 +1326,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", event_category=\"agent-tree\"}",
+          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_category=\"agent-tree\"}",
           "legendFormat": "{{pi_agent_parent_id}} -> {{pi_agent_id}}",
           "queryType": "range",
           "refId": "A"
@@ -1143,7 +1340,7 @@
         "type": "tempo",
         "uid": "tempo"
       },
-      "description": "Recent ObservMe traces from Tempo. Open a row in Explore to inspect the complete trace waterfall and span relationships.",
+      "description": "Recent ObservMe traces from Tempo. Open a row in Explore to inspect the complete trace waterfall and use the panel link to keep the current session/agent filters beside the ordered logs.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1196,14 +1393,26 @@
         }
       ],
       "title": "Recent Tempo traces",
-      "type": "table"
+      "type": "table",
+      "links": [
+        {
+          "title": "Open matching journey logs",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}",
+          "targetBlank": false
+        },
+        {
+          "title": "Open matching LLM Conversations",
+          "url": "/d/observme-llm-conversations/observme-llm-conversations?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}",
+          "targetBlank": false
+        }
+      ]
     },
     {
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Ordered journey logs with labels visible. Use this beside the Tempo waterfall to connect event logs, trace IDs, and span IDs.",
+      "description": "Ordered journey logs with labels visible. Use this beside the Tempo waterfall to connect event logs, trace IDs, span IDs, and the current session/agent filters.",
       "gridPos": {
         "h": 10,
         "w": 24,
@@ -1228,13 +1437,25 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_name=~\"session[.](started|shutdown)|workflow[.](started|completed|failed)|agent[.](run[.](started|completed|failed)|spawn[.](started|completed|failed)|wait[.](started|completed)|join[.](started|completed)|orphaned)|trace_context[.]propagation_failed|turn[.](started|completed)|llm[.]request[.](started|completed|failed)|tool[.]call[.](started|completed|failed)|bash[.]completed|branch[.]created|compaction[.]created\"}",
+          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_name=~\"session[.](started|shutdown)|workflow[.](started|completed|failed)|agent[.](run[.](started|completed|failed)|spawn[.](started|completed|failed)|wait[.](started|completed)|join[.](started|completed)|orphaned)|trace_context[.]propagation_failed|turn[.](started|completed)|llm[.]request[.](started|completed|failed)|tool[.]call[.](started|completed|failed)|bash[.]completed|branch[.]created|compaction[.]created\"}",
           "queryType": "range",
           "refId": "A"
         }
       ],
       "title": "Ordered journey log",
-      "type": "logs"
+      "type": "logs",
+      "links": [
+        {
+          "title": "Open matching Trace Journey filters",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}",
+          "targetBlank": false
+        },
+        {
+          "title": "Open matching LLM Conversations",
+          "url": "/d/observme-llm-conversations/observme-llm-conversations?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}",
+          "targetBlank": false
+        }
+      ]
     }
   ],
   "refresh": "10s",
@@ -1269,6 +1490,31 @@
         "name": "session_id",
         "options": [],
         "query": "label_values({service_name=\"observme-pi-extension\"}, pi_session_id)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
+        "definition": "label_values({service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\"}, pi_workflow_id)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Workflow ID",
+        "multi": true,
+        "name": "workflow_id",
+        "options": [],
+        "query": "label_values({service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\"}, pi_workflow_id)",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
