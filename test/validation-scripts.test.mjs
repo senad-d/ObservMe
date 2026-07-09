@@ -16,6 +16,7 @@ test("Pi lifecycle smoke uses an explicit offline telemetry config", () => {
 
 test("coverage generation writes only to ignored coverage artifacts", () => {
   assert.match(coverageScript, /coverage\/node-test-coverage\.txt/u);
+  assert.match(coverageScript, /coverage\/lcov\.info/u);
   assert.match(gitignore, /^coverage\/$/mu);
 });
 

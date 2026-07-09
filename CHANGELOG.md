@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Generated SonarQube-readable LCOV output during coverage runs so scans can import test coverage from `coverage/lcov.info`.
 - Fixed bounded OTEL flush/shutdown timeouts so awaited lifecycle operations resolve under Node's test runner instead of using unref'ed timers that let GitHub Actions cancel pending tests.
 - Kept Docker-backed integration tests out of default coverage generation unless `OBSERVME_INCLUDE_INTEGRATION_COVERAGE=1` is set, making GitHub Actions coverage deterministic and offline by default.
 - Fixed npm dependency installation by pinning TypeScript to a version supported by the current `typescript-eslint` peer range.

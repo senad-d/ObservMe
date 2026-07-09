@@ -40,7 +40,7 @@ Notes:
 - `npm run smoke:pi-lifecycle` runs handler lifecycle code with an explicit offline config: traces, metrics, logs, and query integration are disabled, and endpoint fields are loopback-only.
 - `npm run smoke:pi-runtime` runs a credential-free Pi RPC lifecycle smoke that covers extension reload through a smoke command that calls `ctx.reload()` (the same flow as `/reload`), RPC `new_session` replacement, post-replacement `/obs status` and `/obs session` routing, and sanitized current Pi event shapes for model/thinking changes, agent turns, built-in tool lifecycle events, and `message_end` with local deterministic backends only.
 - `user_bash` is the remaining manual event-shape path: current Pi emits it from interactive `!`/`!!` handling, while RPC `bash`/`prompt` commands do not emit it. The automated smoke verifies the installed Pi `UserBashEvent` type contract (`command`, `excludeFromContext`, `cwd`, and no completed-result fields). Manual recipe when a TUI is available: launch Pi with a temporary recorder extension that logs only `typeof command`, `typeof cwd`, `excludeFromContext`, and completed-result field presence; run `!!printf observme-user-bash-shape`; confirm the shape remains pre-execution and contains no raw command/output in recorded evidence.
-- `npm run test:coverage` is the remaining generated-output validation command. It writes `coverage/node-test-coverage.txt` for the default non-Docker test suite; `coverage/` is git-ignored, and `rm -rf coverage` is the cleanup command after review if the artifact is not needed. Docker integration coverage is opt-in with `OBSERVME_INCLUDE_INTEGRATION_COVERAGE=1`.
+- `npm run test:coverage` is the remaining generated-output validation command. It writes `coverage/node-test-coverage.txt` and SonarQube-readable `coverage/lcov.info` for the default non-Docker test suite; `coverage/` is git-ignored, and `rm -rf coverage` is the cleanup command after review if the artifacts are not needed. Docker integration coverage is opt-in with `OBSERVME_INCLUDE_INTEGRATION_COVERAGE=1`.
 - `npm run validate` remains the broader release-oriented validation entry point, but the review checklist records explicit commands so failures can be attributed to source, test, lint, package, smoke, or audit stages.
 
 ## Deferred integration and Pi lifecycle verification checklist
@@ -79,7 +79,7 @@ Post-run cleanup check: `docker ps --filter name=observme-grafana-it --format '{
 ## Review-closure evidence categories
 
 - **Read-only/check-only** — commands that inspect, type-check, lint, audit, run tests, dry-run packaging, or smoke local deterministic fixtures without publishing or writing tracked files.
-- **Generated-output** — commands that write ignored artifacts, such as `npm run test:coverage` writing `coverage/node-test-coverage.txt`; record the path and clean it with `rm -rf coverage` if the artifact is not needed.
+- **Generated-output** — commands that write ignored artifacts, such as `npm run test:coverage` writing `coverage/node-test-coverage.txt` and `coverage/lcov.info`; record the paths and clean them with `rm -rf coverage` if the artifacts are not needed.
 - **Docker/integration** — commands that require Docker or the local observability stack, such as `npm run test:integration:collector`, `npm run test:integration:grafana-stack`, and `npm run validate:grafana-obs`.
 - **Credential/manual** — checks that require a TUI, model provider credentials, Grafana credentials, or other operator-controlled state; keep recorded evidence sanitized and never paste secrets, prompts, commands, or raw outputs.
 
@@ -111,5 +111,5 @@ Use this matrix before checking a review task complete. The focused command must
 The matrix above is the minimum closure evidence for the review tasks. Run these broader checks before release or when touching the corresponding surface:
 
 - **Docker/integration:** `npm run test:integration:collector`, `npm run test:integration:grafana-stack`, and `npm run validate:grafana-obs` when Docker and the local observability stack are available.
-- **Generated-output:** `npm run test:coverage` when coverage evidence is needed; record `coverage/node-test-coverage.txt` and remove `coverage/` afterward unless the artifact is intentionally retained.
+- **Generated-output:** `npm run test:coverage` when coverage evidence is needed; record `coverage/node-test-coverage.txt` and `coverage/lcov.info`, then remove `coverage/` afterward unless the artifacts are intentionally retained.
 - **Credential/manual:** model-provider, Grafana credential, and interactive Pi TUI checks must use sanitized shape/status evidence only.

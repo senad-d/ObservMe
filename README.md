@@ -301,7 +301,7 @@ pi --no-extensions -e .
 
 `npm run smoke:pi-lifecycle` runs lifecycle handlers with traces, metrics, logs, and query integration disabled through an explicit offline test config. `npm run smoke:pi-runtime` launches a real Pi RPC process against a temporary trusted project, verifies `/obs` discovery plus `/obs status` and `/obs session` routing after `session_start`, and exercises a bounded `/obs cost` timeout against a local deterministic Grafana backend.
 
-`npm run test:coverage` writes `coverage/node-test-coverage.txt` for the default non-Docker test suite; `coverage/` is git-ignored, and `rm -rf coverage` removes generated coverage artifacts after review. Docker integration coverage is opt-in with `OBSERVME_INCLUDE_INTEGRATION_COVERAGE=1 npm run test:coverage`.
+`npm run test:coverage` writes `coverage/node-test-coverage.txt` and SonarQube-readable `coverage/lcov.info` for the default non-Docker test suite; `coverage/` is git-ignored, and `rm -rf coverage` removes generated coverage artifacts after review. Docker integration coverage is opt-in with `OBSERVME_INCLUDE_INTEGRATION_COVERAGE=1 npm run test:coverage`.
 
 End-to-end troubleshooting flow: [`docs/validation-flow.md`](docs/validation-flow.md) provides a deterministic, secret-safe checklist and script for the common user-facing case where Grafana has data but `/obs` commands are failing.
 

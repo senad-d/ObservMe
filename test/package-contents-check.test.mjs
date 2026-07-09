@@ -38,6 +38,7 @@ test("package content checks reject environment files, secret material, and loca
     "observability-stack/.pi/agent/guardme-state.jsonl",
     "specs/spec-review.md",
     "coverage/node-test-coverage.txt",
+    "coverage/lcov.info",
     "observme-0.1.0.tgz",
     "README.md",
   ]);
@@ -57,6 +58,7 @@ test("package content checks reject environment files, secret material, and loca
       "observability-stack/.pi/agent/guardme-state.jsonl:project-local pi state",
       "specs/spec-review.md:planning specs",
       "coverage/node-test-coverage.txt:generated reports",
+      "coverage/lcov.info:generated reports",
       "observme-0.1.0.tgz:npm tarballs",
     ],
   );
