@@ -936,6 +936,8 @@ async function llmConversationDashboardSupportsSafeFilteredDrilldown() {
       /\|\s*json\s*\|\s*line_format\s+"\{\{\.body\}\}"/u,
       `${llmConversationsDashboardFile}: ${title} must show only the parsed body log line by default`,
     );
+    assert.equal(panel.options?.showTime, false, `${llmConversationsDashboardFile}: ${title} must hide the log time column`);
+    assert.equal(panel.options?.showLabels, false, `${llmConversationsDashboardFile}: ${title} must hide unique labels by default`);
   }
 
   assert.match(timelinePanel.description ?? "", /(?:redacted.*opt-in|opt-in.*redacted)/i, `${llmConversationsDashboardFile}: timeline must explain redacted opt-in content`);

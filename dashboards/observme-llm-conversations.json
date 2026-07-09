@@ -64,8 +64,8 @@
         "enableLogDetails": true,
         "prettifyLogMessage": false,
         "showCommonLabels": false,
-        "showLabels": true,
-        "showTime": true,
+        "showLabels": false,
+        "showTime": false,
         "sortOrder": "Ascending",
         "wrapLogMessage": true
       },
@@ -114,8 +114,8 @@
         "enableLogDetails": true,
         "prettifyLogMessage": false,
         "showCommonLabels": false,
-        "showLabels": true,
-        "showTime": true,
+        "showLabels": false,
+        "showTime": false,
         "sortOrder": "Ascending",
         "wrapLogMessage": true
       },
@@ -164,8 +164,8 @@
         "enableLogDetails": true,
         "prettifyLogMessage": false,
         "showCommonLabels": false,
-        "showLabels": true,
-        "showTime": true,
+        "showLabels": false,
+        "showTime": false,
         "sortOrder": "Ascending",
         "wrapLogMessage": true
       },
@@ -214,8 +214,8 @@
         "enableLogDetails": true,
         "prettifyLogMessage": false,
         "showCommonLabels": false,
-        "showLabels": true,
-        "showTime": true,
+        "showLabels": false,
+        "showTime": false,
         "sortOrder": "Ascending",
         "wrapLogMessage": true
       },

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Hid time and unique-label columns in the LLM Conversations log panels so message bodies are the default focus.
 - Updated the LLM Conversations dashboard log panels to render only captured message bodies by default while preserving expanded log details for the full structured payload.
 - Updated dashboard documentation, README guidance, and multi-agent navigation notes for the improved dashboard map, drill-down workflows, variables, and zero-state semantics.
 - Improved LLM conversation and log drill-down dashboards with session/workflow/agent/run/provider/model/content-kind filters, canonical redacted content navigation, and Tempo trace links.
