@@ -50,6 +50,44 @@ function createContext(entries, notifications, confirmed = true) {
   };
 }
 
+function createNonInteractiveBackfillContext(entries, notifications) {
+  return {
+    cwd: "/workspace/demo",
+    hasUI: false,
+    ui: {
+      notify: (message, type) => notifications.push({ message, type }),
+    },
+    isProjectTrusted: () => false,
+    sessionManager: createSessionManager(entries),
+  };
+}
+
+function createBackfillContextWithoutSessionManager(notifications) {
+  return {
+    cwd: "/workspace/demo",
+    hasUI: true,
+    ui: {
+      notify: (message, type) => notifications.push({ message, type }),
+      confirm: async () => true,
+    },
+    waitForIdle: async () => undefined,
+    isProjectTrusted: () => false,
+  };
+}
+
+function createBackfillContextWithoutWaitForIdle(entries, notifications) {
+  return {
+    cwd: "/workspace/demo",
+    hasUI: true,
+    ui: {
+      notify: (message, type) => notifications.push({ message, type }),
+      confirm: async () => true,
+    },
+    isProjectTrusted: () => false,
+    sessionManager: createSessionManager(entries),
+  };
+}
+
 function createExporter(records) {
   return {
     emit: record => records.push(record),
@@ -151,6 +189,67 @@ test("/obs backfill requires confirmation before exporting replayed telemetry", 
   assert.equal(records.length, 0);
   assert.equal(notifications[0].type, "confirm");
   assert.match(notifications[0].message, /observme\.replayed=true/u);
+});
+
+test("/obs backfill cancels safely when Pi runs without interactive UI", async () => {
+  const notifications = [];
+  const records = [];
+  const config = cloneDefaultConfig();
+
+  await handleObsBackfillCommand(
+    "backfill --current-session --since 1h",
+    createNonInteractiveBackfillContext([userEntry("a1", "2026-07-07T11:30:00.000Z", "one")], notifications),
+    {
+      loadConfig: async () => config,
+      createExporter: () => createExporter(records),
+      now: () => now,
+      maxRecords: 10,
+    },
+  );
+
+  assert.equal(records.length, 0);
+  assert.equal(notifications.at(-1).type, "warning");
+  assert.match(notifications.at(-1).message, /ObservMe backfill cancelled: interactive confirmation is required/u);
+});
+
+test("/obs backfill skips safely when current session state is unavailable", async () => {
+  const notifications = [];
+  const records = [];
+  const config = cloneDefaultConfig();
+
+  await handleObsBackfillCommand("backfill --current-session --since 1h", createBackfillContextWithoutSessionManager(notifications), {
+    loadConfig: async () => config,
+    createExporter: () => createExporter(records),
+    now: () => now,
+    maxRecords: 10,
+  });
+
+  assert.equal(records.length, 0);
+  assert.equal(notifications.at(-1).type, "warning");
+  assert.match(notifications.at(-1).message, /ObservMe backfill skipped: current session state is unavailable/u);
+});
+
+test("/obs backfill proceeds when Pi has no waitForIdle command capability", async () => {
+  const notifications = [];
+  const records = [];
+  const config = cloneDefaultConfig();
+
+  const summary = await runObsBackfill(createBackfillContextWithoutWaitForIdle([
+    userEntry("a1", "2026-07-07T11:30:00.000Z", "one"),
+  ], notifications), {
+    currentSession: true,
+    since: "1h",
+    sinceMs: 60 * 60 * 1000,
+  }, {
+    loadConfig: async () => config,
+    createExporter: () => createExporter(records),
+    now: () => now,
+    maxRecords: 10,
+  });
+
+  assert.equal(summary.status, "completed");
+  assert.equal(summary.recordsExported, 1);
+  assert.equal(records.filter(record => record.eventName).length, 1);
 });
 
 test("/obs backfill marks exported records as replayed and redacts captured content", async () => {

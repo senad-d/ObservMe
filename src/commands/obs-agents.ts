@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
-import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { AgentChildStatus, AgentTreeNode, AgentTreeSummary } from "../pi/agent-tree-tracker.ts";
 import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../query/prometheus.ts";
@@ -9,6 +8,7 @@ import type { TimeRange, TraceSummary } from "../query/tempo.ts";
 import { createTempoQueryClient } from "../query/tempo.ts";
 import { COMMON_SPAN_ATTRIBUTES } from "../semconv/attributes.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
+import { loadObsCommandConfig, notifyObsCommand } from "./obs-command-support.ts";
 import { formatObsCommandFailure, readObsDiagnosticMessage, type ObsCommandRecoveryHint } from "./obs-diagnostics.ts";
 import type { ObsAgentWaitJoinHint, ObsAgentsRuntimeSnapshot } from "./obs-agents-runtime.ts";
 import { getLocalObsAgentsRuntimeSnapshot } from "./obs-agents-runtime.ts";
@@ -149,15 +149,15 @@ export async function handleObsAgentsCommand(
   options: RegisterObsAgentsCommandOptions = {},
 ): Promise<void> {
   if (!isObsAgentsRequest(args)) {
-    await notifyAgents(ctx, OBS_AGENTS_USAGE, "warning");
+    await notifyObsCommand(ctx, OBS_AGENTS_USAGE, "warning");
     return;
   }
 
   try {
     const snapshot = await resolveObsAgentsSnapshot(ctx, options);
-    await notifyAgents(ctx, renderObsAgents(snapshot), "info");
+    await notifyObsCommand(ctx, renderObsAgents(snapshot), "info");
   } catch (error) {
-    await notifyAgents(
+    await notifyObsCommand(
       ctx,
       formatObsCommandFailure("ObservMe agents unavailable", error, resolveObsAgentsDiagnostic(error)),
       "error",
@@ -233,8 +233,7 @@ async function loadObsAgentsConfig(
   ctx: ObsAgentsCommandContext,
   options: ObsAgentsSnapshotOptions,
 ): Promise<ObservMeConfig> {
-  const loadConfig = options.loadConfig ?? loadSessionConfig;
-  return loadConfig({ ctx, cwd: ctx.cwd, configDirName: options.configDirName, env: options.env });
+  return loadObsCommandConfig(ctx, options);
 }
 
 async function queryObsAgentsAggregates(
@@ -459,14 +458,6 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
 
 function isObsAgentsRequest(args: string): boolean {
   return isExactObsSubcommandRequest(args, OBS_AGENTS_SUBCOMMAND);
-}
-
-async function notifyAgents(
-  ctx: ObsAgentsCommandContext,
-  message: string,
-  type: "info" | "warning" | "error",
-): Promise<void> {
-  await ctx.ui.notify(message, type);
 }
 
 function formatUnknown(value: string | undefined): string {

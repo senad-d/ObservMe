@@ -7,10 +7,13 @@ import type {
   ObsTraceSnapshotOptions,
 } from "./obs-trace.ts";
 import { completeObsSubcommand, obsUsageWithError } from "./obs-args.ts";
+import { notifyObsCommand } from "./obs-command-support.ts";
+import { formatObsCommandFailure } from "./obs-diagnostics.ts";
 import {
   getObsTraceSnapshot,
   parseObsTraceArgsForSubcommand,
   renderObsTraceWithTitle,
+  resolveObsTraceDiagnostic,
 } from "./obs-trace.ts";
 
 export type ObsLinkCommandContext = ObsTraceCommandContext;
@@ -42,7 +45,7 @@ export async function handleObsLinkCommand(
   const parsed = parseObsTraceArgsForSubcommand(args, OBS_LINK_SUBCOMMAND);
 
   if (!parsed.request) {
-    await notifyLink(ctx, obsUsageWithError(OBS_LINK_USAGE, parsed.error), "warning");
+    await notifyObsCommand(ctx, obsUsageWithError(OBS_LINK_USAGE, parsed.error), "warning");
     return;
   }
 
@@ -50,9 +53,9 @@ export async function handleObsLinkCommand(
 
   try {
     const snapshot = await resolveObsLinkSnapshot(ctx, request, options);
-    await notifyLink(ctx, renderObsLink(snapshot), "info");
+    await notifyObsCommand(ctx, renderObsLink(snapshot), "info");
   } catch (error) {
-    await notifyLink(ctx, `ObservMe link unavailable: ${formatError(error)}`, "error");
+    await notifyObsCommand(ctx, formatObsCommandFailure("ObservMe link unavailable", error, resolveObsTraceDiagnostic(error)), "error");
   }
 }
 
@@ -85,14 +88,3 @@ async function resolveObsLinkSnapshot(
   return getObsTraceSnapshot(ctx, request, options);
 }
 
-async function notifyLink(
-  ctx: ObsLinkCommandContext,
-  message: string,
-  type: "info" | "warning" | "error",
-): Promise<void> {
-  await ctx.ui.notify(message, type);
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}

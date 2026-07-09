@@ -1,11 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
-import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { LokiFetch } from "../query/loki.ts";
 import { createLokiQueryClient } from "../query/loki.ts";
 import { normalizeObservMeSessionId } from "../safety/sensitive-input.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
+import { loadObsCommandConfig, notifyObsCommand } from "./obs-command-support.ts";
 import { appendObsRecoveryHint, formatObsCommandFailure, readObsDiagnosticMessage, type ObsCommandRecoveryHint } from "./obs-diagnostics.ts";
 import type { ObsLokiLogSummaryRow, ObsLokiTimeRangeOptions } from "./obs-loki-summary.ts";
 import {
@@ -77,15 +77,15 @@ export async function handleObsLogsCommand(
   options: RegisterObsLogsCommandOptions = {},
 ): Promise<void> {
   if (!isObsLogsRequest(args)) {
-    await notifyLogs(ctx, OBS_LOGS_USAGE, "warning");
+    await notifyObsCommand(ctx, OBS_LOGS_USAGE, "warning");
     return;
   }
 
   try {
     const snapshot = await resolveObsLogsSnapshot(ctx, options);
-    await notifyLogs(ctx, renderObsLogs(snapshot), "info");
+    await notifyObsCommand(ctx, renderObsLogs(snapshot), "info");
   } catch (error) {
-    await notifyLogs(ctx, formatObsCommandFailure("ObservMe logs unavailable", error, resolveObsLogsDiagnostic(error)), "error");
+    await notifyObsCommand(ctx, formatObsCommandFailure("ObservMe logs unavailable", error, resolveObsLogsDiagnostic(error)), "error");
   }
 }
 
@@ -160,8 +160,7 @@ async function resolveObsLogsSession(
 }
 
 async function loadObsLogsConfig(ctx: ObsLogsCommandContext, options: ObsLogsSnapshotOptions): Promise<ObservMeConfig> {
-  const loadConfig = options.loadConfig ?? loadSessionConfig;
-  return loadConfig({ ctx, cwd: ctx.cwd, configDirName: options.configDirName, env: options.env });
+  return loadObsCommandConfig(ctx, options);
 }
 
 async function queryObsLogs(config: ObservMeConfig, query: string, options: ObsLogsSnapshotOptions) {
@@ -179,14 +178,6 @@ function escapeLogQlString(value: string): string {
 
 function isObsLogsRequest(args: string): boolean {
   return isExactObsSubcommandRequest(args, OBS_LOGS_SUBCOMMAND);
-}
-
-async function notifyLogs(
-  ctx: ObsLogsCommandContext,
-  message: string,
-  type: "info" | "warning" | "error",
-): Promise<void> {
-  await ctx.ui.notify(message, type);
 }
 
 function resolveObsLogsDiagnostic(error: unknown): ObsCommandRecoveryHint {

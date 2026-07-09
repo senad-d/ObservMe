@@ -43,6 +43,39 @@ Notes:
 - `npm run test:coverage` is the remaining generated-output validation command. It writes `coverage/node-test-coverage.txt`; `coverage/` is git-ignored, and `rm -rf coverage` is the cleanup command after review if the artifact is not needed.
 - `npm run validate` remains the broader release-oriented validation entry point, but the review checklist records explicit commands so failures can be attributed to source, test, lint, package, smoke, or audit stages.
 
+## Deferred integration and Pi lifecycle verification checklist
+
+Use this checklist when a review, release candidate, or local operator needs coverage beyond the default static suite. Record only pass/fail summaries, sanitized ids, and cleanup notes; never paste credentials, prompts, raw command text from interactive Pi, or backend secret values.
+
+| Command | Normal CI safe? | Prerequisites | External access and credentials | Side effects, artifacts, and cleanup | Verification scope |
+| --- | --- | --- | --- | --- | --- |
+| `npm run smoke:discover` | Yes | Dependencies installed; source files present. | None. Imports the declared local Pi extension entry only. | No tracked writes. | Package-level Pi extension declaration and default export discoverability. |
+| `npm run smoke:handlers` | Yes | Dependencies installed. | None. Uses the local Pi API harness. | No tracked writes. | Registers the extension and executes one command plus the first agent-facing tool when present. |
+| `npm run smoke:pi-lifecycle` | Yes | Dependencies installed. | None. Uses explicit loopback-only, telemetry-disabled config. | No tracked writes. | Registers `session_start`/`session_shutdown` and confirms lifecycle status cleanup without Collector, Grafana, or credentials. |
+| `npm run smoke:pi-runtime` | Yes when the `pi` CLI is installed in the test image | A working local `pi` executable, dependencies installed, and permission to spawn a local child process. | No credentials. It deletes inherited `OBSERVME_*` values and uses a deterministic loopback backend. | Creates a temporary project and extension files under the OS temp directory, then removes them; local loopback server only. | Real Pi RPC extension load, `/obs` discovery/routing, reload/new-session replacement, and credential-free event-shape smoke coverage. |
+| `npm run smoke:packaged` | Usually release/local only | `npm` available and package dependencies resolvable for a temporary install. | May need npm registry/cache access to install package dependencies; no project credentials. | Runs `npm pack`, creates a temporary project under the OS temp directory, installs the tarball with `--ignore-scripts --no-audit --no-fund --package-lock=false`, and removes the temp directory. | Packaged install layout and declared Pi extension files in the installed package. |
+| `npm run test:integration:collector` | No | Docker daemon available; Collector image `OBSERVME_COLLECTOR_IMAGE` or `otel/opentelemetry-collector-contrib:0.104.0` pullable or cached. | Docker image pull may require network; no Grafana/model credentials. | Starts a temporary Collector container with loopback-published ports and stops it in test cleanup. | OTLP export to Collector debug pipeline for representative traces, metrics, and logs. |
+| `npm run test:integration:grafana-stack` | No | Docker Compose available; `observability-stack/docker-compose.yml` and test overlay available; required Grafana/Tempo/Loki/Prometheus images pullable or cached. | Docker image pull may require network; no external Grafana credentials. Test-created local Grafana admin secret is synthetic. | Creates isolated Docker Compose project/networks/containers. May create `observability-stack/secrets/grafana_admin_password` when missing and removes the test-created file during cleanup; also creates temporary command-project files under the OS temp directory. If interrupted, run `docker compose` with the printed project name or remove stale `observme-grafana-it-*` resources. | Live local stack ingestion, datasource queries, `/obs` query commands, and dashboard provisioning imports. |
+| `npm run validate:grafana-obs` | No | Running Pi session with ObservMe loaded, reachable Collector/Grafana stack, and recent telemetry. See `docs/validation-flow.md`. | Requires Grafana read credentials from environment variables (`OBSERVME_GRAFANA_TOKEN` or username/password), datasource UIDs, and `OBSERVME_VALIDATION_SESSION_ID`; may access the configured Grafana URL. | Read-only against the configured stack; no file writes expected. Keep terminal output sanitized and omit secrets. | Operator-facing validation that Grafana has ObservMe data and representative `/obs` commands work against the same stack. |
+
+## Final-pass live/package smoke record — 2026-07-09
+
+This record was produced for the final-pass task "Run and record bounded live Pi/package smoke validation before release." The checkout was dirty with active review-remediation changes, so release candidates should rerun the passing non-service commands from a clean worktree before tagging. No credentials were printed or required for the commands below.
+
+| Command | Result | Evidence and notes |
+| --- | --- | --- |
+| `npm run smoke:discover` | Pass | Discovered 1 declared Pi extension entry file. |
+| `npm run smoke:handlers` | Pass | Registered the extension and executed root `/obs`; no agent-facing tools are registered. |
+| `npm run smoke:pi-lifecycle` | Pass | Executed `session_start` and `session_shutdown` with offline telemetry disabled. |
+| `npm run smoke:pi-runtime` | Pass | Real Pi RPC process discovered `/obs`, covered reload and new-session lifecycle replacement, and executed status/session/health/bounded query commands with deterministic local backends. |
+| `npm run smoke:packaged` | Pass | Packed and installed `@senad-d/observme@0.1.0` into a temporary project, then verified the installed Pi extension entries. |
+| `npm run check:pack` | Pass | Package dry-run contained 100 expected files and excluded local state/secrets. |
+| `npm run test:integration:collector` | Pass | Docker-backed local Collector debug pipeline received representative traces, metrics, and logs without default content capture. |
+| `npm run test:integration:grafana-stack` | Fail/blocker | Docker and Docker Compose were available, stack cleanup left no `observme-grafana-it-*` containers or networks, but the test timed out waiting for `Tempo LLM content attributes`: Tempo returned the trace payload without satisfying `hasTempoLlmContentPayload()` for `pi.llm.prompt.redacted`, `pi.llm.response.redacted`, `pi.llm.thinking.redacted`, and marker assertions. Next action: inspect the live-stack Tempo attribute ingestion/query shape around `waitForTempoLlmContent()` in `test/integration/grafana-stack.test.mjs` before release. |
+| `npm run validate:grafana-obs` | Blocked/not run | Requires an operator-controlled running Pi session with ObservMe loaded, reachable Grafana/Collector stack, Grafana read credentials via environment variables, and `OBSERVME_VALIDATION_SESSION_ID`; do not run until those prerequisites are available and evidence can stay sanitized. |
+
+Post-run cleanup check: `docker ps --filter name=observme-grafana-it --format '{{.Names}}'` and `docker network ls --filter name=observme-grafana-it --format '{{.Name}}'` returned no resources.
+
 ## Review-closure evidence categories
 
 - **Read-only/check-only** — commands that inspect, type-check, lint, audit, run tests, dry-run packaging, or smoke local deterministic fixtures without publishing or writing tracked files.

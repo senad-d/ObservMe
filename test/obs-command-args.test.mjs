@@ -21,6 +21,13 @@ function createCommandContext(notifications) {
   };
 }
 
+function createPrintCommandContext() {
+  return {
+    cwd: "/workspace/demo",
+    hasUI: false,
+  };
+}
+
 function createFakeCommandPi() {
   const commands = new Map();
   return {
@@ -150,6 +157,19 @@ test("root /obs parser reports unknown subcommands with usage and keeps completi
   assert.equal(notifications[0].type, "warning");
   assert.match(notifications[0].message, /^Usage: \/obs <status\|health\|session\|cost\|trace\|tools\|agents\|backfill\|errors\|logs\|link>/u);
   assert.match(notifications[0].message, /Unknown subcommand: unknown\./u);
+});
+
+test("root /obs command is safe when Pi runs without UI notification support", async () => {
+  const pi = createFakeCommandPi();
+  const calls = [];
+
+  registerObsCommand(pi, createRootDispatchOptions(calls));
+  const command = pi.commands.get("obs");
+
+  await assert.doesNotReject(() => command.handler("unknown --flag", createPrintCommandContext()));
+  await assert.doesNotReject(() => command.handler("status", createPrintCommandContext()));
+
+  assert.deepEqual(calls, ["status"]);
 });
 
 test("root /obs registry keeps usage, completions, and dispatch aligned", async () => {

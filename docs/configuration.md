@@ -1,16 +1,16 @@
 # ObservMe configuration
 
-ObservMe creates a project-local starter config automatically on startup.
+ObservMe creates a project-local starter config automatically during trusted Pi session-start lifecycles.
 
 ## Automatic project config
 
-When the extension starts in a trusted Pi project, it creates:
+When Pi emits `session_start` in a trusted project, ObservMe creates:
 
 ```text
 .pi/observme.yaml
 ```
 
-The file is created only when it is missing. Existing project config is never overwritten. The generated file is privacy-preserving: raw prompt, response, thinking, tool, bash, and file-path capture starts disabled, redaction starts enabled, and unsafe capture starts disabled.
+Pi emits `session_start` for startup, `/reload`, new-session, resume, and fork flows. ObservMe intentionally runs the same idempotent bootstrap for each trusted flow so session replacement and reloads converge on the same project-local config state. The file is created only when it is missing; existing project config is never overwritten and no repeat notification is shown. Bootstrap is skipped when the project is untrusted or Pi does not provide a project `ctx.cwd`. The generated file is privacy-preserving: raw prompt, response, thinking, tool, bash, and file-path capture starts disabled, redaction starts enabled, and unsafe capture starts disabled.
 
 ## What to edit
 

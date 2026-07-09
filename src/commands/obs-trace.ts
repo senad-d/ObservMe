@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
-import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import { createGrafanaQueryClient, type GrafanaFetch } from "../query/grafana.ts";
 import { normalizeObservMeSessionId } from "../safety/sensitive-input.ts";
@@ -12,6 +11,7 @@ import {
   parseObsSubcommandArgs,
   unknownObsOptionMessage,
 } from "./obs-args.ts";
+import { loadObsCommandConfig, notifyObsCommand } from "./obs-command-support.ts";
 import { formatObsCommandFailure, readObsDiagnosticMessage, type ObsCommandRecoveryHint } from "./obs-diagnostics.ts";
 import { searchTempo } from "../query/tempo.ts";
 import { COMMON_SPAN_ATTRIBUTES } from "../semconv/attributes.ts";
@@ -112,7 +112,7 @@ export async function handleObsTraceCommand(
   const parsed = parseObsTraceArgsForSubcommand(args, OBS_TRACE_SUBCOMMAND);
 
   if (!parsed.request) {
-    await notifyTrace(ctx, obsUsageWithError(OBS_TRACE_USAGE, parsed.error), "warning");
+    await notifyObsCommand(ctx, obsUsageWithError(OBS_TRACE_USAGE, parsed.error), "warning");
     return;
   }
 
@@ -120,9 +120,9 @@ export async function handleObsTraceCommand(
 
   try {
     const snapshot = await resolveObsTraceSnapshot(ctx, request, options);
-    await notifyTrace(ctx, renderObsTrace(snapshot), "info");
+    await notifyObsCommand(ctx, renderObsTrace(snapshot), "info");
   } catch (error) {
-    await notifyTrace(ctx, formatObsCommandFailure("ObservMe trace unavailable", error, resolveObsTraceDiagnostic(error)), "error");
+    await notifyObsCommand(ctx, formatObsCommandFailure("ObservMe trace unavailable", error, resolveObsTraceDiagnostic(error)), "error");
   }
 }
 
@@ -194,8 +194,7 @@ async function loadObsTraceConfig(
   ctx: ObsTraceCommandContext,
   options: ObsTraceSnapshotOptions,
 ): Promise<ObservMeConfig> {
-  const loadConfig = options.loadConfig ?? loadSessionConfig;
-  return loadConfig({ ctx, cwd: ctx.cwd, configDirName: options.configDirName, env: options.env });
+  return loadObsCommandConfig(ctx, options);
 }
 
 async function resolveObsTraceTarget(
@@ -391,15 +390,7 @@ function isString(value: string | undefined): value is string {
   return value !== undefined && value.length > 0;
 }
 
-async function notifyTrace(
-  ctx: ObsTraceCommandContext,
-  message: string,
-  type: "info" | "warning" | "error",
-): Promise<void> {
-  await ctx.ui.notify(message, type);
-}
-
-function resolveObsTraceDiagnostic(error: unknown): ObsCommandRecoveryHint {
+export function resolveObsTraceDiagnostic(error: unknown): ObsCommandRecoveryHint {
   const message = readObsDiagnosticMessage(error);
 
   if (isObsTraceSessionErrorMessage(message)) return { subsystem: "Session trace", nextAction: OBS_TRACE_SESSION_ERROR_NEXT_ACTION };

@@ -98,6 +98,35 @@ test("ensureProjectObservMeConfig skips untrusted projects", async () => {
   }
 });
 
+test("ensureProjectObservMeConfig rejects traversal and absolute config directories", async () => {
+  const cwd = await createTempProject();
+
+  try {
+    await assert.rejects(
+      ensureProjectObservMeConfig({ cwd, configDirName: "../outside", isProjectTrusted: true }),
+      /Unsafe ObservMe project config path/u,
+    );
+    await assert.rejects(
+      ensureProjectObservMeConfig({ cwd, configDirName: join(cwd, "absolute-pi"), isProjectTrusted: true }),
+      /Unsafe ObservMe project config path/u,
+    );
+    await assert.rejects(readFile(join(cwd, "..", "outside", "observme.yaml"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await removeTempProject(cwd);
+  }
+});
+
+test("bootstrapProjectObservMeConfig reports unsafe project paths without sensitive path details", async () => {
+  const context = createContext("/workspace/private-demo", true);
+  const result = await bootstrapProjectObservMeConfig(context, { configDirName: "../outside-secret" });
+
+  assert.equal(result, undefined);
+  assert.equal(context.notifications.length, 1);
+  assert.equal(context.notifications[0].level, "warning");
+  assert.match(context.notifications[0].message, /Unsafe ObservMe project config path/u);
+  assert.doesNotMatch(context.notifications[0].message, /private-demo|outside-secret|workspace/u);
+});
+
 test("bootstrapProjectObservMeConfig centralizes project path, trust, and notification behavior", async () => {
   const context = createContext("/workspace/demo", true);
   const calls = [];
@@ -122,6 +151,57 @@ test("bootstrapProjectObservMeConfig centralizes project path, trust, and notifi
       level: "info",
     },
   ]);
+});
+
+test("bootstrapProjectObservMeConfig skips safely without trust or UI capabilities", async () => {
+  const cwd = await createTempProject();
+
+  try {
+    const result = await bootstrapProjectObservMeConfig({ cwd });
+
+    assert.deepEqual(result, { path: join(cwd, ".pi", "observme.yaml"), status: "skipped_untrusted" });
+    await assert.rejects(readFile(join(cwd, ".pi", "observme.yaml"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await removeTempProject(cwd);
+  }
+});
+
+test("bootstrapProjectObservMeConfig skips untrusted project contexts without creating or notifying", async () => {
+  const cwd = await createTempProject();
+
+  try {
+    const context = createContext(cwd, false);
+    const result = await bootstrapProjectObservMeConfig(context);
+
+    assert.deepEqual(result, { path: join(cwd, ".pi", "observme.yaml"), status: "skipped_untrusted" });
+    assert.deepEqual(context.notifications, []);
+    await assert.rejects(readFile(join(cwd, ".pi", "observme.yaml"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await removeTempProject(cwd);
+  }
+});
+
+test("bootstrapProjectObservMeConfig skips automatic creation when Pi context has no cwd", async () => {
+  const calls = [];
+  const notifications = [];
+  const result = await bootstrapProjectObservMeConfig(
+    {
+      isProjectTrusted: () => true,
+      ui: {
+        notify: (message, level) => notifications.push({ message, level }),
+      },
+    },
+    {
+      ensureProjectConfig: async options => {
+        calls.push(options);
+        return { path: "/workspace/demo/.pi/observme.yaml", status: "created" };
+      },
+    },
+  );
+
+  assert.equal(result, undefined);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(notifications, []);
 });
 
 test("bootstrapProjectObservMeConfig sanitizes failure notifications", async () => {
@@ -170,6 +250,45 @@ test("registerHandlers creates the project file before loading session config", 
   await event.handler({ reason: "startup" }, context);
 
   assert.deepEqual(order, ["ensure", "load", "start"]);
+  assert.deepEqual(context.notifications, [
+    {
+      message: "ObservMe created /workspace/demo/.pi/observme.yaml. Edit this file for custom setup.",
+      level: "info",
+    },
+  ]);
+});
+
+test("registerHandlers bootstraps trusted project config on every Pi session_start reason", async () => {
+  const pi = createFakePi();
+  const calls = [];
+  const reasons = ["startup", "reload", "new", "resume", "fork"];
+  let currentReason;
+
+  registerHandlers(pi, {
+    ensureProjectConfig: async options => {
+      const trusted = await options.isProjectTrusted();
+      calls.push({ reason: currentReason, cwd: options.cwd, trusted });
+      return {
+        path: "/workspace/demo/.pi/observme.yaml",
+        status: calls.length === 1 ? "created" : "exists",
+      };
+    },
+    loadConfig: async () => defaultObservMeConfig,
+    startTelemetry: async () => {
+      throw new Error("stop after config bootstrap");
+    },
+    onHandlerError: () => undefined,
+  });
+
+  const context = createContext("/workspace/demo", true);
+  const event = pi.events.find(entry => entry.eventName === "session_start");
+
+  for (const reason of reasons) {
+    currentReason = reason;
+    await event.handler({ reason }, context);
+  }
+
+  assert.deepEqual(calls, reasons.map(reason => ({ reason, cwd: "/workspace/demo", trusted: true })));
   assert.deepEqual(context.notifications, [
     {
       message: "ObservMe created /workspace/demo/.pi/observme.yaml. Edit this file for custom setup.",

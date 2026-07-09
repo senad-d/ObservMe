@@ -49,6 +49,14 @@ function createCommandContext(notifications, projectTrusted = false) {
   };
 }
 
+function createPrintCommandContext() {
+  return {
+    cwd: "/workspace/demo",
+    hasUI: false,
+    isProjectTrusted: () => false,
+  };
+}
+
 function createReader(files, calls = []) {
   return async path => {
     calls.push(path);
@@ -116,6 +124,15 @@ test("renderObsStatus reports local enablement, signals, capture flags, drops, a
   );
 });
 
+test("/obs status does not throw when Pi has no UI notification API", async t => {
+  resetObsStatusRuntimeState();
+  t.after(() => resetObsStatusRuntimeState());
+
+  updateObsStatusRuntimeState({ config: cloneDefaultConfig() });
+
+  await assert.doesNotReject(() => handleObsStatusCommand("status", createPrintCommandContext()));
+});
+
 test("/obs status uses local status state and makes no network call", async t => {
   resetObsStatusRuntimeState();
   const originalFetch = globalThis.fetch;
@@ -155,11 +172,11 @@ test("/obs status reports trusted project config source and Grafana query readin
   await handleObsStatusCommand("status", createCommandContext(notifications, true), {
     globalConfigPath: "global.yaml",
     projectConfigPath: "project.yaml",
-    readText: createReader({ "project.yaml": trustedProjectConfigYaml }, readCalls),
+    readText: createReader({ "/workspace/demo/project.yaml": trustedProjectConfigYaml }, readCalls),
     env: {},
   });
 
-  assert.deepEqual(readCalls, ["global.yaml", "project.yaml", "/workspace/demo/.env"]);
+  assert.deepEqual(readCalls, ["global.yaml", "/workspace/demo/project.yaml", "/workspace/demo/.env"]);
   assert.equal(notifications.length, 1);
   assert.match(notifications[0].message, /OTLP endpoint: https:\/\/otel\.project\.test:4318/u);
   assert.match(notifications[0].message, /Config source: trusted project config \(\.pi\/observme\.yaml\)/u);
@@ -252,7 +269,7 @@ test("/obs status explains missing trusted project config", async t => {
     env: {},
   });
 
-  assert.deepEqual(readCalls, ["global.yaml", "project.yaml", "/workspace/demo/.env"]);
+  assert.deepEqual(readCalls, ["global.yaml", "/workspace/demo/project.yaml", "/workspace/demo/.env"]);
   assert.equal(notifications.length, 1);
   assert.match(notifications[0].message, /Config source: defaults/u);
   assert.match(notifications[0].message, /Project config: missing \(trusted project has no \.pi\/observme\.yaml\)/u);

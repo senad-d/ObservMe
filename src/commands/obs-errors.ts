@@ -1,11 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
-import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { LokiFetch } from "../query/loki.ts";
 import { createLokiQueryClient } from "../query/loki.ts";
 import type { ObsLokiLogSummaryRow, ObsLokiTimeRangeOptions } from "./obs-loki-summary.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
+import { loadObsCommandConfig, notifyObsCommand } from "./obs-command-support.ts";
 import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
 import {
   createRecentObsLokiTimeRange,
@@ -69,15 +69,15 @@ export async function handleObsErrorsCommand(
   options: RegisterObsErrorsCommandOptions = {},
 ): Promise<void> {
   if (!isObsErrorsRequest(args)) {
-    await notifyErrors(ctx, OBS_ERRORS_USAGE, "warning");
+    await notifyObsCommand(ctx, OBS_ERRORS_USAGE, "warning");
     return;
   }
 
   try {
     const snapshot = await resolveObsErrorsSnapshot(ctx, options);
-    await notifyErrors(ctx, renderObsErrors(snapshot), "info");
+    await notifyObsCommand(ctx, renderObsErrors(snapshot), "info");
   } catch (error) {
-    await notifyErrors(
+    await notifyObsCommand(
       ctx,
       formatObsCommandFailure("ObservMe errors unavailable", error, {
         subsystem: "Loki",
@@ -142,8 +142,7 @@ async function loadObsErrorsConfig(
   ctx: ObsErrorsCommandContext,
   options: ObsErrorsSnapshotOptions,
 ): Promise<ObservMeConfig> {
-  const loadConfig = options.loadConfig ?? loadSessionConfig;
-  return loadConfig({ ctx, cwd: ctx.cwd, configDirName: options.configDirName, env: options.env });
+  return loadObsCommandConfig(ctx, options);
 }
 
 async function queryObsErrors(config: ObservMeConfig, options: ObsErrorsSnapshotOptions) {
@@ -155,10 +154,3 @@ function isObsErrorsRequest(args: string): boolean {
   return isExactObsSubcommandRequest(args, OBS_ERRORS_SUBCOMMAND);
 }
 
-async function notifyErrors(
-  ctx: ObsErrorsCommandContext,
-  message: string,
-  type: "info" | "warning" | "error",
-): Promise<void> {
-  await ctx.ui.notify(message, type);
-}

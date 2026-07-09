@@ -1,7 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { ExtensionAPI, SessionEntry, SessionHeader } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
-import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import { ObservMeLogSdk } from "../otel/logs.ts";
 import type { BoundedOtelOperationResult } from "../otel/shutdown.ts";
@@ -23,6 +22,7 @@ import {
   parseObsSubcommandArgs,
   unknownObsOptionMessage,
 } from "./obs-args.ts";
+import { loadObsCommandConfig, normalizeObsCommandTimeoutMs, notifyObsCommand } from "./obs-command-support.ts";
 
 export type ObsBackfillAttributeValue = boolean | number | string | string[];
 export type ObsBackfillAttributes = Record<string, ObsBackfillAttributeValue>;
@@ -180,15 +180,15 @@ export async function handleObsBackfillCommand(
 ): Promise<void> {
   const parsed = parseObsBackfillArgs(args);
   if (!parsed.request) {
-    await notifyBackfill(ctx, parsed.error ? `${OBS_BACKFILL_USAGE}\n${parsed.error}` : OBS_BACKFILL_USAGE, "warning");
+    await notifyObsCommand(ctx, parsed.error ? `${OBS_BACKFILL_USAGE}\n${parsed.error}` : OBS_BACKFILL_USAGE, "warning");
     return;
   }
 
   try {
     const summary = await resolveObsBackfillSummary(ctx, parsed.request, options);
-    await notifyBackfill(ctx, renderObsBackfillSummary(summary), notificationTypeForSummary(summary));
+    await notifyObsCommand(ctx, renderObsBackfillSummary(summary), notificationTypeForSummary(summary));
   } catch (error) {
-    await notifyBackfill(ctx, `ObservMe backfill unavailable: ${formatBackfillError(error)}`, "error");
+    await notifyObsCommand(ctx, `ObservMe backfill unavailable: ${formatBackfillError(error)}`, "error");
   }
 }
 
@@ -432,8 +432,7 @@ async function loadObsBackfillConfig(
   ctx: ObsBackfillCommandContext,
   options: ObsBackfillOptions,
 ): Promise<ObservMeConfig> {
-  const loadConfig = options.loadConfig ?? loadSessionConfig;
-  return loadConfig({ ctx, cwd: ctx.cwd, configDirName: options.configDirName, env: options.env });
+  return loadObsCommandConfig(ctx, options);
 }
 
 function resolveSkippedBackfillSummary(
@@ -479,7 +478,7 @@ async function confirmObsBackfill(
 function canConfirmBackfill(ctx: ObsBackfillCommandContext): ctx is ObsBackfillCommandContext & {
   readonly ui: ObsBackfillCommandContext["ui"] & { readonly confirm: NonNullable<ObsBackfillCommandContext["ui"]["confirm"]> };
 } {
-  return ctx.hasUI !== false && typeof ctx.ui.confirm === "function";
+  return ctx.hasUI !== false && typeof ctx.ui?.confirm === "function";
 }
 
 function buildBackfillConfirmationMessage(
@@ -1189,8 +1188,7 @@ function normalizeMaxRecords(value: number | undefined): number {
 }
 
 function normalizeBackfillOperationTimeoutMs(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value) || value < 1) return OBS_BACKFILL_DEFAULT_OPERATION_TIMEOUT_MS;
-  return Math.trunc(value);
+  return normalizeObsCommandTimeoutMs(value, OBS_BACKFILL_DEFAULT_OPERATION_TIMEOUT_MS);
 }
 
 function resolveBackfillOperationTimeoutMs(options: ObsBackfillOperationOptions | undefined, fallback: number): number {
@@ -1242,14 +1240,6 @@ function renderCancelledObsBackfillSummary(summary: ObsBackfillSummary): string 
   if (summary.recordsExported > 0) lines.push(`Records exported before cancellation: ${summary.recordsExported}`);
   if (summary.recordsSkipped > 0) lines.push(`Records not exported: ${summary.recordsSkipped}`);
   return lines.join("\n");
-}
-
-async function notifyBackfill(
-  ctx: ObsBackfillCommandContext,
-  message: string,
-  type: "info" | "warning" | "error",
-): Promise<void> {
-  await ctx.ui.notify(message, type);
 }
 
 function withoutUndefinedAttributes(values: Record<string, ObsBackfillAttributeValue | undefined>): ObsBackfillAttributes {

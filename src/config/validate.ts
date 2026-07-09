@@ -1,4 +1,6 @@
+import { Compile } from "typebox/compile";
 import { defaultObservMeConfig } from "./defaults.ts";
+import { observMeConfigSchema } from "./schema.ts";
 import type { ObservMeConfig } from "./schema.ts";
 import { validateCustomRedactionPatterns } from "../privacy/redact.ts";
 
@@ -36,11 +38,16 @@ const spanIdPattern = /^[a-f0-9]{16}$/i;
 const maximumLineageValueLength = 128;
 const maximumQueueSize = 10_000;
 const maximumActiveRegistrySize = 100_000;
+const maximumStructuralIssueDetails = 5;
+const observMeConfigValidator = Compile(observMeConfigSchema);
 
 export function validateObservMeConfig(
   config: ObservMeConfig,
   options: ConfigValidationOptions = {},
 ): ConfigValidationResult {
+  const structuralIssues = validateConfigStructure(config);
+  if (structuralIssues.length > 0) return { valid: false, issues: structuralIssues };
+
   const issues = [
     ...validateRedactionBoundary(config),
     ...validateTransportSecurity(config),
@@ -78,6 +85,57 @@ export async function emitUnsafeCaptureWarning(
 
   await ctx.ui?.notify?.(unsafeCaptureWarningMessage(config), "warning");
   return true;
+}
+
+function validateConfigStructure(config: unknown): ValidationIssue[] {
+  if (observMeConfigValidator.Check(config)) return [];
+
+  try {
+    return buildStructuralValidationIssues(observMeConfigValidator.Errors(config));
+  } catch (_error) {
+    return [
+      {
+        code: "invalid_config_shape",
+        message: "Configuration shape is invalid and could not be inspected safely.",
+      },
+    ];
+  }
+}
+
+function buildStructuralValidationIssues(errors: Array<{ keyword: string; instancePath: string }>): ValidationIssue[] {
+  const visibleErrors = errors.slice(0, maximumStructuralIssueDetails);
+  const issues = visibleErrors.map(error => ({
+    code: "invalid_config_shape",
+    message: formatStructuralValidationMessage(error),
+  }));
+
+  if (errors.length > visibleErrors.length) {
+    issues.push({
+      code: "invalid_config_shape",
+      message: `Configuration shape has ${errors.length - visibleErrors.length} additional structural issue(s).`,
+    });
+  }
+
+  return issues;
+}
+
+function formatStructuralValidationMessage(error: { keyword: string; instancePath: string }): string {
+  return `Configuration shape is invalid at ${formatSchemaPath(error.instancePath)}: ${describeSchemaKeyword(error.keyword)}.`;
+}
+
+function formatSchemaPath(instancePath: string): string {
+  if (!instancePath) return "root";
+  return instancePath.replaceAll("~1", "/").replaceAll("~0", "~");
+}
+
+function describeSchemaKeyword(keyword: string): string {
+  if (keyword === "additionalProperties") return "unknown property is not allowed";
+  if (keyword === "required") return "required property is missing";
+  if (keyword === "type") return "value has an unsupported type";
+  if (keyword === "const" || keyword === "anyOf" || keyword === "enum") return "value is not one of the supported options";
+  if (keyword === "minimum" || keyword === "maximum") return "numeric value is outside the allowed range";
+  if (keyword === "minLength" || keyword === "maxLength") return "string length is outside the allowed range";
+  return `schema rule ${keyword} failed`;
 }
 
 function unsafeCaptureWarningMessage(config: ObservMeConfig): string {

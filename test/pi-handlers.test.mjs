@@ -283,6 +283,26 @@ test("safeHandler catches throwing handlers and records observme_handler_errors_
   ]);
 });
 
+test("session lifecycle handlers tolerate missing trust and partial UI capabilities", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await assert.doesNotReject(() => pi.handlers.get("session_start")({ sessionId: "session-no-ui" }, { cwd: "/workspace/demo" }));
+  await assert.doesNotReject(() => pi.handlers.get("session_shutdown")({ status: "ok" }, { ui: {} }));
+
+  assert.equal(telemetry.tracer.spans[0].attributes["pi.session.id"], "session-no-ui");
+  assert.equal(telemetry.tracer.spans[0].ended, true);
+  assert.deepEqual(telemetry.controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.deepEqual(telemetry.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+});
+
 test("session_start creates a root pi.session span with documented session and workflow attributes", async () => {
   const pi = createFakePi();
   const statuses = [];

@@ -878,6 +878,8 @@ async function ensureProjectConfigForHandler(
   options: RegisterHandlersOptions,
   ctx: ObservMeHandlerContext,
 ): Promise<void> {
+  // Pi emits session_start for startup, reload, new, resume, and fork flows. ObservMe keeps
+  // bootstrap idempotent across all of them: create once for trusted projects, then never overwrite.
   await bootstrapProjectObservMeConfig(ctx, {
     configDirName: options.configDirName,
     ensureProjectConfig: options.ensureProjectConfig,

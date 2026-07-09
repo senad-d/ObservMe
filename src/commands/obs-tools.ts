@@ -1,10 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
-import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../query/prometheus.ts";
 import { createPrometheusQueryClient } from "../query/prometheus.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
+import { loadObsCommandConfig, notifyObsCommand } from "./obs-command-support.ts";
 import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
 
 export interface ObsToolsCommandContext {
@@ -84,15 +84,15 @@ export async function handleObsToolsCommand(
   options: RegisterObsToolsCommandOptions = {},
 ): Promise<void> {
   if (parseObsToolsRequest(args) === "usage") {
-    await notifyTools(ctx, OBS_TOOLS_USAGE, "warning");
+    await notifyObsCommand(ctx, OBS_TOOLS_USAGE, "warning");
     return;
   }
 
   try {
     const snapshot = await resolveObsToolsSnapshot(ctx, options);
-    await notifyTools(ctx, renderObsTools(snapshot), "info");
+    await notifyObsCommand(ctx, renderObsTools(snapshot), "info");
   } catch (error) {
-    await notifyTools(
+    await notifyObsCommand(
       ctx,
       formatObsCommandFailure("ObservMe tools unavailable", error, {
         subsystem: "Prometheus",
@@ -165,8 +165,7 @@ async function resolveObsToolsSnapshot(
 }
 
 async function loadObsToolsConfig(ctx: ObsToolsCommandContext, options: ObsToolsSnapshotOptions): Promise<ObservMeConfig> {
-  const loadConfig = options.loadConfig ?? loadSessionConfig;
-  return loadConfig({ ctx, cwd: ctx.cwd, configDirName: options.configDirName, env: options.env });
+  return loadObsCommandConfig(ctx, options);
 }
 
 async function queryObsTools(config: ObservMeConfig, options: ObsToolsSnapshotOptions): Promise<ObsToolsQueryResults> {
@@ -258,14 +257,6 @@ function isObsToolFailureRow(row: ObsToolFailureRow | undefined): row is ObsTool
 
 function parseObsToolsRequest(args: string): ObsToolsRequestStatus {
   return isExactObsSubcommandRequest(args, OBS_TOOLS_SUBCOMMAND) ? "tools" : "usage";
-}
-
-async function notifyTools(
-  ctx: ObsToolsCommandContext,
-  message: string,
-  type: "info" | "warning" | "error",
-): Promise<void> {
-  await ctx.ui.notify(message, type);
 }
 
 function formatRatePerSecond(value: number): string {

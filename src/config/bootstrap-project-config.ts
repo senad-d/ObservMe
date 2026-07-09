@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
+import { resolveProjectLocalFilePath } from "./project-paths.ts";
 
 export type ProjectConfigBootstrapStatus = "created" | "exists" | "skipped_untrusted";
 export type ProjectConfigNotifyLevel = "info" | "warning" | "error";
@@ -211,6 +212,8 @@ export async function bootstrapProjectObservMeConfig(
   ctx: ProjectConfigBootstrapContext,
   options: RegisterProjectConfigBootstrapOptions = {},
 ): Promise<ProjectConfigBootstrapResult | undefined> {
+  if (!hasProjectCwd(ctx)) return undefined;
+
   try {
     const result = await resolveProjectConfigBootstrapResult(ctx, options);
     await notifyProjectConfigCreated(ctx, result);
@@ -219,6 +222,10 @@ export async function bootstrapProjectObservMeConfig(
     await notifyProjectConfigBootstrapFailed(ctx, error);
     return undefined;
   }
+}
+
+function hasProjectCwd(ctx: ProjectConfigBootstrapContext): boolean {
+  return typeof ctx.cwd === "string" && ctx.cwd.trim().length > 0;
 }
 
 function resolveProjectConfigBootstrapResult(
@@ -258,9 +265,13 @@ async function createProjectObservMeConfigFile(configPath: string): Promise<Proj
 }
 
 function resolveProjectObservMeConfigPath(options: EnsureProjectConfigOptions): string {
-  const cwd = options.cwd ?? process.cwd();
-  const configDirName = options.configDirName ?? defaultConfigDirName;
-  return join(cwd, configDirName, observmeYamlFileName);
+  return resolveProjectLocalFilePath({
+    cwd: options.cwd,
+    configDirName: options.configDirName,
+    defaultConfigDirName,
+    fileName: observmeYamlFileName,
+    inputLabel: "project config path",
+  });
 }
 
 async function resolveBootstrapProjectTrust(

@@ -153,7 +153,7 @@ export async function handleObsCommand(
     return;
   }
 
-  await ctx.ui.notify(obsUsageWithError(OBS_ROOT_USAGE, subcommand ? `Unknown subcommand: ${subcommand}.` : undefined), "warning");
+  await ctx.ui?.notify?.(obsUsageWithError(OBS_ROOT_USAGE, subcommand ? `Unknown subcommand: ${subcommand}.` : undefined), "warning");
 }
 
 export function getObsRootCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {

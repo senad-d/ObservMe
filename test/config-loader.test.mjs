@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PROJECT_OBSERVME_YAML_TEMPLATE } from "../src/config/bootstrap-project-config.ts";
+import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { loadFactoryConfig, loadSessionConfig, parseObservMeConfigText } from "../src/config/load-config.ts";
 
 const globalConfigYaml = `
@@ -41,6 +42,141 @@ function createReader(files, calls = []) {
     error.code = "ENOENT";
     throw error;
   };
+}
+
+const malformedProjectConfigCases = [
+  {
+    name: "wrong nested object type",
+    text: "observme:\n  query: bad\n",
+  },
+  {
+    name: "wrong capture scalar type",
+    text: "observme:\n  capture: false\n",
+  },
+  {
+    name: "invalid custom redaction patterns type",
+    text: "observme:\n  privacy:\n    customRedactionPatterns: bad\n",
+  },
+  {
+    name: "unknown top-level property",
+    text: "observme:\n  unsupportedFeature: true\n",
+  },
+  {
+    name: "invalid array element type",
+    text: "observme:\n  metrics:\n    labels:\n      - provider\n      - 123\n",
+  },
+  {
+    name: "prototype-like key",
+    text: '{"observme":{"__proto__":{"polluted":true}}}',
+  },
+];
+
+for (const malformedProjectConfig of malformedProjectConfigCases) {
+  test(`session loader falls back for structurally invalid trusted project config: ${malformedProjectConfig.name}`, async () => {
+    const warnings = [];
+    const config = await loadSessionConfig({
+      globalConfigPath: "missing-global.yaml",
+      projectConfigPath: "project.yaml",
+      isProjectTrusted: true,
+      readText: createReader({ "project.yaml": malformedProjectConfig.text }),
+      env: {},
+      loadEnvFile: false,
+      logger: {
+        warn: message => warnings.push(message),
+      },
+    });
+
+    assert.deepEqual(config, defaultObservMeConfig);
+    assert.equal({}.polluted, undefined);
+    assert.ok(warnings.some(message => message.includes("invalid_config_shape")));
+    assert.doesNotMatch(warnings.join("\n"), /bad|unsupportedFeature|polluted|123/u);
+  });
+}
+
+test("factory loader falls back for structurally invalid global config", async () => {
+  const warnings = [];
+  const config = await loadFactoryConfig({
+    globalConfigPath: "global.yaml",
+    readText: createReader({ "global.yaml": "observme:\n  query: bad\n" }),
+    env: {},
+    logger: {
+      warn: message => warnings.push(message),
+    },
+  });
+
+  assert.deepEqual(config, defaultObservMeConfig);
+  assert.ok(warnings.some(message => message.includes("invalid_config_shape")));
+  assert.doesNotMatch(warnings.join("\n"), /bad/u);
+});
+
+test("session loader keeps normal project config and env paths inside cwd", async () => {
+  const calls = [];
+  const cwd = "/workspace/project";
+  const projectPath = `${cwd}/custom-pi/observme.yaml`;
+  const envPath = `${cwd}/.env`;
+  const config = await loadSessionConfig({
+    cwd,
+    configDirName: "custom-pi",
+    globalConfigPath: "missing-global.yaml",
+    isProjectTrusted: true,
+    readText: createReader({ [projectPath]: projectConfigYaml, [envPath]: "OBSERVME_TENANT=env-file-tenant" }, calls),
+    env: {},
+  });
+
+  assert.deepEqual(calls, ["missing-global.yaml", projectPath, envPath]);
+  assert.equal(config.tenant, "env-file-tenant");
+  assert.equal(config.otlp.endpoint, "https://project.example.test:4318");
+});
+
+test("session loader rejects traversal and absolute project config directories", async () => {
+  for (const configDirName of ["../outside", "/tmp/observme-outside"])
+    await assertSessionConfigDirectoryRejected(configDirName);
+});
+
+test("session loader rejects outside explicit project config and env overrides", async () => {
+  const calls = [];
+  const warnings = [];
+  const config = await loadSessionConfig({
+    cwd: "/workspace/private-demo",
+    globalConfigPath: "missing-global.yaml",
+    projectConfigPath: "../outside/observme.yaml",
+    envFilePath: "/tmp/private.env",
+    isProjectTrusted: true,
+    readText: createReader({ "../outside/observme.yaml": projectConfigYaml, "/tmp/private.env": envFileText }, calls),
+    env: {},
+    logger: {
+      warn: message => warnings.push(message),
+    },
+  });
+
+  assert.deepEqual(config, defaultObservMeConfig);
+  assert.deepEqual(calls, ["missing-global.yaml"]);
+  assert.equal(warnings.length, 2);
+  assert.ok(warnings.every(message => message.includes("Unsafe ObservMe project")));
+  assert.doesNotMatch(warnings.join("\n"), /private-demo|outside|private\.env|workspace/u);
+});
+
+async function assertSessionConfigDirectoryRejected(configDirName) {
+  const calls = [];
+  const warnings = [];
+  const config = await loadSessionConfig({
+    cwd: "/workspace/private-demo",
+    configDirName,
+    globalConfigPath: "missing-global.yaml",
+    isProjectTrusted: true,
+    readText: createReader({}, calls),
+    env: {},
+    loadEnvFile: false,
+    logger: {
+      warn: message => warnings.push(message),
+    },
+  });
+
+  assert.deepEqual(config, defaultObservMeConfig);
+  assert.deepEqual(calls, ["missing-global.yaml"]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Unsafe ObservMe project config path/u);
+  assert.doesNotMatch(warnings[0], /private-demo|outside|tmp|workspace/u);
 }
 
 test("session loader applies defaults, global config, project config, env, then runtime options", async () => {

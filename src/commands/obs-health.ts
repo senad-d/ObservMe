@@ -1,10 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
-import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
 import { getGrafanaHealth, type GrafanaFetch } from "../query/grafana.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
+import { loadObsCommandConfig, normalizeObsCommandTimeoutMs, notifyObsCommand } from "./obs-command-support.ts";
 import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
 
 export interface ObsHealthCommandContext {
@@ -61,8 +61,6 @@ const OBS_HEALTH_GRAFANA_NEXT_ACTION = "check query.grafana.url and credentials,
 const OBS_HEALTH_TEMPO_NEXT_ACTION = "check Grafana credentials and query.grafana.datasourceUids.tempo, then rerun /obs health.";
 const OBS_HEALTH_LOKI_NEXT_ACTION = "check Grafana credentials and query.grafana.datasourceUids.loki, then rerun /obs health.";
 const OBS_HEALTH_METRICS_NEXT_ACTION = "check Grafana credentials and query.grafana.datasourceUids.prometheus, then rerun /obs health.";
-const minimumTimeoutMs = 1;
-
 export function registerObsHealthCommand(pi: ExtensionAPI, options: RegisterObsHealthCommandOptions = {}): void {
   const command = new ObsHealthCommand(options);
 
@@ -79,15 +77,15 @@ export async function handleObsHealthCommand(
   options: RegisterObsHealthCommandOptions = {},
 ): Promise<void> {
   if (!isObsHealthRequest(args)) {
-    await notifyHealth(ctx, "Usage: /obs health", "warning");
+    await notifyObsCommand(ctx, "Usage: /obs health", "warning");
     return;
   }
 
   try {
     const snapshot = await resolveObsHealthSnapshot(ctx, options);
-    await notifyHealth(ctx, renderObsHealth(snapshot), resolveObsHealthNotificationType(snapshot));
+    await notifyObsCommand(ctx, renderObsHealth(snapshot), resolveObsHealthNotificationType(snapshot));
   } catch (error) {
-    await notifyHealth(
+    await notifyObsCommand(
       ctx,
       formatObsCommandFailure("ObservMe health unavailable", error, {
         subsystem: "Health configuration",
@@ -145,8 +143,7 @@ async function loadObsHealthConfig(
   ctx: ObsHealthCommandContext,
   options: ObsHealthSnapshotOptions,
 ): Promise<ObservMeConfig> {
-  const loadConfig = options.loadConfig ?? loadSessionConfig;
-  return loadConfig({ ctx, cwd: ctx.cwd, configDirName: options.configDirName, env: options.env });
+  return loadObsCommandConfig(ctx, options);
 }
 
 async function checkCollectorReachability(
@@ -265,13 +262,9 @@ function resolveObsHealthNotificationType(snapshot: ObsHealthSnapshot): "info" |
 }
 
 function resolveObsHealthTimeout(config: ObservMeConfig, options: ObsHealthSnapshotOptions): number {
-  return normalizeTimeoutMs(options.timeoutMs ?? config.query.timeoutMs);
+  return normalizeObsCommandTimeoutMs(options.timeoutMs, config.query.timeoutMs, 1);
 }
 
-function normalizeTimeoutMs(value: number): number {
-  if (!Number.isFinite(value) || value < minimumTimeoutMs) return minimumTimeoutMs;
-  return Math.trunc(value);
-}
 
 function resolveCollectorHealthFetch(fetcher: ObsHealthFetch | undefined): ObsHealthFetch {
   return fetcher ?? globalThis.fetch.bind(globalThis);
@@ -279,14 +272,6 @@ function resolveCollectorHealthFetch(fetcher: ObsHealthFetch | undefined): ObsHe
 
 function isObsHealthRequest(args: string): boolean {
   return isExactObsSubcommandRequest(args, OBS_HEALTH_SUBCOMMAND);
-}
-
-async function notifyHealth(
-  ctx: ObsHealthCommandContext,
-  message: string,
-  type: "info" | "warning" | "error",
-): Promise<void> {
-  await ctx.ui.notify(message, type);
 }
 
 function formatHttpFailure(response: Response): string {

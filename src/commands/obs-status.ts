@@ -235,7 +235,7 @@ function isObsStatusRequest(args: string): boolean {
 }
 
 async function notifyStatus(ctx: ObsStatusCommandContext, message: string, type: "info" | "warning" | "error"): Promise<void> {
-  await ctx.ui.notify(message, type);
+  await ctx.ui?.notify?.(message, type);
 }
 
 function formatCaptureLines(capture: CaptureConfig): string[] {

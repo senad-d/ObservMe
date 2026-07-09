@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { defaultObservMeConfig } from "./defaults.ts";
+import { resolveProjectLocalFilePath } from "./project-paths.ts";
 import type { ConfigLogSink } from "./validate.ts";
 import { ensureValidObservMeConfig } from "./validate.ts";
 import type { ObservMeConfig } from "./schema.ts";
@@ -81,7 +82,7 @@ export async function loadSessionConfig(options: LoadSessionConfigOptions = {}):
 export async function loadSessionConfigWithDiagnostics(options: LoadSessionConfigOptions = {}): Promise<LoadSessionConfigResult> {
   const globalConfig = await readConfigFile(resolveGlobalConfigPath(options), options);
   const projectTrusted = await resolveProjectTrust(options);
-  const projectConfig = projectTrusted ? await readConfigFile(resolveProjectConfigPath(options), options) : undefined;
+  const projectConfig = projectTrusted ? await readProjectConfigFile(options) : undefined;
   const envFile = await readTrustedProjectEnvFile(projectTrusted, options);
   const environment = options.env ?? process.env;
   const effectiveEnvironment = mergeEnvironment(envFile, environment);
@@ -252,12 +253,27 @@ async function readConfigFile(
   }
 }
 
+async function readProjectConfigFile(options: LoadSessionConfigOptions): Promise<DeepPartial<ObservMeConfig> | undefined> {
+  try {
+    return await readConfigFile(resolveProjectConfigPath(options), options);
+  } catch (error) {
+    warnIgnoredProjectPath(options, "config", error);
+    return undefined;
+  }
+}
+
 async function readTrustedProjectEnvFile(
   projectTrusted: boolean,
   options: LoadSessionConfigOptions,
 ): Promise<NodeJS.ProcessEnv | undefined> {
   if (!projectTrusted || options.loadEnvFile === false) return undefined;
-  return readEnvFile(resolveProjectEnvFilePath(options), options);
+
+  try {
+    return await readEnvFile(resolveProjectEnvFilePath(options), options);
+  } catch (error) {
+    warnIgnoredProjectPath(options, "env", error);
+    return undefined;
+  }
 }
 
 async function readEnvFile(path: string, options: LoadConfigOptions): Promise<NodeJS.ProcessEnv | undefined> {
@@ -290,14 +306,27 @@ function resolveGlobalConfigPath(options: LoadConfigOptions): string {
 }
 
 function resolveProjectConfigPath(options: LoadSessionConfigOptions): string {
-  const cwd = options.cwd ?? process.cwd();
-  const configDirName = options.configDirName ?? defaultConfigDirName;
-  return options.projectConfigPath ?? join(cwd, configDirName, observmeYamlFileName);
+  return resolveProjectLocalFilePath({
+    cwd: options.cwd,
+    configDirName: options.configDirName,
+    defaultConfigDirName,
+    fileName: observmeYamlFileName,
+    overridePath: options.projectConfigPath,
+    inputLabel: "project config path",
+  });
 }
 
 function resolveProjectEnvFilePath(options: LoadSessionConfigOptions): string {
-  const cwd = options.cwd ?? process.cwd();
-  return options.envFilePath ?? join(cwd, defaultEnvFileName);
+  return resolveProjectLocalFilePath({
+    cwd: options.cwd,
+    fileName: defaultEnvFileName,
+    overridePath: options.envFilePath ?? defaultEnvFileName,
+    inputLabel: "project env path",
+  });
+}
+
+function warnIgnoredProjectPath(options: LoadSessionConfigOptions, source: "config" | "env", error: unknown) {
+  options.logger?.warn?.(`ObservMe project ${source} file was ignored: ${formatError(error)}`);
 }
 
 async function resolveProjectTrust(options: LoadSessionConfigOptions): Promise<boolean> {
@@ -321,12 +350,12 @@ function deepMergeObjects(base: ConfigObject, overlay: ConfigObject): ConfigObje
 
   for (const [key, value] of Object.entries(overlay)) {
     if (value === undefined) continue;
-    const existing = merged[key];
+    const existing = Object.hasOwn(merged, key) ? merged[key] : undefined;
     if (isPlainObject(existing) && isPlainObject(value)) {
-      merged[key] = deepMergeObjects(existing, value);
+      assignConfigProperty(merged, key, deepMergeObjects(existing, value));
       continue;
     }
-    merged[key] = cloneConfig(value);
+    assignConfigProperty(merged, key, cloneConfig(value));
   }
 
   return merged;
@@ -465,12 +494,12 @@ function applyYamlArrayItem(
 
   if (keyValue.valueText === undefined) {
     const child: ConfigObject = {};
-    item[keyValue.key] = child;
+    assignConfigProperty(item, keyValue.key, child);
     stack.push({ indent: line.indent + 2, value: child });
     return;
   }
 
-  item[keyValue.key] = parseYamlScalar(keyValue.valueText);
+  assignConfigProperty(item, keyValue.key, parseYamlScalar(keyValue.valueText));
 }
 
 function nextYamlContainer(lines: ParsedYamlLine[], index: number): ConfigObject | ConfigValue[] {
@@ -480,7 +509,16 @@ function nextYamlContainer(lines: ParsedYamlLine[], index: number): ConfigObject
 
 function assignYamlProperty(parent: ConfigObject | ConfigValue[], key: string, value: ConfigValue) {
   if (Array.isArray(parent)) throw new Error(`Invalid YAML: cannot assign key ${key} directly to an array.`);
-  parent[key] = value;
+  assignConfigProperty(parent, key, value);
+}
+
+function assignConfigProperty(parent: ConfigObject, key: string, value: ConfigValue) {
+  Object.defineProperty(parent, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
 }
 
 function splitYamlKeyValue(text: string): { key: string; valueText?: string } {

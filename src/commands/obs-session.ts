@@ -251,7 +251,7 @@ async function notifySession(
   message: string,
   type: "info" | "warning" | "error",
 ): Promise<void> {
-  await ctx.ui.notify(message, type);
+  await ctx.ui?.notify?.(message, type);
 }
 
 function formatError(error: unknown): string {

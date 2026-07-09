@@ -1,10 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
-import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../query/prometheus.ts";
 import { createPrometheusQueryClient } from "../query/prometheus.ts";
 import { completeObsSubcommand, parseObsSubcommandArgs } from "./obs-args.ts";
+import { loadObsCommandConfig, notifyObsCommand } from "./obs-command-support.ts";
 import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
 
 export interface ObsCostCommandContext {
@@ -70,20 +70,20 @@ export async function handleObsCostCommand(
   const requestStatus = parseObsCostRequest(args);
 
   if (requestStatus === "usage") {
-    await notifyCost(ctx, "Usage: /obs cost", "warning");
+    await notifyObsCommand(ctx, "Usage: /obs cost", "warning");
     return;
   }
 
   if (requestStatus === "session-disabled") {
-    await notifyCost(ctx, "Session-scoped Prometheus cost queries are disabled by default. Usage: /obs cost", "warning");
+    await notifyObsCommand(ctx, "Session-scoped Prometheus cost queries are disabled by default. Usage: /obs cost", "warning");
     return;
   }
 
   try {
     const snapshot = await resolveObsCostSnapshot(ctx, options);
-    await notifyCost(ctx, renderObsCost(snapshot), "info");
+    await notifyObsCommand(ctx, renderObsCost(snapshot), "info");
   } catch (error) {
-    await notifyCost(
+    await notifyObsCommand(
       ctx,
       formatObsCommandFailure("ObservMe cost unavailable", error, {
         subsystem: "Prometheus",
@@ -147,8 +147,7 @@ async function resolveObsCostSnapshot(
 }
 
 async function loadObsCostConfig(ctx: ObsCostCommandContext, options: ObsCostSnapshotOptions): Promise<ObservMeConfig> {
-  const loadConfig = options.loadConfig ?? loadSessionConfig;
-  return loadConfig({ ctx, cwd: ctx.cwd, configDirName: options.configDirName, env: options.env });
+  return loadObsCommandConfig(ctx, options);
 }
 
 async function queryObsCost(config: ObservMeConfig, options: ObsCostSnapshotOptions): Promise<QueryResult> {
@@ -223,10 +222,6 @@ function parseObsCostRequest(args: string): ObsCostRequestStatus {
 function isSessionScopeCostToken(token: string): boolean {
   const normalizedToken = token.toLowerCase();
   return normalizedToken === "--session" || normalizedToken.startsWith("--session=") || normalizedToken === "--current-session";
-}
-
-async function notifyCost(ctx: ObsCostCommandContext, message: string, type: "info" | "warning" | "error"): Promise<void> {
-  await ctx.ui.notify(message, type);
 }
 
 function formatUsd(value: number): string {

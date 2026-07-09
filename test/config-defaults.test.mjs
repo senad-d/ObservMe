@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Compile } from "typebox/compile";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { observMeConfigSchema } from "../src/config/schema.ts";
 
@@ -143,6 +144,80 @@ const expectedDocumentedDefaults = {
 };
 
 const captureDefaults = Object.values(defaultObservMeConfig.capture);
+const observMeConfigValidator = Compile(observMeConfigSchema);
+const defaultlessSchemaContractPaths = [
+  "metrics.labels",
+  "otlp.signalEndpoints",
+  "otlp.signalEndpoints.logs",
+  "otlp.signalEndpoints.metrics",
+  "otlp.signalEndpoints.traces",
+].sort();
+const openRecordContractPaths = new Set(["otlp.headers", "resource.attributes"]);
+
+function collectDefaultContractPaths(value, basePath = "") {
+  if (Array.isArray(value)) return collectDefaultArrayContractPaths(value, basePath);
+  if (!isPlainObject(value) || openRecordContractPaths.has(basePath)) return [];
+
+  const paths = Object.entries(value).flatMap(([key, child]) => {
+    const childPath = appendContractPath(basePath, key);
+    return [childPath, ...collectDefaultContractPaths(child, childPath)];
+  });
+
+  return sortUnique(paths);
+}
+
+function collectDefaultArrayContractPaths(value, basePath) {
+  const firstItem = value[0];
+  if (!basePath || !isPlainObject(firstItem)) return [];
+
+  const itemPath = `${basePath}[]`;
+  return sortUnique([itemPath, ...collectDefaultContractPaths(firstItem, itemPath)]);
+}
+
+function collectSchemaContractPaths(schema, basePath = "") {
+  if (hasSchemaProperties(schema)) return collectSchemaObjectContractPaths(schema, basePath);
+  if (hasObjectArrayItems(schema) && basePath) return collectSchemaArrayContractPaths(schema, basePath);
+  return [];
+}
+
+function collectSchemaObjectContractPaths(schema, basePath) {
+  const paths = Object.entries(schema.properties).flatMap(([key, child]) => {
+    const childPath = appendContractPath(basePath, key);
+    return [childPath, ...collectSchemaContractPaths(child, childPath)];
+  });
+
+  return sortUnique(paths);
+}
+
+function collectSchemaArrayContractPaths(schema, basePath) {
+  const itemPath = `${basePath}[]`;
+  return sortUnique([itemPath, ...collectSchemaContractPaths(schema.items, itemPath)]);
+}
+
+function schemaValidationErrors(config) {
+  return Array.from(observMeConfigValidator.Errors(config), error => `${error.instancePath || "root"}: ${error.message}`);
+}
+
+function hasSchemaProperties(value) {
+  return isPlainObject(value?.properties);
+}
+
+function hasObjectArrayItems(value) {
+  return isPlainObject(value?.items) && hasSchemaProperties(value.items);
+}
+
+function appendContractPath(basePath, key) {
+  if (!basePath) return key;
+  return `${basePath}.${key}`;
+}
+
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sortUnique(values) {
+  return [...new Set(values)].sort();
+}
 
 test("default config snapshots every documented default value", () => {
   assert.deepEqual(defaultObservMeConfig, expectedDocumentedDefaults);
@@ -163,4 +238,21 @@ test("default config is privacy-preserving and capture-free", () => {
 test("config schema exposes the documented top-level configuration shape", () => {
   assert.deepEqual(Object.keys(observMeConfigSchema.properties), Object.keys(expectedDocumentedDefaults));
   assert.equal(observMeConfigSchema.additionalProperties, false);
+});
+
+test("default config conforms to the exported runtime schema", () => {
+  assert.deepEqual(schemaValidationErrors(defaultObservMeConfig), []);
+});
+
+test("config defaults and runtime schema expose the same contract paths", () => {
+  const defaultPaths = collectDefaultContractPaths(defaultObservMeConfig);
+  const schemaPaths = collectSchemaContractPaths(observMeConfigSchema);
+  const allowedDefaultlessPaths = new Set(defaultlessSchemaContractPaths);
+  const schemaOnlyPaths = schemaPaths.filter(path => !defaultPaths.includes(path) && !allowedDefaultlessPaths.has(path));
+  const defaultOnlyPaths = defaultPaths.filter(path => !schemaPaths.includes(path));
+  const staleDefaultlessPaths = defaultlessSchemaContractPaths.filter(path => !schemaPaths.includes(path));
+
+  assert.deepEqual(defaultOnlyPaths, [], "default config includes contract paths that are absent from observMeConfigSchema");
+  assert.deepEqual(schemaOnlyPaths, [], "observMeConfigSchema includes contract paths that are absent from documented defaults");
+  assert.deepEqual(staleDefaultlessPaths, [], "defaultless schema contract path allowlist contains stale paths");
 });

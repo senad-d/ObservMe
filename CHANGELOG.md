@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added focused coverage for missing or partial Pi runtime capabilities across lifecycle bootstrap, status/root commands, and backfill fallbacks.
+- Recorded final-pass package, Pi runtime, Collector, Grafana-stack, and operator Grafana validation outcomes, including the current live-stack Tempo LLM content blocker and cleanup evidence.
+- Documented and tested trusted-project config bootstrap behavior across Pi startup, reload, new-session, resume, and fork lifecycles, including untrusted and missing-project-context skips.
+- Documented deferred integration and Pi lifecycle verification prerequisites, CI safety, side effects, and cleanup paths for smoke, Docker, packaged-install, and Grafana validation commands.
+- Centralized shared `/obs` command config loading, notification dispatch, timeout normalization, and trace/link diagnostic formatting.
+- Added config contract drift tests that keep ObservMe defaults aligned with the exported runtime schema and documented defaultless optional fields.
+- Constrained trusted-project ObservMe config and `.env` path resolution to the active project root, rejecting traversal or absolute config-directory inputs with sanitized diagnostics.
+- Enforced runtime ObservMe config schema validation after layered merges so malformed global or trusted-project config falls back to sanitized safe defaults before semantic validators run.
 - Added a post-remediation review-closure validation matrix that maps every review task to focused checks, smoke commands, integration categories, or documented blockers.
 - Extended the Pi RPC runtime smoke with credential-free sanitized event-shape coverage for model/thinking changes, agent turns, built-in tool lifecycle events, `message_end`, and documented `user_bash` interactive-only validation.
 - Bounded `/obs agents` recent-child rendering for large agent trees while preserving latest-child, wait/join, aggregate, and drill-down summaries.
