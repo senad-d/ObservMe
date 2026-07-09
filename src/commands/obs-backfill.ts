@@ -144,6 +144,9 @@ const millisecondsPerSecond = 1000;
 const millisecondsPerMinute = 60 * millisecondsPerSecond;
 const millisecondsPerHour = 60 * millisecondsPerMinute;
 const millisecondsPerDay = 24 * millisecondsPerHour;
+const OBS_BACKFILL_MAX_SINCE_DAYS = 30;
+const OBS_BACKFILL_MAX_SINCE_MS = OBS_BACKFILL_MAX_SINCE_DAYS * millisecondsPerDay;
+const OBS_BACKFILL_SINCE_HELP = `Use a positive duration up to ${OBS_BACKFILL_MAX_SINCE_DAYS}d, such as 30m, 1h, or 2d.`;
 const sincePattern = /^(\d+)(ms|s|m|h|d)$/iu;
 const abortErrorNames = new Set(["AbortError", "TimeoutError"]);
 
@@ -678,7 +681,7 @@ function parsedObsBackfillRequest(currentSession: boolean, since: string | undef
   if (since === undefined) return { request: { currentSession } };
 
   const sinceMs = parseSinceDurationMs(since);
-  if (sinceMs === undefined) return { error: `Invalid --since duration: ${since}. Use values like 30m, 1h, or 2d.` };
+  if (sinceMs === undefined) return { error: `Invalid --since duration: ${since}. ${OBS_BACKFILL_SINCE_HELP}` };
   return { request: { currentSession, since, sinceMs } };
 }
 
@@ -688,7 +691,13 @@ function parseSinceDurationMs(value: string): number | undefined {
 
   const amount = Number(match[1]);
   if (!Number.isSafeInteger(amount) || amount <= 0) return undefined;
-  return amount * millisecondsForSinceUnit(match[2].toLowerCase());
+
+  const unitMs = millisecondsForSinceUnit(match[2].toLowerCase());
+  if (amount > Math.floor(OBS_BACKFILL_MAX_SINCE_MS / unitMs)) return undefined;
+
+  const durationMs = amount * unitMs;
+  if (!Number.isSafeInteger(durationMs) || durationMs > OBS_BACKFILL_MAX_SINCE_MS) return undefined;
+  return durationMs;
 }
 
 function millisecondsForSinceUnit(unit: string): number {

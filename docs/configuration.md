@@ -10,7 +10,7 @@ When the extension starts in a trusted Pi project, it creates:
 .pi/observme.yaml
 ```
 
-The file is created only when it is missing. Existing project config is never overwritten. The generated file mirrors the local debug profile, including content-capture settings, so review `capture` and `privacy` before sharing the file or using it in production.
+The file is created only when it is missing. Existing project config is never overwritten. The generated file is privacy-preserving: raw prompt, response, thinking, tool, bash, and file-path capture starts disabled, redaction starts enabled, and unsafe capture starts disabled.
 
 ## What to edit
 
@@ -18,8 +18,8 @@ Edit `.pi/observme.yaml` in the project where you run Pi:
 
 - `otlp.endpoint` and `otlp.signalEndpoints` — your OpenTelemetry Collector URLs.
 - `resource.attributes` — service name, project name, tenant, and deployment environment labels.
-- `capture` — whether prompts, responses, thinking, tool data, bash data, and file paths are exported.
-- `privacy` — redaction, unsafe-capture acknowledgement, insecure transport, hash salt env var, and path handling.
+- `capture` — whether prompts, responses, thinking, tool data, bash data, and file paths are exported. For local debugging, set only the specific fields you need to `true`.
+- `privacy` — redaction, unsafe-capture acknowledgement, insecure transport, hash salt env var, and path handling. Keep `redactionEnabled: true`; set `allowUnsafeCapture: true` only when you intentionally accept unredacted sensitive-content export from this trusted project.
 - `query.grafana` — Grafana URL, datasource UIDs, TLS, and IPv4 transport settings for `/obs` query commands.
 - `query.links.traceUrlTemplate` — the Grafana Explore trace-link template used by `/obs trace` and `/obs link`.
 

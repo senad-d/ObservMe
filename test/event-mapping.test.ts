@@ -3,7 +3,12 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { trace } from "@opentelemetry/api";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
-import type { ObservMeTelemetrySession } from "../src/pi/handlers.ts";
+import type {
+  Handler,
+  ObservMeHandlerContext,
+  ObservMeTelemetrySession,
+  StartSessionTelemetryOptions,
+} from "../src/pi/handlers.ts";
 import {
   createAgentTreeTracker,
   createObservMeMetrics,
@@ -16,6 +21,8 @@ import {
   recordAgentJoin,
   recordAgentWait,
   startSubagentSpawn,
+  type AgentWaitJoinOptions,
+  type SubagentTelemetrySession,
 } from "../src/pi/subagent-spawn.ts";
 import {
   LOG_EVENT_NAMES,
@@ -23,6 +30,8 @@ import {
   OBSERVME_HISTOGRAM_METRIC_NAMES,
 } from "../src/semconv/metrics.ts";
 import { SPAN_NAMES } from "../src/semconv/spans.ts";
+import { isPlainRecord, mergeRecordConfig } from "./support/telemetry-types.ts";
+import type { TestAttributes, TestLogger, TestMetricRecord, TestSpan, TestSpanContext } from "./support/telemetry-types.ts";
 
 const requiredFixtureFiles = [
   "session-user-message.json",
@@ -63,18 +72,18 @@ const forbiddenMetricLabelKeys = [
   "raw_error",
 ];
 const hiddenContentPattern = /hidden-|private-repo|do not export/u;
-const validSpanContext = {
+const validSpanContext: TestSpanContext = {
   traceId: "11111111111111111111111111111111",
   spanId: "2222222222222222",
   traceFlags: 1,
 };
 
-function fixtureUrl(relativePath) {
+function fixtureUrl(relativePath: string): URL {
   return new URL(`./fixtures/${relativePath}`, import.meta.url);
 }
 
-async function loadFixture(relativePath) {
-  return JSON.parse(await readFile(fixtureUrl(relativePath), "utf8"));
+async function loadFixture(relativePath: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(fixtureUrl(relativePath), "utf8")) as Record<string, unknown>;
 }
 
 async function loadEventFixtures() {
@@ -93,57 +102,46 @@ async function loadEventFixtures() {
   return { sessionStart, agentRun, turn, llm, toolCall, bashExecution, compaction, branch, modelThinking };
 }
 
-function cloneConfig(overrides = {}) {
+function cloneConfig(overrides: Record<string, unknown> = {}) {
   return mergeConfig(structuredClone(defaultObservMeConfig), overrides);
 }
 
-function mergeConfig(base, overlay) {
-  for (const [key, value] of Object.entries(overlay)) {
-    if (isPlainObject(base[key]) && isPlainObject(value)) {
-      mergeConfig(base[key], value);
-      continue;
-    }
-    base[key] = value;
-  }
-  return base;
-}
-
-function isPlainObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function mergeConfig<T extends Record<string, unknown>>(base: T, overlay: Record<string, unknown>): T {
+  return mergeRecordConfig(base, overlay);
 }
 
 function createFakePi() {
-  const handlers = new Map();
+  const handlers = new Map<string, Handler>() as Omit<Map<string, Handler>, "get"> & { get(eventName: string): Handler };
   return {
     handlers,
-    on: (eventName, handler) => {
+    on: (eventName: string, handler: Handler) => {
       handlers.set(eventName, handler);
     },
   };
 }
 
 function createFakeMeter() {
-  const records = [];
+  const records: TestMetricRecord[] = [];
   return {
     records,
-    createCounter: name => ({
-      add: (value, attributes = {}) => records.push({ type: "counter", name, value, attributes }),
+    createCounter: (name: string) => ({
+      add: (value: number, attributes: TestAttributes = {}) => records.push({ type: "counter", name, value, attributes }),
     }),
-    createUpDownCounter: name => ({
-      add: (value, attributes = {}) => records.push({ type: "upDownCounter", name, value, attributes }),
+    createUpDownCounter: (name: string) => ({
+      add: (value: number, attributes: TestAttributes = {}) => records.push({ type: "upDownCounter", name, value, attributes }),
     }),
-    createHistogram: name => ({
-      record: (value, attributes = {}) => records.push({ type: "histogram", name, value, attributes }),
+    createHistogram: (name: string) => ({
+      record: (value: number, attributes: TestAttributes = {}) => records.push({ type: "histogram", name, value, attributes }),
     }),
   };
 }
 
-function createFakeTracer(spanContext = validSpanContext) {
-  const spans = [];
+function createFakeTracer(spanContext: TestSpanContext = validSpanContext) {
+  const spans: TestSpan[] = [];
   return {
     spans,
-    startSpan: (name, options: { attributes?: Record<string, unknown> } = {}, parentContext = undefined) => {
-      const parentSpan = parentContext ? trace.getSpan(parentContext) : undefined;
+    startSpan: (name: string, options: { attributes?: TestAttributes } = {}, parentContext: unknown = undefined) => {
+      const parentSpan = parentContext ? trace.getSpan(parentContext as Parameters<typeof trace.getSpan>[0]) : undefined;
       const span = createFakeSpan(name, options.attributes ?? {}, parentSpan, spanContext);
       spans.push(span);
       return span;
@@ -151,41 +149,41 @@ function createFakeTracer(spanContext = validSpanContext) {
   };
 }
 
-function createFakeSpan(name, attributes, parentSpan, spanContext) {
-  return {
+function createFakeSpan(name: string, attributes: TestAttributes, parentSpan: unknown, spanContext: TestSpanContext): TestSpan {
+  const span: TestSpan = {
     name,
     attributes,
     parentSpan,
     events: [],
     status: undefined,
     ended: false,
-    addEvent(eventName, eventAttributes = {}) {
-      this.events.push({ name: eventName, attributes: eventAttributes });
-      return this;
+    addEvent(eventName: string, eventAttributes: unknown = {}) {
+      span.events.push({ name: eventName, attributes: isPlainRecord(eventAttributes) ? eventAttributes : {} });
+      return span;
     },
-    setAttribute(key, value) {
-      this.attributes[key] = value;
-      return this;
+    setAttribute(key: string, value: unknown) {
+      span.attributes[key] = value;
+      return span;
     },
-    setAttributes(values) {
-      Object.assign(this.attributes, values);
-      return this;
+    setAttributes(values: TestAttributes) {
+      Object.assign(span.attributes, values);
+      return span;
     },
-    setStatus(status) {
-      this.status = status;
-      return this;
+    setStatus(status: unknown) {
+      span.status = status;
+      return span;
     },
     spanContext() {
       return spanContext;
     },
     addLink() {
-      return this;
+      return span;
     },
     addLinks() {
-      return this;
+      return span;
     },
     updateName() {
-      return this;
+      return span;
     },
     isRecording() {
       return true;
@@ -194,16 +192,20 @@ function createFakeSpan(name, attributes, parentSpan, spanContext) {
       return undefined;
     },
     end() {
-      this.ended = true;
+      span.ended = true;
     },
   };
+
+  return span;
 }
 
-function createFakeLogger() {
-  const records = [];
+function createFakeLogger(): TestLogger {
+  const records: TestLogger["records"] = [];
   return {
     records,
-    emit: record => records.push(record),
+    emit: record => {
+      records.push(record as TestLogger["records"][number]);
+    },
   };
 }
 
@@ -218,7 +220,7 @@ function createFakeController() {
   };
 }
 
-function makeLineage(overrides = {}) {
+function makeLineage(overrides: Record<string, unknown> = {}) {
   return {
     workflowId: "workflow-fixture",
     workflowRootAgentId: "agent-root",
@@ -236,15 +238,16 @@ interface FakeTelemetryOptions {
   readonly startSessionSpan?: boolean;
 }
 
-type FakeTelemetrySession = ObservMeTelemetrySession & {
-  readonly meter: ReturnType<typeof createFakeMeter>;
-  readonly tracer: ReturnType<typeof createFakeTracer>;
-  readonly logger: ReturnType<typeof createFakeLogger>;
-  sessionAttributes?: Record<string, string>;
-  sessionSpan?: ReturnType<typeof createFakeSpan>;
-};
+type FakeTelemetrySession = Omit<ObservMeTelemetrySession, "logger" | "sessionAttributes" | "sessionSpan" | "tracer"> &
+  SubagentTelemetrySession & {
+    readonly meter: ReturnType<typeof createFakeMeter>;
+    readonly tracer: ReturnType<typeof createFakeTracer>;
+    readonly logger: ReturnType<typeof createFakeLogger>;
+    sessionAttributes?: Record<string, string>;
+    sessionSpan?: ReturnType<typeof createFakeSpan>;
+  };
 
-function createFakeTelemetry(config, lineage, options: FakeTelemetryOptions = {}): FakeTelemetrySession {
+function createFakeTelemetry(config: ReturnType<typeof cloneConfig>, lineage: StartSessionTelemetryOptions["lineage"], options: FakeTelemetryOptions = {}): FakeTelemetrySession {
   const meter = createFakeMeter();
   const tracer = createFakeTracer(options.spanContext ?? validSpanContext);
   const logger = createFakeLogger();
@@ -274,9 +277,14 @@ function createFakeTelemetry(config, lineage, options: FakeTelemetryOptions = {}
   return telemetry;
 }
 
-function createHandlerHarness(config = cloneConfig()) {
+interface HandlerHarness {
+  readonly pi: ReturnType<typeof createFakePi>;
+  telemetry?: FakeTelemetrySession;
+}
+
+function createHandlerHarness(config = cloneConfig()): HandlerHarness {
   const pi = createFakePi();
-  const harness = { pi, telemetry: undefined };
+  const harness: HandlerHarness = { pi };
 
   registerHandlers(pi, {
     loadConfig: async () => config,
@@ -289,14 +297,14 @@ function createHandlerHarness(config = cloneConfig()) {
   return harness;
 }
 
-function requireTelemetry(harness) {
+function requireTelemetry(harness: HandlerHarness): FakeTelemetrySession {
   assert.ok(harness.telemetry, "expected telemetry session to be active");
   return harness.telemetry;
 }
 
-async function emitFixtureHandlerTrace(harness, fixtures) {
+async function emitFixtureHandlerTrace(harness: HandlerHarness, fixtures: Awaited<ReturnType<typeof loadEventFixtures>>): Promise<void> {
   const handlers = harness.pi.handlers;
-  const ctx = {
+  const ctx: ObservMeHandlerContext = {
     cwd: "/workspace/event-mapping",
     model: { provider: "anthropic", model: "claude-fixture", api: "messages" },
     thinking: { level: "medium" },
@@ -324,17 +332,17 @@ async function emitFixtureHandlerTrace(harness, fixtures) {
   await handlers.get("session_shutdown")({ status: "ok" }, {});
 }
 
-function findSpan(telemetry, spanName) {
+function findSpan(telemetry: FakeTelemetrySession, spanName: string): TestSpan {
   const span = telemetry.tracer.spans.find(candidate => candidate.name === spanName);
   assert.ok(span, `expected ${spanName} span`);
   return span;
 }
 
-function metricSum(records, metricName) {
+function metricSum(records: readonly TestMetricRecord[], metricName: string): number {
   return records.filter(record => record.name === metricName).reduce((sum, record) => sum + record.value, 0);
 }
 
-function assertNoForbiddenMetricLabels(records) {
+function assertNoForbiddenMetricLabels(records: readonly TestMetricRecord[]): void {
   for (const record of records) {
     for (const key of Object.keys(record.attributes ?? {})) {
       assert.equal(forbiddenMetricLabelKeys.includes(key), false, `${record.name} used forbidden metric label ${key}`);
@@ -342,12 +350,12 @@ function assertNoForbiddenMetricLabels(records) {
   }
 }
 
-function assertNoHiddenContentExported(telemetry) {
+function assertNoHiddenContentExported(telemetry: FakeTelemetrySession): void {
   const exported = JSON.stringify({ spans: telemetry.tracer.spans, logs: telemetry.logger.records });
   assert.doesNotMatch(exported, hiddenContentPattern);
 }
 
-function assertDefaultContentAbsent(telemetry) {
+function assertDefaultContentAbsent(telemetry: FakeTelemetrySession): void {
   const llmSpan = findSpan(telemetry, SPAN_NAMES.PI_LLM_REQUEST);
   const toolSpan = findSpan(telemetry, SPAN_NAMES.PI_TOOL_CALL);
   const bashSpan = findSpan(telemetry, SPAN_NAMES.PI_BASH_EXECUTION);
@@ -361,7 +369,7 @@ function assertDefaultContentAbsent(telemetry) {
   assert.equal(bashSpan.attributes["pi.bash.output.redacted"], undefined);
 }
 
-function assertCanonicalHandlerSpans(telemetry) {
+function assertCanonicalHandlerSpans(telemetry: FakeTelemetrySession): void {
   const sessionSpan = findSpan(telemetry, SPAN_NAMES.PI_SESSION);
   const agentSpan = findSpan(telemetry, SPAN_NAMES.PI_AGENT_RUN);
   const turnSpan = findSpan(telemetry, SPAN_NAMES.PI_TURN);
@@ -399,36 +407,36 @@ function assertCanonicalHandlerSpans(telemetry) {
   assert.equal(turnSpan.ended, true);
 }
 
-function assertModelThinkingLogs(telemetry) {
+function assertModelThinkingLogs(telemetry: FakeTelemetrySession): void {
   const modelLogs = telemetry.logger.records.filter(record => record.body === LOG_EVENT_NAMES.MODEL_CHANGED);
   const thinkingLogs = telemetry.logger.records.filter(record => record.body === LOG_EVENT_NAMES.THINKING_CHANGED);
 
   assert.equal(modelLogs.length, 2);
   assert.equal(thinkingLogs.length, 2);
-  assert.equal(modelLogs[0].attributes["pi.model.provider.current"], "openai");
-  assert.equal(modelLogs[1].attributes["pi.model.id.current"], "claude-updated");
-  assert.equal(thinkingLogs[0].attributes["pi.thinking.level.current"], "high");
-  assert.equal(thinkingLogs[1].attributes["pi.thinking.level.current"], "medium");
+  assert.equal(modelLogs[0]?.attributes?.["pi.model.provider.current"], "openai");
+  assert.equal(modelLogs[1]?.attributes?.["pi.model.id.current"], "claude-updated");
+  assert.equal(thinkingLogs[0]?.attributes?.["pi.thinking.level.current"], "high");
+  assert.equal(thinkingLogs[1]?.attributes?.["pi.thinking.level.current"], "medium");
 }
 
-function assertRedactedContentPresent(telemetry) {
+function assertRedactedContentPresent(telemetry: FakeTelemetrySession): void {
   const llmSpan = findSpan(telemetry, SPAN_NAMES.PI_LLM_REQUEST);
   const toolSpan = findSpan(telemetry, SPAN_NAMES.PI_TOOL_CALL);
   const bashSpan = findSpan(telemetry, SPAN_NAMES.PI_BASH_EXECUTION);
 
-  assert.match(llmSpan.attributes["pi.llm.prompt.redacted"], /\[REDACTED:/u);
-  assert.match(llmSpan.attributes["pi.llm.response.redacted"], /\[REDACTED:/u);
-  assert.match(llmSpan.attributes["pi.llm.thinking.redacted"], /\[REDACTED:/u);
+  assert.match(String(llmSpan.attributes["pi.llm.prompt.redacted"]), /\[REDACTED:/u);
+  assert.match(String(llmSpan.attributes["pi.llm.response.redacted"]), /\[REDACTED:/u);
+  assert.match(String(llmSpan.attributes["pi.llm.thinking.redacted"]), /\[REDACTED:/u);
   assertCapturedContentLog(telemetry, LOG_EVENT_NAMES.LLM_PROMPT_CAPTURED, "prompt", llmSpan.attributes["pi.llm.prompt.redacted"]);
   assertCapturedContentLog(telemetry, LOG_EVENT_NAMES.LLM_RESPONSE_CAPTURED, "response", llmSpan.attributes["pi.llm.response.redacted"]);
   assertCapturedContentLog(telemetry, LOG_EVENT_NAMES.LLM_THINKING_CAPTURED, "thinking", llmSpan.attributes["pi.llm.thinking.redacted"]);
-  assert.match(toolSpan.attributes["pi.tool.arguments.redacted"], /\[REDACTED:/u);
-  assert.match(toolSpan.attributes["pi.tool.result.redacted"], /\[REDACTED:/u);
-  assert.match(bashSpan.attributes["pi.bash.command.redacted"], /\[REDACTED:/u);
-  assert.match(bashSpan.attributes["pi.bash.output.redacted"], /\[REDACTED:/u);
+  assert.match(String(toolSpan.attributes["pi.tool.arguments.redacted"]), /\[REDACTED:/u);
+  assert.match(String(toolSpan.attributes["pi.tool.result.redacted"]), /\[REDACTED:/u);
+  assert.match(String(bashSpan.attributes["pi.bash.command.redacted"]), /\[REDACTED:/u);
+  assert.match(String(bashSpan.attributes["pi.bash.output.redacted"]), /\[REDACTED:/u);
 }
 
-function assertCapturedContentLog(telemetry, eventName, kind, body) {
+function assertCapturedContentLog(telemetry: FakeTelemetrySession, eventName: string, kind: string, body: unknown): void {
   const record = telemetry.logger.records.find(log => log.attributes?.["event.name"] === eventName);
   assert.equal(record?.body, body);
   assert.equal(record?.attributes?.["event.category"], "llm_content");
@@ -437,15 +445,15 @@ function assertCapturedContentLog(telemetry, eventName, kind, body) {
   assert.equal(record?.attributes?.span_id, validSpanContext.spanId);
 }
 
-function createSubagentTelemetry() {
+function createSubagentTelemetry(): FakeTelemetrySession {
   return createFakeTelemetry(cloneConfig(), makeLineage(), { startSessionSpan: true });
 }
 
-function assertMetricValue(records, metricName, expectedValue) {
+function assertMetricValue(records: readonly TestMetricRecord[], metricName: string, expectedValue: number): void {
   assert.equal(metricSum(records, metricName), expectedValue);
 }
 
-function assertHistogramRecorded(records, metricName) {
+function assertHistogramRecorded(records: readonly TestMetricRecord[], metricName: string): void {
   assert.ok(records.some(record => record.name === metricName), `expected ${metricName} histogram`);
 }
 
@@ -495,9 +503,9 @@ test("handler fixtures export redacted content only when capture is explicitly e
 
 test("subagent fixtures map spawn, wait, join, orphan, and propagation failures", async () => {
   const [spawnFixture, waitJoinFixture, orphanFixture] = await Promise.all([
-    loadFixture("events/subagent-spawn.json"),
-    loadFixture("events/agent-wait-join.json"),
-    loadFixture("events/orphan-agent.json"),
+    loadFixture("events/subagent-spawn.json") as Promise<Parameters<typeof startSubagentSpawn>[1]>,
+    loadFixture("events/agent-wait-join.json") as Promise<{ readonly wait: AgentWaitJoinOptions; readonly join: AgentWaitJoinOptions }>,
+    loadFixture("events/orphan-agent.json") as Promise<{ readonly env: NodeJS.ProcessEnv }>,
   ]);
   const telemetry = createSubagentTelemetry();
   const started = startSubagentSpawn(telemetry, spawnFixture);
@@ -516,14 +524,15 @@ test("subagent fixtures map spawn, wait, join, orphan, and propagation failures"
   assert.equal(started.traceContextPropagated, true);
   assert.equal(started.env.traceparent, "00-11111111111111111111111111111111-2222222222222222-01");
   assert.equal(started.env.OBSERVME_WORKFLOW_ID, telemetry.lineage.workflowId);
-  assert.equal(started.span.attributes["pi.agent.parent_id"], telemetry.lineage.agentId);
-  assert.equal(started.span.attributes["pi.agent.root_id"], telemetry.lineage.rootAgentId);
-  assert.equal(started.span.attributes["pi.agent.depth"], 1);
+  assert.equal(started.span.attributes?.["pi.agent.parent_id"], telemetry.lineage.agentId);
+  assert.equal(started.span.attributes?.["pi.agent.root_id"], telemetry.lineage.rootAgentId);
+  assert.equal(started.span.attributes?.["pi.agent.depth"], 1);
   assert.equal(wait.span.name, SPAN_NAMES.PI_AGENT_WAIT);
-  assert.equal(wait.span.attributes["pi.agent.child.status"], "completed");
+  assert.equal(wait.span.attributes?.["pi.agent.child.status"], "completed");
   assert.equal(join.span.name, SPAN_NAMES.PI_AGENT_JOIN);
-  assert.equal(join.span.attributes["pi.agent.join.status"], "completed");
+  assert.equal(join.span.attributes?.["pi.agent.join.status"], "completed");
   assert.equal(malformed, undefined);
+  assert.ok(orphan, "expected orphan lineage to be observed");
   assert.equal(orphan.orphaned, true);
   assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.AGENT_ORPHANED));
   assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.TRACE_CONTEXT_PROPAGATION_FAILED));

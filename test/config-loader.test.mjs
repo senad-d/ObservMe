@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { PROJECT_OBSERVME_YAML_TEMPLATE } from "../src/config/bootstrap-project-config.ts";
 import { loadFactoryConfig, loadSessionConfig, parseObservMeConfigText } from "../src/config/load-config.ts";
 
 const globalConfigYaml = `
@@ -238,4 +239,34 @@ observme:
     workflow: { idEnv: "OBSERVME_WORKFLOW_ID" },
     agent: { capabilityEnv: "OBSERVME_AGENT_CAPABILITY" },
   });
+});
+
+test("generated project starter parses with privacy-preserving capture defaults", () => {
+  const parsed = parseObservMeConfigText(PROJECT_OBSERVME_YAML_TEMPLATE);
+
+  assert.deepEqual(parsed.capture, {
+    prompts: false,
+    responses: false,
+    thinking: false,
+    toolArguments: false,
+    toolResults: false,
+    bashCommands: false,
+    bashOutput: false,
+    filePaths: false,
+  });
+  assert.equal(parsed.privacy.redactionEnabled, true);
+  assert.equal(parsed.privacy.allowUnsafeCapture, false);
+});
+
+test("generated project starter supports redacted explicit content-capture opt-in", () => {
+  const text = PROJECT_OBSERVME_YAML_TEMPLATE.replace("prompts: false", "prompts: true").replace(
+    "toolArguments: false",
+    "toolArguments: true",
+  );
+  const parsed = parseObservMeConfigText(text);
+
+  assert.equal(parsed.capture.prompts, true);
+  assert.equal(parsed.capture.toolArguments, true);
+  assert.equal(parsed.privacy.redactionEnabled, true);
+  assert.equal(parsed.privacy.allowUnsafeCapture, false);
 });

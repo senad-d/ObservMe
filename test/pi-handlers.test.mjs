@@ -909,6 +909,138 @@ test("tool handlers create pi.tool.call spans, close success/error status, and k
   assertToolMetricLabelsAreLowCardinality(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TOOL_FAILURES_TOTAL);
 });
 
+test("interleaved tool lifecycle events with explicit ids only update their own spans", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-parallel-tools" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("agent_start")({ source: "user" }, {});
+  await pi.handlers.get("turn_start")({ turnIndex: 1 }, {});
+  await pi.handlers.get("tool_execution_start")({ toolCallId: "tool-parallel-a", toolName: "read", arguments: "a-start" }, {});
+  await pi.handlers.get("tool_execution_start")({ toolCallId: "tool-parallel-b", toolName: "write", arguments: "b-start" }, {});
+  await pi.handlers.get("tool_call")({ toolCallId: "tool-parallel-a", toolName: "read", arguments: "a-call" }, {});
+  await pi.handlers.get("tool_result")({ toolCallId: "tool-parallel-b", toolName: "write", result: "b-result" }, {});
+  await pi.handlers.get("tool_result")({ toolCallId: "tool-parallel-a", toolName: "read", result: "a-result" }, {});
+  await pi.handlers.get("tool_execution_end")({ toolCallId: "tool-parallel-a", toolName: "read", success: true, result: "a-final" }, {});
+
+  const toolSpans = telemetry.tracer.spans.filter(span => span.name === SPAN_NAMES.PI_TOOL_CALL);
+  const toolA = toolSpans.find(span => span.attributes["pi.tool.call.id"] === "tool-parallel-a");
+  const toolB = toolSpans.find(span => span.attributes["pi.tool.call.id"] === "tool-parallel-b");
+
+  assert.equal(toolSpans.length, 2);
+  assert.ok(toolA);
+  assert.ok(toolB);
+  assert.equal(toolA.ended, true);
+  assert.equal(toolB.ended, false);
+  assert.equal(toolA.attributes["pi.tool.name"], "read");
+  assert.equal(toolB.attributes["pi.tool.name"], "write");
+  assert.equal(toolA.attributes["pi.tool.arguments.size"], "a-call".length);
+  assert.equal(toolB.attributes["pi.tool.arguments.size"], "b-start".length);
+  assert.equal(toolA.attributes["pi.tool.result.size"], "a-final".length);
+  assert.equal(toolB.attributes["pi.tool.result.size"], "b-result".length);
+  assert.equal(toolA.status.code, 1);
+  assert.equal(toolB.status, undefined);
+
+  await pi.handlers.get("tool_execution_end")({ toolCallId: "tool-parallel-b", toolName: "write", success: true, result: "b-final" }, {});
+
+  assert.equal(toolB.ended, true);
+  assert.equal(toolB.attributes["pi.tool.result.size"], "b-final".length);
+  assert.equal(toolB.status.code, 1);
+  assertActiveSpanValues(telemetry.meter.records, "tool_call", [1, 1, -1, -1]);
+});
+
+test("ambiguous parallel tool events without ids are dropped instead of mutating the latest active span", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-parallel-missing-tool-id" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("agent_start")({ source: "user" }, {});
+  await pi.handlers.get("turn_start")({ turnIndex: 1 }, {});
+  await pi.handlers.get("tool_execution_start")({ toolCallId: "tool-missing-a", toolName: "read" }, {});
+  await pi.handlers.get("tool_execution_start")({ toolCallId: "tool-missing-b", toolName: "write" }, {});
+  await pi.handlers.get("tool_call")({ toolName: "read", arguments: "ambiguous-args" }, {});
+  await pi.handlers.get("tool_result")({ toolName: "read", result: "ambiguous-result" }, {});
+  await pi.handlers.get("tool_execution_end")(
+    { toolName: "read", success: false, errorClass: "AmbiguousError", result: "ambiguous-final" },
+    {},
+  );
+
+  const toolSpans = telemetry.tracer.spans.filter(span => span.name === SPAN_NAMES.PI_TOOL_CALL);
+  const toolA = toolSpans.find(span => span.attributes["pi.tool.call.id"] === "tool-missing-a");
+  const toolB = toolSpans.find(span => span.attributes["pi.tool.call.id"] === "tool-missing-b");
+  const droppedOperations = telemetry.logger.records
+    .filter(record => record.body === LOG_EVENT_NAMES.TELEMETRY_DROPPED)
+    .map(record => record.attributes?.operation)
+    .sort();
+
+  assert.equal(toolSpans.length, 2);
+  assert.ok(toolA);
+  assert.ok(toolB);
+  assert.equal(toolA.ended, false);
+  assert.equal(toolB.ended, false);
+  assert.equal(toolA.status, undefined);
+  assert.equal(toolB.status, undefined);
+  assert.equal(toolA.attributes["pi.tool.result.size"], undefined);
+  assert.equal(toolB.attributes["pi.tool.arguments.size"], undefined);
+  assert.equal(toolB.attributes["pi.tool.result.size"], undefined);
+  assert.equal(toolB.attributes["pi.tool.name"], "write");
+  assert.deepEqual(droppedOperations, ["tool_call", "tool_execution_end", "tool_result"]);
+  assertMetricRecordCount(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TELEMETRY_DROPPED_TOTAL, 3);
+  assertNoMetricRecord(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TOOL_FAILURES_TOTAL);
+
+  await pi.handlers.get("tool_execution_end")({ toolCallId: "tool-missing-a", toolName: "read", success: true, result: "a-ok" }, {});
+  await pi.handlers.get("tool_execution_end")({ toolCallId: "tool-missing-b", toolName: "write", success: true, result: "b-ok" }, {});
+
+  assert.equal(toolA.ended, true);
+  assert.equal(toolB.ended, true);
+  assert.equal(toolA.status.code, 1);
+  assert.equal(toolB.status.code, 1);
+  assertActiveSpanValues(telemetry.meter.records, "tool_call", [1, 1, -1, -1]);
+});
+
+test("single active legacy tool events without ids use the current tool fallback deterministically", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-single-missing-tool-id" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("agent_start")({ source: "user" }, {});
+  await pi.handlers.get("turn_start")({ turnIndex: 1 }, {});
+  await pi.handlers.get("tool_execution_start")({ toolName: "read", arguments: "legacy-start" }, {});
+  await pi.handlers.get("tool_result")({ result: "legacy-result" }, {});
+  await pi.handlers.get("tool_execution_end")({ success: true, result: "legacy-final" }, {});
+
+  const toolSpan = telemetry.tracer.spans.find(span => span.name === SPAN_NAMES.PI_TOOL_CALL);
+
+  assert.ok(toolSpan);
+  assert.equal(toolSpan.attributes["pi.tool.call.id"], "tool-call-000001");
+  assert.equal(toolSpan.attributes["pi.tool.result.size"], "legacy-final".length);
+  assert.equal(toolSpan.ended, true);
+  assert.equal(toolSpan.status.code, 1);
+  assertNoMetricRecord(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TELEMETRY_DROPPED_TOTAL);
+  assertActiveSpanValues(telemetry.meter.records, "tool_call", [1, -1]);
+});
+
 test("tool arguments and results are absent by default and redacted when capture is explicitly enabled", async () => {
   const pi = createFakePi();
   let telemetry;

@@ -217,7 +217,21 @@ export function nextToolCallId(session: ObservMeTelemetrySession, event: unknown
 }
 
 export function resolveCurrentToolCallId(session: ObservMeTelemetrySession, event: unknown): string | undefined {
-  return readToolCallId(event) ?? session.currentToolCallId;
+  const explicitToolCallId = readToolCallId(event);
+  if (explicitToolCallId) return explicitToolCallId;
+
+  // Legacy Pi tool events without ids can only fall back while one tool is active.
+  // Parallel tool events must carry explicit ids so telemetry cannot attach to a sibling span.
+  if (session.spans.activeToolCalls.size > 1) return undefined;
+  return session.currentToolCallId;
+}
+
+export function toolEventHasAmbiguousMissingToolCallId(session: ObservMeTelemetrySession, event: unknown): boolean {
+  return readToolCallId(event) === undefined && session.spans.activeToolCalls.size > 1;
+}
+
+export function recordMissingToolCallIdDrop(session: ObservMeTelemetrySession, operation: string): void {
+  recordTelemetryDrop(session, "tool_call_id_missing_ambiguous", { operation });
 }
 
 export function resolveToolCallState(session: ObservMeTelemetrySession, event: unknown): ToolCallState | undefined {

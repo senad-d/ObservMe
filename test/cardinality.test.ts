@@ -8,6 +8,8 @@ import {
   createObservMeMetrics,
   createSpanRegistry,
   registerHandlers,
+  type Handler,
+  type ObservMeTelemetrySession,
 } from "../src/pi/handlers.ts";
 import {
   failSubagentSpawn,
@@ -15,7 +17,10 @@ import {
   recordAgentJoin,
   recordAgentWait,
   startSubagentSpawn,
+  type SubagentTelemetrySession,
 } from "../src/pi/subagent-spawn.ts";
+import { isPlainRecord } from "./support/telemetry-types.ts";
+import type { TestAttributes, TestMetricRecord, TestSpan, TestSpanContext } from "./support/telemetry-types.ts";
 import {
   ALL_METRIC_NAMES,
   OBSERVME_COUNTER_METRIC_NAMES,
@@ -82,18 +87,18 @@ const forbiddenCardinalityValues = [
   "raw prompt secret",
   "raw error stack",
 ];
-const validSpanContext = {
+const validSpanContext: TestSpanContext = {
   traceId: "11111111111111111111111111111111",
   spanId: "2222222222222222",
   traceFlags: 1,
 };
-const invalidSpanContext = {
+const invalidSpanContext: TestSpanContext = {
   traceId: "00000000000000000000000000000000",
   spanId: "0000000000000000",
   traceFlags: 0,
 };
 
-function compareStrings(left, right) {
+function compareStrings(left: string, right: string): number {
   return left.localeCompare(right);
 }
 
@@ -124,7 +129,7 @@ function metricInventoryRecords() {
   ];
 }
 
-function recordsFor(names, attributes) {
+function recordsFor(names: readonly string[], attributes: TestAttributes): Array<Pick<TestMetricRecord, "name" | "attributes">> {
   return names.map(name => ({ name, attributes }));
 }
 
@@ -232,41 +237,41 @@ function officialGenAiMetricNames() {
 }
 
 function createFakePi() {
-  const handlers = new Map();
+  const handlers = new Map<string, Handler>() as Omit<Map<string, Handler>, "get"> & { get(eventName: string): Handler };
 
   return {
     handlers,
-    on: (eventName, handler) => {
+    on: (eventName: string, handler: Handler) => {
       handlers.set(eventName, handler);
     },
   };
 }
 
 function createFakeMeter() {
-  const records = [];
+  const records: TestMetricRecord[] = [];
 
   return {
     records,
-    createCounter: name => ({
-      add: (value, attributes = {}) => records.push({ type: "counter", name, value, attributes }),
+    createCounter: (name: string) => ({
+      add: (value: number, attributes: TestAttributes = {}) => records.push({ type: "counter", name, value, attributes }),
     }),
-    createUpDownCounter: name => ({
-      add: (value, attributes = {}) => records.push({ type: "upDownCounter", name, value, attributes }),
+    createUpDownCounter: (name: string) => ({
+      add: (value: number, attributes: TestAttributes = {}) => records.push({ type: "upDownCounter", name, value, attributes }),
     }),
-    createHistogram: name => ({
-      record: (value, attributes = {}) => records.push({ type: "histogram", name, value, attributes }),
+    createHistogram: (name: string) => ({
+      record: (value: number, attributes: TestAttributes = {}) => records.push({ type: "histogram", name, value, attributes }),
     }),
   };
 }
 
-function createFakeTracer(spanContext = validSpanContext, throwOnStart = false) {
-  const spans = [];
+function createFakeTracer(spanContext: TestSpanContext = validSpanContext, throwOnStart = false) {
+  const spans: TestSpan[] = [];
 
   return {
     spans,
-    startSpan: (name, options: { attributes?: Record<string, unknown> } = {}, parentContext = undefined) => {
+    startSpan: (name: string, options: { attributes?: TestAttributes } = {}, parentContext: unknown = undefined) => {
       if (throwOnStart) throw new Error("raw error stack should not become a metric label");
-      const parentSpan = parentContext ? trace.getSpan(parentContext) : undefined;
+      const parentSpan = parentContext ? trace.getSpan(parentContext as Parameters<typeof trace.getSpan>[0]) : undefined;
       const span = createFakeSpan(name, options.attributes ?? {}, parentSpan, spanContext);
       spans.push(span);
       return span;
@@ -274,41 +279,41 @@ function createFakeTracer(spanContext = validSpanContext, throwOnStart = false) 
   };
 }
 
-function createFakeSpan(name, attributes, parentSpan, spanContext) {
-  return {
+function createFakeSpan(name: string, attributes: TestAttributes, parentSpan: unknown, spanContext: TestSpanContext): TestSpan {
+  const span: TestSpan = {
     name,
     attributes,
     parentSpan,
     events: [],
     status: undefined,
     ended: false,
-    addEvent(eventName, eventAttributes = {}) {
-      this.events.push({ name: eventName, attributes: eventAttributes });
-      return this;
+    addEvent(eventName: string, eventAttributes: unknown = {}) {
+      span.events.push({ name: eventName, attributes: isPlainRecord(eventAttributes) ? eventAttributes : {} });
+      return span;
     },
-    setAttribute(key, value) {
-      this.attributes[key] = value;
-      return this;
+    setAttribute(key: string, value: unknown) {
+      span.attributes[key] = value;
+      return span;
     },
-    setAttributes(values) {
-      Object.assign(this.attributes, values);
-      return this;
+    setAttributes(values: TestAttributes) {
+      Object.assign(span.attributes, values);
+      return span;
     },
-    setStatus(status) {
-      this.status = status;
-      return this;
+    setStatus(status: unknown) {
+      span.status = status;
+      return span;
     },
     spanContext() {
       return spanContext;
     },
     addLink() {
-      return this;
+      return span;
     },
     addLinks() {
-      return this;
+      return span;
     },
     updateName() {
-      return this;
+      return span;
     },
     isRecording() {
       return true;
@@ -317,16 +322,18 @@ function createFakeSpan(name, attributes, parentSpan, spanContext) {
       return undefined;
     },
     end() {
-      this.ended = true;
+      span.ended = true;
     },
   };
+
+  return span;
 }
 
 function createFakeLogger() {
   return { emit: () => undefined };
 }
 
-function makeLineage(overrides = {}) {
+function makeLineage(overrides: Record<string, unknown> = {}) {
   return {
     workflowId: "workflow-cardinality",
     workflowRootAgentId: "workflow-root-cardinality",
@@ -347,7 +354,13 @@ interface TelemetrySessionOptions {
   readonly sessionSpan?: ReturnType<typeof createFakeSpan>;
 }
 
-function createTelemetrySession(options: TelemetrySessionOptions = {}) {
+type FakeTelemetrySession = Omit<ObservMeTelemetrySession, "logger" | "sessionAttributes" | "sessionSpan" | "tracer"> &
+  SubagentTelemetrySession & {
+    readonly meter: ReturnType<typeof createFakeMeter>;
+    readonly tracer: ReturnType<typeof createFakeTracer>;
+  };
+
+function createTelemetrySession(options: TelemetrySessionOptions = {}): FakeTelemetrySession {
   const config = options.config ?? structuredClone(defaultObservMeConfig);
   const lineage = options.lineage ?? makeLineage();
   const meter = createFakeMeter();
@@ -358,8 +371,8 @@ function createTelemetrySession(options: TelemetrySessionOptions = {}) {
     config,
     lineage,
     controller: {
-      flush: async () => ({ operation: "flush", completed: true, timedOut: false }),
-      shutdown: async () => ({ operation: "shutdown", completed: true, timedOut: false }),
+      flush: async () => ({ operation: "flush" as const, completed: true, timedOut: false }),
+      shutdown: async () => ({ operation: "shutdown" as const, completed: true, timedOut: false }),
     },
     tracer,
     meter,
@@ -377,9 +390,9 @@ function createTelemetrySession(options: TelemetrySessionOptions = {}) {
   };
 }
 
-async function recordHandlerErrorMetric() {
+async function recordHandlerErrorMetric(): Promise<TestMetricRecord[]> {
   const pi = createFakePi();
-  let telemetry;
+  let telemetry: FakeTelemetrySession | undefined;
 
   registerHandlers(pi, {
     loadConfig: async () => defaultObservMeConfig,
@@ -394,7 +407,7 @@ async function recordHandlerErrorMetric() {
   return telemetry.meter.records;
 }
 
-function recordSubagentMetrics() {
+function recordSubagentMetrics(): TestMetricRecord[] {
   const telemetry = createTelemetrySession({ spanContext: invalidSpanContext });
   telemetry.sessionSpan = createFakeSpan("pi.session", {}, undefined, invalidSpanContext);
   const started = startSubagentSpawn(telemetry, {
@@ -434,7 +447,7 @@ function recordSubagentMetrics() {
   return telemetry.meter.records;
 }
 
-function assertInventoryCoversEveryMetric(records) {
+function assertInventoryCoversEveryMetric(records: ReadonlyArray<Pick<TestMetricRecord, "name" | "attributes">>): void {
   const names = records.map(record => record.name).sort(compareStrings);
   const uniqueNames = [...new Set(names)];
 
@@ -442,11 +455,11 @@ function assertInventoryCoversEveryMetric(records) {
   assert.equal(names.length, uniqueNames.length, "metric label inventory must not duplicate metric names");
 }
 
-function assertMetricRecordsUseOnlyAllowedLabels(records) {
+function assertMetricRecordsUseOnlyAllowedLabels(records: ReadonlyArray<Pick<TestMetricRecord, "name" | "attributes">>): void {
   for (const record of records) assertMetricRecordUsesOnlyAllowedLabels(record);
 }
 
-function assertMetricRecordUsesOnlyAllowedLabels(record) {
+function assertMetricRecordUsesOnlyAllowedLabels(record: Pick<TestMetricRecord, "name" | "attributes">): void {
   for (const [key, value] of Object.entries(record.attributes ?? {})) {
     assert.equal(documentedAllowedLabels.has(key), true, `${record.name} used undocumented metric label ${key}`);
     assert.equal(documentedForbiddenLabels.has(key), false, `${record.name} used forbidden metric label ${key}`);
@@ -455,7 +468,7 @@ function assertMetricRecordUsesOnlyAllowedLabels(record) {
   }
 }
 
-function assertMetricLabelValueIsNotForbidden(record, key, value) {
+function assertMetricLabelValueIsNotForbidden(record: Pick<TestMetricRecord, "name">, key: string, value: unknown): void {
   const stringValue = String(value);
 
   for (const forbiddenValue of forbiddenCardinalityValues) {
@@ -467,7 +480,7 @@ function assertMetricLabelValueIsNotForbidden(record, key, value) {
   }
 }
 
-function forbiddenLabelPattern() {
+function forbiddenLabelPattern(): RegExp {
   return /(?:workflow|session|trace|span|entry|spawn|tool_call)[._-]id|agent[._-](?:id|parent[._-]id|root[._-]id|child[._-]id)|(?:parent|child|root)[._-]agent[._-]id|raw[._-](?:path|command|prompt|error)/iu;
 }
 

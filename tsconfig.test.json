@@ -1,10 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "noEmit": true,
-    "strict": false,
-    "noImplicitAny": false,
-    "strictNullChecks": false
+    "noEmit": true
   },
   "include": ["src/**/*.ts", "test/**/*.ts"],
   "exclude": ["node_modules", "dist", "coverage", ".pi", ".observme"]

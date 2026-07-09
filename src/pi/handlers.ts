@@ -14,8 +14,8 @@ import {
   startObsSessionRuntimeState,
 } from "../commands/obs-session.ts";
 import { clearObsStatusExportError, recordObsStatusExportResult, updateObsStatusRuntimeState } from "../commands/obs-status.ts";
-import type { EnsureProjectConfigOptions, ProjectConfigBootstrapResult } from "../config/bootstrap-project-config.ts";
-import { ensureProjectObservMeConfig } from "../config/bootstrap-project-config.ts";
+import type { EnsureProjectConfig as BootstrapEnsureProjectConfig } from "../config/bootstrap-project-config.ts";
+import { bootstrapProjectObservMeConfig } from "../config/bootstrap-project-config.ts";
 import type { LoadSessionConfigOptions, SessionConfigDiagnostics } from "../config/load-config.ts";
 import { loadSessionConfig, loadSessionConfigWithDiagnostics } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
@@ -113,6 +113,7 @@ import {
   recordPromptSizeMetric,
   recordSpanDurationMs,
   recordTelemetryDrop,
+  recordMissingToolCallIdDrop,
   resolveCurrentLlmSpan,
   resolveCurrentToolCallId,
   resolveLlmParentSpan,
@@ -129,6 +130,7 @@ import {
   startToolCallState,
   stringifyAttributes,
   thinkingLevelChangeMetricLabels,
+  toolEventHasAmbiguousMissingToolCallId,
   updateCurrentSessionAttributes,
   withoutUndefinedAttributes,
   type TelemetryDropTarget,
@@ -145,7 +147,7 @@ export type HandlerErrorRecorder = (name: string, error: unknown) => void;
 export type LoadSessionConfig = (options: LoadSessionConfigOptions) => Promise<ObservMeConfig>;
 export type StartSessionTelemetry = (options: StartSessionTelemetryOptions) => Promise<ObservMeTelemetrySession>;
 export type ReadSessionHeader = (sessionFile: string) => Promise<SessionRecoveryHeader | undefined>;
-export type EnsureProjectConfig = (options: EnsureProjectConfigOptions) => Promise<ProjectConfigBootstrapResult>;
+export type EnsureProjectConfig = BootstrapEnsureProjectConfig;
 
 export interface MinimalSessionCorrelation {
   readonly workflowId?: string;
@@ -878,35 +880,10 @@ async function ensureProjectConfigForHandler(
   options: RegisterHandlersOptions,
   ctx: ObservMeHandlerContext,
 ): Promise<void> {
-  const ensureProjectConfig = options.ensureProjectConfig ?? ensureProjectObservMeConfig;
-
-  try {
-    const result = await ensureProjectConfig({
-      configDirName: options.configDirName,
-      cwd: ctx.cwd,
-      isProjectTrusted: ctx.isProjectTrusted,
-    });
-
-    await notifyProjectConfigCreated(ctx, result);
-  } catch (error) {
-    await notifyProjectConfigCreationFailed(ctx, error);
-  }
-}
-
-async function notifyProjectConfigCreated(
-  ctx: ObservMeHandlerContext,
-  result: ProjectConfigBootstrapResult,
-): Promise<void> {
-  if (result.status !== "created") return;
-  await ctx.ui?.notify?.(`ObservMe created ${result.path}. Edit this file for custom setup.`, "info");
-}
-
-async function notifyProjectConfigCreationFailed(ctx: ObservMeHandlerContext, error: unknown): Promise<void> {
-  await ctx.ui?.notify?.(`ObservMe could not create the project config file: ${formatBootstrapError(error)}`, "warning");
-}
-
-function formatBootstrapError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  await bootstrapProjectObservMeConfig(ctx, {
+    configDirName: options.configDirName,
+    ensureProjectConfig: options.ensureProjectConfig,
+  });
 }
 
 async function shutDownPreviousSessionBeforeDuplicateStart(
@@ -1199,10 +1176,22 @@ function createToolExecutionStartHandler(getSession: () => ObservMeTelemetrySess
   };
 }
 
+function dropAmbiguousToolLifecycleEvent(
+  session: ObservMeTelemetrySession,
+  event: unknown,
+  operation: string,
+): boolean {
+  if (!toolEventHasAmbiguousMissingToolCallId(session, event)) return false;
+
+  recordMissingToolCallIdDrop(session, operation);
+  return true;
+}
+
 function createToolCallHandler(getSession: () => ObservMeTelemetrySession | undefined): Handler {
   return (event, _ctx) => {
     const session = getSession();
     if (!session) return;
+    if (dropAmbiguousToolLifecycleEvent(session, event, "tool_call")) return;
 
     const toolCallId = resolveCurrentToolCallId(session, event) ?? nextToolCallId(session, event);
     const state = resolveToolCallState(session, event) ?? startToolCallState(session, event, toolCallId);
@@ -1218,6 +1207,7 @@ function createToolResultHandler(getSession: () => ObservMeTelemetrySession | un
   return (event, _ctx) => {
     const session = getSession();
     if (!session) return;
+    if (dropAmbiguousToolLifecycleEvent(session, event, "tool_result")) return;
 
     const state = resolveToolCallState(session, event);
     if (!state) return;
@@ -1233,6 +1223,7 @@ function createToolExecutionEndHandler(getSession: () => ObservMeTelemetrySessio
   return (event, _ctx) => {
     const session = getSession();
     if (!session) return;
+    if (dropAmbiguousToolLifecycleEvent(session, event, "tool_execution_end")) return;
 
     const toolCallId = resolveCurrentToolCallId(session, event) ?? nextToolCallId(session, event);
     const state = resolveToolCallState(session, event) ?? startToolCallState(session, event, toolCallId);

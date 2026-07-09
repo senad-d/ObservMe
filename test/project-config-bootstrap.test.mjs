@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import {
+  bootstrapProjectObservMeConfig,
   ensureProjectObservMeConfig,
   PROJECT_OBSERVME_YAML_TEMPLATE,
   registerProjectConfigBootstrap,
@@ -49,8 +50,16 @@ test("ensureProjectObservMeConfig creates the trusted project starter file", asy
 
     assert.deepEqual(result, { path: configPath, status: "created" });
     assert.equal(text, PROJECT_OBSERVME_YAML_TEMPLATE);
-    assert.match(text, /capture:\n {4}prompts: true/u);
-    assert.match(text, /redactionEnabled: false/u);
+    assert.match(text, /capture:\n(?: {4}#.*\n){3} {4}prompts: false/u);
+    assert.match(text, /responses: false/u);
+    assert.match(text, /thinking: false/u);
+    assert.match(text, /toolArguments: false/u);
+    assert.match(text, /toolResults: false/u);
+    assert.match(text, /bashCommands: false/u);
+    assert.match(text, /bashOutput: false/u);
+    assert.match(text, /filePaths: false/u);
+    assert.match(text, /redactionEnabled: true/u);
+    assert.match(text, /allowUnsafeCapture: false/u);
     assert.match(text, /token: \$\{OBSERVME_GRAFANA_TOKEN\}/u);
   } finally {
     await removeTempProject(cwd);
@@ -87,6 +96,32 @@ test("ensureProjectObservMeConfig skips untrusted projects", async () => {
   } finally {
     await removeTempProject(cwd);
   }
+});
+
+test("bootstrapProjectObservMeConfig centralizes project path, trust, and notification behavior", async () => {
+  const context = createContext("/workspace/demo", true);
+  const calls = [];
+  const expectedPath = join(context.cwd, "custom-pi", "observme.yaml");
+
+  const result = await bootstrapProjectObservMeConfig(context, {
+    configDirName: "custom-pi",
+    ensureProjectConfig: async options => {
+      calls.push(options);
+      return { path: expectedPath, status: "created" };
+    },
+  });
+
+  assert.deepEqual(result, { path: expectedPath, status: "created" });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cwd, context.cwd);
+  assert.equal(calls[0].configDirName, "custom-pi");
+  assert.equal(calls[0].isProjectTrusted, context.isProjectTrusted);
+  assert.deepEqual(context.notifications, [
+    {
+      message: `ObservMe created ${expectedPath}. Edit this file for custom setup.`,
+      level: "info",
+    },
+  ]);
 });
 
 test("registerHandlers creates the project file before loading session config", async () => {

@@ -9,6 +9,7 @@ export interface ObsSubcommandArgsParseResult {
 }
 
 export function tokenizeObsCommandArgs(args: string): string[] {
+  // /obs uses deterministic whitespace tokenization only; quoted-like text is not shell-parsed.
   return args.trim().split(/\s+/u).filter(isNonEmptyString);
 }
 

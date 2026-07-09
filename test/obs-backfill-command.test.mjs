@@ -189,6 +189,65 @@ test("backfill record building enforces export rate limits", () => {
   assert.equal(result.recordsSkipped, 1);
 });
 
+test("/obs backfill rejects oversized --since before scanning session entries", async () => {
+  const notifications = [];
+  let runCalls = 0;
+
+  const options = {
+    runBackfill: () => {
+      runCalls += 1;
+      throw new Error("should not scan or export for oversized --since");
+    },
+  };
+
+  await handleObsBackfillCommand(
+    "backfill --current-session --since 31d",
+    createContext([userEntry("a1", "2026-07-07T11:30:00.000Z", "one")], notifications),
+    options,
+  );
+  await handleObsBackfillCommand(
+    "backfill --current-session --since 2592000001ms",
+    createContext([userEntry("a2", "2026-07-07T11:40:00.000Z", "two")], notifications),
+    options,
+  );
+
+  assert.equal(runCalls, 0);
+  assert.equal(notifications.length, 2);
+  assert.ok(notifications.every(notification => notification.type === "warning"));
+  assert.match(notifications[0].message, /Invalid --since duration: 31d/u);
+  assert.match(notifications[1].message, /Invalid --since duration: 2592000001ms/u);
+  assert.ok(notifications.every(notification => /positive duration up to 30d/u.test(notification.message)));
+});
+
+test("/obs backfill accepts maximum --since boundary durations", async () => {
+  const notifications = [];
+  const requests = [];
+  const options = {
+    runBackfill: (_ctx, request) => {
+      requests.push(request);
+      return {
+        status: "completed",
+        sessionId: "session-1",
+        since: request.since,
+        entriesScanned: 0,
+        entriesEligible: 0,
+        recordsExported: 0,
+        recordsSkipped: 0,
+        rateLimited: false,
+        contentCaptured: false,
+        redactionFailures: 0,
+      };
+    },
+  };
+
+  await handleObsBackfillCommand("backfill --current-session --since 30d", createContext([], notifications), options);
+  await handleObsBackfillCommand("backfill --current-session --since 720h", createContext([], notifications), options);
+
+  assert.deepEqual(requests.map(request => request.since), ["30d", "720h"]);
+  assert.deepEqual(requests.map(request => request.sinceMs), [30 * 24 * 60 * 60 * 1000, 720 * 60 * 60 * 1000]);
+  assert.ok(notifications.every(notification => notification.type === "info"));
+});
+
 test("/obs backfill cancellation before confirmation does not export", async () => {
   const notifications = [];
   const records = [];

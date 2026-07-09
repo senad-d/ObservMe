@@ -95,7 +95,7 @@ pi --no-extensions -e .
 
 ObservMe observes the current Pi session and exports telemetry to the configured OTLP endpoint. It never blocks Pi execution when the backend is unavailable.
 
-On first startup in a trusted project, ObservMe creates `.pi/observme.yaml` if the file is missing. Use that project-local starter file for local-stack setup, then edit the OTLP, resource, capture/privacy, and Grafana query sections for your environment. The starter mirrors the local debug profile, so review capture/privacy before sharing it or using it in production.
+On first startup in a trusted project, ObservMe creates `.pi/observme.yaml` if the file is missing. Use that project-local starter file for local-stack setup, then edit the OTLP, resource, capture/privacy, and Grafana query sections for your environment. The starter keeps raw prompt, response, thinking, tool, bash, and path capture disabled by default; opt in only to the specific redacted capture fields you need.
 
 ## Installation
 
@@ -123,7 +123,7 @@ All commands are registered under `/obs`.
 | `/obs errors` | Queries Loki for recent failed/dropped/orphan event names and renders a capped summary. | Loki via Grafana |
 | `/obs logs` | Queries Loki for the current session's normalized `pi_session_id` label and renders a capped summary. | Loki via Grafana |
 | `/obs agents` | Shows current workflow/agent identity, lineage, fan-out/depth, active children, orphan status, and wait/join hints. | Local state plus safe Tempo/Prometheus drill-downs |
-| `/obs backfill` | Optional historical replay for the current session with explicit confirmation, replay markers, redaction, and export rate limits. | OTLP export when confirmed |
+| `/obs backfill` | Optional historical replay for the current session with explicit confirmation, replay markers, redaction, export rate limits, and a bounded `--since` window up to 30d. | OTLP export when confirmed |
 
 Query-backed commands enforce configured timeouts and result limits and reject raw prompt, command, path, or other sensitive query inputs.
 
@@ -156,7 +156,7 @@ ObservMe supports layered configuration with this precedence:
 defaults → global ~/.pi/agent/observme.yaml → trusted project config → trusted project .env → system environment variables → runtime options
 ```
 
-The extension automatically creates `<project>/.pi/observme.yaml` the first time it starts in a trusted project and the file does not already exist. Edit this file for project-specific setup: `otlp.endpoint` / `otlp.signalEndpoints` for your Collector, `resource.attributes` for service/project/tenant/environment identity, `capture` and `privacy` for content visibility, and `query.grafana` plus `query.links.traceUrlTemplate` for `/obs` Grafana commands. The generated starter mirrors the local debug profile, including content-capture settings, so review it before production use. Keep secrets out of YAML; use environment variables or a trusted project `.env` for values such as `OBSERVME_OTLP_TOKEN`, `OBSERVME_GRAFANA_TOKEN`, `OBSERVME_GRAFANA_PASSWORD`, and `OBSERVME_HASH_SALT`. See [`docs/configuration.md`](docs/configuration.md) for the quick configuration guide.
+The extension automatically creates `<project>/.pi/observme.yaml` the first time it starts in a trusted project and the file does not already exist. Edit this file for project-specific setup: `otlp.endpoint` / `otlp.signalEndpoints` for your Collector, `resource.attributes` for service/project/tenant/environment identity, `capture` and `privacy` for content visibility, and `query.grafana` plus `query.links.traceUrlTemplate` for `/obs` Grafana commands. The generated starter keeps content-capture flags disabled, `privacy.redactionEnabled: true`, and `privacy.allowUnsafeCapture: false`; for local debugging, set only the needed `capture.*` flags to `true` and keep redaction enabled. Keep secrets out of YAML; use environment variables or a trusted project `.env` for values such as `OBSERVME_OTLP_TOKEN`, `OBSERVME_GRAFANA_TOKEN`, `OBSERVME_GRAFANA_PASSWORD`, and `OBSERVME_HASH_SALT`. See [`docs/configuration.md`](docs/configuration.md) for the quick configuration guide.
 
 Factory-safe loading uses defaults/global/system-environment/runtime options only. Session-scoped loading can add trusted project config and a project-local `.env` when Pi marks the project trusted. `/obs status` reports the effective config source, whether project-local `.pi/observme.yaml` was loaded, skipped because the project is untrusted, or missing, plus the configured Grafana URL and query-readiness status without rendering tokens or passwords. In untrusted projects, ObservMe does not read project-local config or `.env` files and uses safe defaults/global/system-environment layers instead.
 

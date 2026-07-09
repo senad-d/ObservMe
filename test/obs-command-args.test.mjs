@@ -182,6 +182,43 @@ test("root /obs registry keeps usage, completions, and dispatch aligned", async 
   assert.equal(notifications.some(notification => notification.type === "error"), false);
 });
 
+test("root /obs dispatch normalizes whitespace and subcommand case", async () => {
+  const pi = createFakeCommandPi();
+  const calls = [];
+  const notifications = [];
+
+  registerObsCommand(pi, createRootDispatchOptions(calls));
+  const command = pi.commands.get("obs");
+
+  await command.handler(" \t HeAlTh  \n ", createCommandContext(notifications));
+  await command.handler(" \n TrAcE   --session    session-root  \t", createCommandContext(notifications));
+
+  assert.deepEqual(calls, ["health", "trace"]);
+  assert.deepEqual(notifications.map(notification => notification.type), ["info", "info"]);
+  assert.match(notifications[0].message, /^Collector: reachable$/u);
+  assert.match(notifications[1].message, /^Trace link \(session\)/u);
+});
+
+test("root /obs dispatch treats quoted-like raw values as whitespace tokens", async () => {
+  const pi = createFakeCommandPi();
+  const calls = [];
+  const notifications = [];
+
+  registerObsCommand(pi, createRootDispatchOptions(calls));
+  const command = pi.commands.get("obs");
+
+  await command.handler('trace --session "session two"', createCommandContext(notifications));
+  await command.handler("backfill --current-session --since '1h'", createCommandContext(notifications));
+
+  assert.deepEqual(calls, []);
+  assert.equal(notifications.length, 2);
+  assert.ok(notifications.every(notification => notification.type === "warning"));
+  assert.match(notifications[0].message, /^Usage: \/obs trace \[--last-turn\|--session <session-id>\]/u);
+  assert.match(notifications[0].message, /Unknown option: two"\./u);
+  assert.match(notifications[1].message, /^Usage: \/obs backfill --current-session --since 1h/u);
+  assert.match(notifications[1].message, /Invalid --since duration: '1h'\./u);
+});
+
 test("simple /obs subcommands reject unknown extra arguments before resolving snapshots", async () => {
   const notifications = [];
   let snapshotCalls = 0;

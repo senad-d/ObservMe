@@ -66,13 +66,13 @@ function defaultOptions(overrides: Partial<RedactionOptions> = {}): RedactionOpt
   };
 }
 
-function assertNoSensitiveValuesExported(output, sensitiveValues) {
+function assertNoSensitiveValuesExported(output: string | undefined, sensitiveValues: readonly string[]): void {
   assert.ok(output, "redaction output should be present");
   assert.match(output, /\[REDACTED:/u);
   for (const sensitiveValue of sensitiveValues) assert.doesNotMatch(output, escapeForRegExp(sensitiveValue));
 }
 
-function escapeForRegExp(value) {
+function escapeForRegExp(value: string): RegExp {
   return new RegExp(value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u");
 }
 
@@ -131,8 +131,8 @@ test("redaction pipeline applies PII detection when explicitly enabled", () => {
   );
 
   assert.equal(result.dropped, false);
-  assert.match(result.value, /\[REDACTED:email:[a-f0-9]{12}\]/u);
-  assert.doesNotMatch(result.value, /alice@example\.invalid/u);
+  assert.match(result.value ?? "", /\[REDACTED:email:[a-f0-9]{12}\]/u);
+  assert.doesNotMatch(result.value ?? "", /alice@example\.invalid/u);
 });
 
 test("redaction pipeline truncates oversized content before export", () => {
@@ -143,6 +143,6 @@ test("redaction pipeline truncates oversized content before export", () => {
   assert.equal(result.truncated, true);
   assert.equal(result.originalLength, oversizedContent.length);
   assert.equal(result.value?.length, 16);
-  assert.doesNotMatch(result.value, /sensitive-tail/u);
+  assert.doesNotMatch(result.value ?? "", /sensitive-tail/u);
   assert.match(result.hash ?? "", /^[a-f0-9]{64}$/u);
 });

@@ -19,12 +19,16 @@ export interface ProjectConfigBootstrapContext {
 
 export interface RegisterProjectConfigBootstrapOptions {
   readonly configDirName?: string;
+  readonly ensureProjectConfig?: EnsureProjectConfig;
 }
 
-export interface EnsureProjectConfigOptions extends RegisterProjectConfigBootstrapOptions {
+export interface EnsureProjectConfigOptions {
+  readonly configDirName?: string;
   readonly cwd?: string;
   readonly isProjectTrusted?: boolean | (() => boolean | Promise<boolean>);
 }
+
+export type EnsureProjectConfig = (options: EnsureProjectConfigOptions) => Promise<ProjectConfigBootstrapResult>;
 
 type ProjectConfigBootstrapHandler = (event: unknown, ctx: ProjectConfigBootstrapContext) => Promise<void> | void;
 
@@ -103,18 +107,23 @@ export const PROJECT_OBSERVME_YAML_TEMPLATE = `observme:
       scheduledDelayMillis: 1000
 
   capture:
-    prompts: true
-    responses: true
-    thinking: true
-    toolArguments: true
-    toolResults: true
-    bashCommands: true
-    bashOutput: true
-    filePaths: true
+    # Content capture is opt-in. To export redacted local debug content,
+    # set only the specific capture flags you need to true and keep
+    # privacy.redactionEnabled enabled.
+    prompts: false
+    responses: false
+    thinking: false
+    toolArguments: false
+    toolResults: false
+    bashCommands: false
+    bashOutput: false
+    filePaths: false
 
   privacy:
-    redactionEnabled: false
-    allowUnsafeCapture: true
+    redactionEnabled: true
+    # Set this to true only when you intentionally accept unredacted
+    # sensitive-content export from this trusted project.
+    allowUnsafeCapture: false
     allowInsecureTransport: true
     tenantSaltEnv: OBSERVME_HASH_SALT
     pathMode: hash
@@ -190,25 +199,37 @@ function createProjectConfigBootstrapHandler(
   options: RegisterProjectConfigBootstrapOptions,
 ): ProjectConfigBootstrapHandler {
   return async (_event, ctx) => {
-    await runProjectConfigBootstrap(ctx, options);
+    await bootstrapProjectObservMeConfig(ctx, options);
   };
 }
 
-async function runProjectConfigBootstrap(
+/**
+ * Single startup source of truth for trusted-project ObservMe config creation and user notification.
+ */
+export async function bootstrapProjectObservMeConfig(
   ctx: ProjectConfigBootstrapContext,
-  options: RegisterProjectConfigBootstrapOptions,
-): Promise<void> {
+  options: RegisterProjectConfigBootstrapOptions = {},
+): Promise<ProjectConfigBootstrapResult | undefined> {
   try {
-    const result = await ensureProjectObservMeConfig({
-      configDirName: options.configDirName,
-      cwd: ctx.cwd,
-      isProjectTrusted: ctx.isProjectTrusted,
-    });
-
+    const result = await resolveProjectConfigBootstrapResult(ctx, options);
     await notifyProjectConfigCreated(ctx, result);
+    return result;
   } catch (error) {
     await notifyProjectConfigBootstrapFailed(ctx, error);
+    return undefined;
   }
+}
+
+function resolveProjectConfigBootstrapResult(
+  ctx: ProjectConfigBootstrapContext,
+  options: RegisterProjectConfigBootstrapOptions,
+): Promise<ProjectConfigBootstrapResult> {
+  const ensureProjectConfig = options.ensureProjectConfig ?? ensureProjectObservMeConfig;
+  return ensureProjectConfig({
+    configDirName: options.configDirName,
+    cwd: ctx.cwd,
+    isProjectTrusted: ctx.isProjectTrusted,
+  });
 }
 
 async function notifyProjectConfigCreated(

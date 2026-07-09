@@ -4,38 +4,35 @@ import test from "node:test";
 import { trace } from "@opentelemetry/api";
 import { getObsStatusRuntimeState, resetObsStatusRuntimeState } from "../src/commands/obs-status.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import type { ObservMeConfig } from "../src/config/schema.ts";
 import type { AgentLineageContext } from "../src/pi/agent-lineage.ts";
 import { runBoundedOtelOperation } from "../src/otel/shutdown.ts";
 import { COMMON_SPAN_ATTRIBUTES, LOG_ATTRIBUTES } from "../src/semconv/attributes.ts";
 import { LOG_EVENT_NAMES, OBSERVME_COUNTER_METRIC_NAMES } from "../src/semconv/metrics.ts";
 import { SPAN_NAMES } from "../src/semconv/spans.ts";
-import { createAgentTreeTracker, createObservMeMetrics, createSpanRegistry, registerHandlers } from "../src/pi/handlers.ts";
+import {
+  createAgentTreeTracker,
+  createObservMeMetrics,
+  createSpanRegistry,
+  registerHandlers,
+  type Handler,
+  type ObservMeTelemetrySession,
+} from "../src/pi/handlers.ts";
+import { isPlainRecord, mergeRecordConfig } from "./support/telemetry-types.ts";
+import type { TestAttributes, TestLogger, TestMetricRecord, TestSpan, TestSpanContext } from "./support/telemetry-types.ts";
 
-const validSpanContext = {
+const validSpanContext: TestSpanContext = {
   traceId: "33333333333333333333333333333333",
   spanId: "4444444444444444",
   traceFlags: 1,
 };
 
-function cloneConfig(overrides = {}) {
+function cloneConfig(overrides: Record<string, unknown> = {}) {
   return mergeConfig(structuredClone(defaultObservMeConfig), overrides);
 }
 
-function mergeConfig(base, overlay) {
-  for (const [key, value] of Object.entries(overlay)) {
-    if (isPlainObject(base[key]) && isPlainObject(value)) {
-      mergeConfig(base[key], value);
-      continue;
-    }
-
-    base[key] = value;
-  }
-
-  return base;
-}
-
-function isPlainObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function mergeConfig<T extends Record<string, unknown>>(base: T, overlay: Record<string, unknown>): T {
+  return mergeRecordConfig(base, overlay);
 }
 
 function makeLineage() {
@@ -51,40 +48,40 @@ function makeLineage() {
 }
 
 function createFakePi() {
-  const handlers = new Map();
+  const handlers = new Map<string, Handler>() as Omit<Map<string, Handler>, "get"> & { get(eventName: string): Handler };
 
   return {
     handlers,
-    on: (eventName, handler) => {
+    on: (eventName: string, handler: Handler) => {
       handlers.set(eventName, handler);
     },
   };
 }
 
 function createFakeMeter() {
-  const records = [];
+  const records: TestMetricRecord[] = [];
 
   return {
     records,
-    createCounter: name => ({
-      add: (value, attributes = {}) => records.push({ type: "counter", name, value, attributes }),
+    createCounter: (name: string) => ({
+      add: (value: number, attributes: TestAttributes = {}) => records.push({ type: "counter", name, value, attributes }),
     }),
-    createUpDownCounter: name => ({
-      add: (value, attributes = {}) => records.push({ type: "upDownCounter", name, value, attributes }),
+    createUpDownCounter: (name: string) => ({
+      add: (value: number, attributes: TestAttributes = {}) => records.push({ type: "upDownCounter", name, value, attributes }),
     }),
-    createHistogram: name => ({
-      record: (value, attributes = {}) => records.push({ type: "histogram", name, value, attributes }),
+    createHistogram: (name: string) => ({
+      record: (value: number, attributes: TestAttributes = {}) => records.push({ type: "histogram", name, value, attributes }),
     }),
   };
 }
 
 function createFakeTracer() {
-  const spans = [];
+  const spans: TestSpan[] = [];
 
   return {
     spans,
-    startSpan: (name, options: { attributes?: Record<string, unknown> } = {}, parentContext = undefined) => {
-      const parentSpan = parentContext ? trace.getSpan(parentContext) : undefined;
+    startSpan: (name: string, options: { attributes?: TestAttributes } = {}, parentContext: unknown = undefined) => {
+      const parentSpan = parentContext ? trace.getSpan(parentContext as Parameters<typeof trace.getSpan>[0]) : undefined;
       const span = createFakeSpan(name, options.attributes ?? {}, parentSpan);
       spans.push(span);
       return span;
@@ -92,41 +89,41 @@ function createFakeTracer() {
   };
 }
 
-function createFakeSpan(name, attributes, parentSpan) {
-  return {
+function createFakeSpan(name: string, attributes: TestAttributes, parentSpan: unknown): TestSpan {
+  const span: TestSpan = {
     name,
     attributes,
     parentSpan,
     events: [],
     status: undefined,
     ended: false,
-    addEvent(eventName, eventAttributes = {}) {
-      this.events.push({ name: eventName, attributes: eventAttributes });
-      return this;
+    addEvent(eventName: string, eventAttributes: unknown = {}) {
+      span.events.push({ name: eventName, attributes: isPlainRecord(eventAttributes) ? eventAttributes : {} });
+      return span;
     },
-    setAttribute(key, value) {
-      this.attributes[key] = value;
-      return this;
+    setAttribute(key: string, value: unknown) {
+      span.attributes[key] = value;
+      return span;
     },
-    setAttributes(values) {
-      Object.assign(this.attributes, values);
-      return this;
+    setAttributes(values: TestAttributes) {
+      Object.assign(span.attributes, values);
+      return span;
     },
-    setStatus(status) {
-      this.status = status;
-      return this;
+    setStatus(status: unknown) {
+      span.status = status;
+      return span;
     },
     spanContext() {
       return validSpanContext;
     },
     addLink() {
-      return this;
+      return span;
     },
     addLinks() {
-      return this;
+      return span;
     },
     updateName() {
-      return this;
+      return span;
     },
     isRecording() {
       return true;
@@ -135,43 +132,47 @@ function createFakeSpan(name, attributes, parentSpan) {
       return undefined;
     },
     end() {
-      this.ended = true;
+      span.ended = true;
     },
   };
+
+  return span;
 }
 
-function createFakeLogger() {
-  const records = [];
+function createFakeLogger(): TestLogger {
+  const records: TestLogger["records"] = [];
 
   return {
     records,
-    emit: record => records.push(record),
+    emit: record => {
+      records.push(record as TestLogger["records"][number]);
+    },
   };
 }
 
 function createCompletedController() {
   return {
-    flush: async () => ({ operation: "flush", completed: true, timedOut: false }),
-    shutdown: async () => ({ operation: "shutdown", completed: true, timedOut: false }),
+    flush: async () => ({ operation: "flush" as const, completed: true, timedOut: false }),
+    shutdown: async () => ({ operation: "shutdown" as const, completed: true, timedOut: false }),
   };
 }
 
 function createCollectorDownController() {
   return {
     flush: async () => ({
-      operation: "flush",
+      operation: "flush" as const,
       completed: false,
       timedOut: false,
       error: new Error("connect ECONNREFUSED"),
     }),
-    shutdown: async () => ({ operation: "shutdown", completed: true, timedOut: false }),
+    shutdown: async () => ({ operation: "shutdown" as const, completed: true, timedOut: false }),
   };
 }
 
 function createCollectorSlowController() {
   return {
-    flush: timeoutMs => runBoundedOtelOperation("flush", neverResolve, timeoutMs),
-    shutdown: async () => ({ operation: "shutdown", completed: true, timedOut: false }),
+    flush: (timeoutMs = 0) => runBoundedOtelOperation("flush", neverResolve, timeoutMs),
+    shutdown: async () => ({ operation: "shutdown" as const, completed: true, timedOut: false }),
   };
 }
 
@@ -180,19 +181,30 @@ function neverResolve(): Promise<void> {
 }
 
 interface FakeTelemetryOptions {
-  readonly config?: ReturnType<typeof cloneConfig>;
+  readonly config?: ObservMeConfig;
   readonly lineage?: AgentLineageContext;
-  readonly controller?: ReturnType<typeof createCompletedController>;
+  readonly controller?: ObservMeTelemetrySession["controller"];
 }
 
-function createFakeTelemetry(options: FakeTelemetryOptions = {}) {
+type FakeTelemetrySession = ObservMeTelemetrySession & {
+  readonly meter: ReturnType<typeof createFakeMeter>;
+  readonly tracer: ReturnType<typeof createFakeTracer>;
+  readonly logger: TestLogger;
+};
+
+interface HandlerHarness {
+  readonly pi: ReturnType<typeof createFakePi>;
+  telemetry?: FakeTelemetrySession;
+}
+
+function createFakeTelemetry(options: FakeTelemetryOptions = {}): FakeTelemetrySession {
   const config = options.config ?? cloneConfig();
   const lineage = options.lineage ?? makeLineage();
   const meter = createFakeMeter();
   const tracer = createFakeTracer();
   const logger = createFakeLogger();
   const metrics = createObservMeMetrics(meter);
-  const telemetry = {
+  const telemetry: FakeTelemetrySession = {
     config,
     lineage,
     controller: options.controller ?? createCompletedController(),
@@ -212,9 +224,9 @@ function createFakeTelemetry(options: FakeTelemetryOptions = {}) {
   return telemetry;
 }
 
-function createHandlerHarness(config, controller) {
+function createHandlerHarness(config: ObservMeConfig, controller: FakeTelemetryOptions["controller"]): HandlerHarness {
   const pi = createFakePi();
-  const harness = { pi, telemetry: undefined };
+  const harness: HandlerHarness = { pi };
 
   registerHandlers(pi, {
     loadConfig: async () => config,
@@ -231,17 +243,17 @@ function createHandlerHarness(config, controller) {
   return harness;
 }
 
-async function runStartAndShutdown(harness) {
+async function runStartAndShutdown(harness: HandlerHarness): Promise<void> {
   await harness.pi.handlers.get("session_start")({ sessionId: "session-exporter-failure" }, { cwd: "/workspace/exporter" });
   await harness.pi.handlers.get("session_shutdown")({}, {});
 }
 
-function requireTelemetry(harness) {
+function requireTelemetry(harness: HandlerHarness): FakeTelemetrySession {
   assert.ok(harness.telemetry, "expected telemetry session to be created");
   return harness.telemetry;
 }
 
-function metricSum(records, metricName, predicate = undefined) {
+function metricSum(records: readonly TestMetricRecord[], metricName: string, predicate?: (record: TestMetricRecord) => boolean): number {
   let total = 0;
 
   for (const record of records) {
@@ -253,7 +265,7 @@ function metricSum(records, metricName, predicate = undefined) {
   return total;
 }
 
-function findSpan(spans, name, predicate = undefined) {
+function findSpan(spans: readonly TestSpan[], name: string, predicate?: (span: TestSpan) => boolean): TestSpan | undefined {
   return spans.find(span => span.name === name && (!predicate || predicate(span)));
 }
 
@@ -327,7 +339,7 @@ test("exporter failure: queue-full eviction increments drop counters and keeps a
   assert.ok(telemetry.logger.records.some(record => isTelemetryDroppedLog(record, "turn")));
 });
 
-function isTelemetryDroppedLog(record, operation: string): boolean {
+function isTelemetryDroppedLog(record: TestLogger["records"][number], operation: string): boolean {
   return (
     record.body === LOG_EVENT_NAMES.TELEMETRY_DROPPED &&
     record.attributes?.[LOG_ATTRIBUTES.EVENT_CATEGORY] === "telemetry" &&

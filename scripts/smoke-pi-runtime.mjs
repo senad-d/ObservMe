@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Smoke check: launch a real Pi RPC process with the local ObservMe extension,
-// verify /obs command discovery, and exercise command routing against a
-// deterministic local backend without reading developer secrets.
+// verify /obs command discovery, lifecycle replacement, and command routing
+// against a deterministic local backend without reading developer secrets.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { once } from "node:events";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -177,7 +177,8 @@ class PiRpcClient {
   }
 
   async waitForNotifyMessage(prefix) {
-    const record = await this.waitForRecord(record => isNotifyMessageWithPrefix(record, prefix), `notify ${prefix}`);
+    const startIndex = this.recordCount();
+    const record = await this.waitForRecordAfter(record => isNotifyMessageWithPrefix(record, prefix), `notify ${prefix}`, startIndex);
     return String(record.message);
   }
 
@@ -185,8 +186,24 @@ class PiRpcClient {
     return this.waitForRecord(isObservMeLoadedStatus, "ObservMe status indicator");
   }
 
-  waitForRecord(predicate, label) {
-    const existing = this.records.find(predicate);
+  async waitForStatusLoadedAfter(startIndex) {
+    return this.waitForRecordAfter(isObservMeLoadedStatus, "replacement ObservMe status indicator", startIndex);
+  }
+
+  async waitForStatusClearedAfter(startIndex) {
+    return this.waitForRecordAfter(isObservMeClearedStatus, "ObservMe status clear", startIndex);
+  }
+
+  recordCount() {
+    return this.records.length;
+  }
+
+  waitForRecordAfter(predicate, label, startIndex) {
+    return this.waitForRecord(predicate, label, startIndex);
+  }
+
+  waitForRecord(predicate, label, startIndex = 0) {
+    const existing = this.records.slice(startIndex).find(predicate);
     if (existing) return Promise.resolve(existing);
     if (this.exitCode !== undefined) {
       return Promise.reject(new Error(`Pi RPC process exited before ${label} (${formatExit(this.exitCode, this.exitSignal)}).${this.formatStderr()}`));
@@ -196,6 +213,7 @@ class PiRpcClient {
       const waiter = {
         predicate,
         label,
+        startIndex,
         resolve: resolvePromise,
         reject: rejectPromise,
         timeout: setTimeout(() => this.rejectWaiterByLabel(label), rpcTimeoutMs),
@@ -206,7 +224,7 @@ class PiRpcClient {
 
   resolveWaiters() {
     for (const waiter of [...this.waiters]) {
-      const match = this.records.find(waiter.predicate);
+      const match = this.records.slice(waiter.startIndex).find(waiter.predicate);
       if (!match) continue;
 
       this.removeWaiter(waiter);
@@ -259,17 +277,21 @@ async function main() {
   try {
     await backend.start();
     temporaryRoot = await createTemporaryPiProject(backend.baseUrl);
-    client = new PiRpcClient(createPiRpcOptions(temporaryRoot.projectDir, temporaryRoot.homeDir));
+    client = new PiRpcClient(createPiRpcOptions(temporaryRoot.projectDir, temporaryRoot.homeDir, temporaryRoot.sessionDir));
 
     await client.waitForStatusLoaded();
     await assertObsCommandIsDiscoverable(client);
     await assertObsStatusCommand(client, backend.baseUrl);
     await assertObsSessionCommand(client);
+    await assertObsReloadLifecycle(client, backend.baseUrl);
+    await assertObsNewSessionLifecycle(client, backend.baseUrl);
     await assertObsHealthCommand(client);
     backend.assertAuthenticatedGrafanaProbes();
     await assertObsCostTimeoutCommand(client, backend);
 
-    console.log("Pi runtime smoke passed: real RPC process discovered /obs and executed status, session, health, and bounded query commands.");
+    console.log(
+      "Pi runtime smoke passed: real RPC process discovered /obs, verified reload and new-session lifecycle replacement, and executed status, session, health, and bounded query commands.",
+    );
   } finally {
     await client?.stop();
     await backend.close();
@@ -281,43 +303,72 @@ async function createTemporaryPiProject(baseUrl) {
   const rootDir = await mkdtemp(join(tmpdir(), "observme-pi-runtime-"));
   const homeDir = join(rootDir, "home");
   const projectDir = join(rootDir, "project");
+  const sessionDir = join(rootDir, "sessions");
   const configDir = join(projectDir, ".pi");
+  const extensionDir = join(configDir, "extensions");
 
   await mkdir(homeDir, { recursive: true });
-  await mkdir(configDir, { recursive: true });
+  await mkdir(sessionDir, { recursive: true });
+  await mkdir(extensionDir, { recursive: true });
   await writeFile(join(configDir, "observme.yaml"), renderSmokeObservMeConfig(baseUrl), "utf8");
+  await writeFile(join(extensionDir, "observme.ts"), renderSmokeObservMeExtension(), "utf8");
+  await writeFile(join(extensionDir, "observme-smoke-reload.ts"), renderSmokeReloadExtension(), "utf8");
 
-  return { rootDir, homeDir, projectDir };
+  return { rootDir, homeDir, projectDir, sessionDir };
 }
 
-function createPiRpcOptions(projectDir, homeDir) {
+function createPiRpcOptions(projectDir, homeDir, sessionDir) {
   return {
     cwd: projectDir,
     env: createSanitizedEnvironment(homeDir),
     args: [
       "--mode",
       "rpc",
-      "--no-session",
-      "--no-extensions",
+      "--session-dir",
+      sessionDir,
       "--no-skills",
       "--no-prompt-templates",
       "--no-themes",
       "--no-context-files",
       "--approve",
-      "--extension",
-      repoRoot,
     ],
   };
 }
 
 function createSanitizedEnvironment(homeDir) {
-  const env = { ...process.env, HOME: homeDir, NO_COLOR: "1" };
+  const env = {
+    ...process.env,
+    HOME: homeDir,
+    NO_COLOR: "1",
+    PI_CODING_AGENT_DIR: join(homeDir, ".pi", "agent"),
+    PI_CODING_AGENT_SESSION_DIR: join(homeDir, ".pi", "agent", "sessions"),
+    PI_OFFLINE: "1",
+  };
 
   for (const key of Object.keys(env)) {
     if (key.startsWith("OBSERVME_")) delete env[key];
   }
 
   return env;
+}
+
+function renderSmokeObservMeExtension() {
+  const extensionUrl = pathToFileURL(join(repoRoot, "src", "extension.ts")).href;
+  return `export { default } from ${JSON.stringify(extensionUrl)};\n`;
+}
+
+function renderSmokeReloadExtension() {
+  return `export default function observmeSmokeReload(pi) {
+  pi.registerCommand("observme-smoke-reload", {
+    description: "Reload extension runtime for ObservMe smoke validation.",
+    handler: handleObservMeSmokeReload,
+  });
+}
+
+async function handleObservMeSmokeReload(_args, ctx) {
+  await ctx.reload();
+}
+`;
 }
 
 function renderSmokeObservMeConfig(baseUrl) {
@@ -358,11 +409,16 @@ function renderSmokeObservMeConfig(baseUrl) {
 }
 
 async function assertObsCommandIsDiscoverable(client) {
+  await assertSingleExtensionCommand(client, "obs");
+  await assertSingleExtensionCommand(client, "observme-smoke-reload");
+}
+
+async function assertSingleExtensionCommand(client, name) {
   const response = await client.request({ type: "get_commands" });
   const commands = response.data?.commands ?? [];
-  const obsCommand = commands.find(command => command.name === "obs" && command.source === "extension");
+  const matches = commands.filter(command => command.name === name && command.source === "extension");
 
-  assert.ok(obsCommand, "real Pi command registry should list /obs as an extension command");
+  assert.equal(matches.length, 1, `real Pi command registry should list exactly one /${name} extension command`);
 }
 
 async function assertObsStatusCommand(client, baseUrl) {
@@ -387,6 +443,53 @@ async function assertObsSessionCommand(client) {
   assert.match(message, /^Session: session-/mu, "/obs session should expose session_start runtime state");
   assert.doesNotMatch(message, /Session: unknown/u, "/obs session should not report an unknown session while the extension is active");
   assert.doesNotMatch(message, /ObservMe session unavailable/iu, "/obs session should not fail through Pi command routing");
+
+  return { message, sessionId: parseObsSessionId(message) };
+}
+
+async function assertObsReloadLifecycle(client, baseUrl) {
+  const before = await assertObsSessionCommand(client);
+  const startIndex = client.recordCount();
+
+  await client.request({ type: "prompt", message: "/observme-smoke-reload" });
+  await client.waitForStatusClearedAfter(startIndex);
+  await client.waitForStatusLoadedAfter(startIndex);
+  await assertSingleExtensionCommand(client, "obs");
+  await assertSingleExtensionCommand(client, "observme-smoke-reload");
+  await assertObsStatusCommand(client, baseUrl);
+
+  const after = await assertObsSessionCommand(client);
+  assert.notEqual(after.sessionId, before.sessionId, "reload should create a fresh ObservMe runtime session identity");
+  assertFreshObsSessionCounters(after.message, "reload");
+}
+
+async function assertObsNewSessionLifecycle(client, baseUrl) {
+  const before = await assertObsSessionCommand(client);
+  const startIndex = client.recordCount();
+  const response = await client.request({ type: "new_session" });
+
+  assert.equal(response.data?.cancelled, false, "new_session should not be cancelled by extension lifecycle hooks");
+  await client.waitForStatusClearedAfter(startIndex);
+  await client.waitForStatusLoadedAfter(startIndex);
+  await assertSingleExtensionCommand(client, "obs");
+  await assertSingleExtensionCommand(client, "observme-smoke-reload");
+  await assertObsStatusCommand(client, baseUrl);
+
+  const after = await assertObsSessionCommand(client);
+  assert.notEqual(after.sessionId, before.sessionId, "new_session should create a fresh Pi session identity");
+  assertFreshObsSessionCounters(after.message, "new_session");
+}
+
+function parseObsSessionId(message) {
+  const match = /^Session: (session-[^\s]+)/mu.exec(message);
+  assert.ok(match?.[1], "/obs session should include a concrete session id");
+  return match[1];
+}
+
+function assertFreshObsSessionCounters(message, lifecycleName) {
+  assert.match(message, /^Turns: 0$/mu, `/obs session should reset turn count after ${lifecycleName}`);
+  assert.match(message, /^LLM calls: 0$/mu, `/obs session should reset LLM count after ${lifecycleName}`);
+  assert.match(message, /^Tool calls: 0$/mu, `/obs session should reset tool count after ${lifecycleName}`);
 }
 
 async function assertObsHealthCommand(client) {
@@ -447,6 +550,15 @@ function isNotifyMessageWithPrefix(record, prefix) {
 
 function isObservMeLoadedStatus(record) {
   return record?.type === "extension_ui_request" && record.method === "setStatus" && record.statusKey === "observme" && record.statusText === "🧿";
+}
+
+function isObservMeClearedStatus(record) {
+  return (
+    record?.type === "extension_ui_request" &&
+    record.method === "setStatus" &&
+    record.statusKey === "observme" &&
+    (record.statusText === undefined || record.statusText === null)
+  );
 }
 
 function writeJsonResponse(response, statusCode, body) {

@@ -11,7 +11,7 @@ This matrix records the ObservMe runtime and observability-stack versions that h
 | 2026-07-07 | Local Node.js v26.0.0, npm 11.12.1 | `npm run validate` | Typecheck, ESLint, formatting, unit tests, package contents, packaged install smoke, handler smoke, Pi lifecycle smoke. Does not start Docker Compose. |
 | 2026-07-07 | Local Docker 29.5.2 with Collector Contrib 0.104.0 | `npm run test:integration:collector` | Starts a local debug-exporter Collector container, exports representative ObservMe traces/metrics/logs, and asserts default-disabled content capture is absent. |
 | 2026-07-07 | Local Docker 29.5.2 with the pinned Grafana stack | `npm run test:integration:grafana-stack` | Starts `observability-stack/` services, exports representative ObservMe telemetry, queries Tempo by trace ID and lineage attributes, queries Loki by session ID, queries Prometheus token totals, and validates Grafana dashboard provisioning imports. |
-| Continuous integration target | GitHub Actions `ubuntu-latest`, Node.js 22.19.0 | `npm install` then `npm run validate` | CI target from `.github/workflows/ci.yml`; record the workflow run URL here after each release validation. |
+| Continuous integration target | GitHub Actions `ubuntu-latest`, Node.js 22.19.0 | `npm ci --ignore-scripts` then `npm run validate` | CI target from `.github/workflows/ci.yml`; record the workflow run URL here after each release validation. |
 
 ## Runtime and library matrix
 

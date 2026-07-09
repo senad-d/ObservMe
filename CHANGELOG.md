@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Refreshed the review-validation checklist to reference the current review spec files and final-pass validation/audit commands.
+- Extended the Pi RPC runtime smoke to verify extension reload and `new_session` replacement keep ObservMe `/obs status` and `/obs session` usable with fresh runtime state.
+- Hardened parallel Pi tool lifecycle handling so ambiguous missing tool IDs are dropped with diagnostics instead of mutating sibling spans.
+- Consolidated trusted-project ObservMe config bootstrap handling behind one shared startup helper used by Pi handlers and bootstrap registration.
+- Added root `/obs` dispatch regression coverage for whitespace, mixed-case subcommands, and quoted-like argument tokenization.
+- Tightened test TypeScript compilation to inherit strict source checks and added explicit shared fake/fixture types.
+- Bounded `/obs backfill --since` duration parsing to a maximum 30-day window before scanning current-session entries.
+- Hardened CI dependency installation by switching pull-request validation to `npm ci --ignore-scripts` before `npm run validate`.
+- Changed the auto-created trusted-project `.pi/observme.yaml` starter to keep content capture disabled with redaction enabled by default, documenting explicit local-debug opt-in edits.
 - Added an ObservMe Agent Node Graphs dashboard for visualizing aggregate Pi root, agent-role, spawn-reason, and subagent-depth connections with Grafana-compatible Node Graph nodes/edges frames.
 - Fixed prompt capture for OpenAI Responses-style `before_provider_request` payloads that use `input`, restoring data for the LLM Conversations dashboard Prompts panel.
 - Added final duplicate `session_start` lifecycle regression coverage for previous-session cleanup and runtime state replacement.

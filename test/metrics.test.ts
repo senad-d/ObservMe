@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createObservMeMetrics } from "../src/pi/handlers.ts";
+import type { TestAttributes, TestMetricRecord } from "./support/telemetry-types.ts";
 import {
   ALL_METRIC_NAMES,
   OBSERVME_COUNTER_METRIC_NAMES,
@@ -9,6 +10,23 @@ import {
   OBSERVME_TOKEN_COST_COUNTER_METRIC_NAMES,
   OFFICIAL_GENAI_METRIC_NAMES,
 } from "../src/semconv/metrics.ts";
+
+type ObservMeMetrics = ReturnType<typeof createObservMeMetrics>;
+
+type MetricMethod = "add" | "record";
+
+interface MetricExercise {
+  readonly name: string;
+  readonly instrument: keyof ObservMeMetrics;
+  readonly method: MetricMethod;
+  readonly type: string;
+  readonly value: number;
+}
+
+interface TestMetricInstrument {
+  readonly add?: (value: number, attributes: TestAttributes) => void;
+  readonly record?: (value: number, attributes: TestAttributes) => void;
+}
 
 const exerciseLabels = { environment: "test", agent_role: "root" };
 const metricExercises = [
@@ -72,37 +90,38 @@ const metricExercises = [
   { name: OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_AGENTS, instrument: "activeAgents", method: "add", type: "upDownCounter", value: 58 },
   { name: OFFICIAL_GENAI_METRIC_NAMES.CLIENT_TOKEN_USAGE, instrument: "genAiClientTokenUsage", method: "record", type: "histogram", value: 59 },
   { name: OFFICIAL_GENAI_METRIC_NAMES.CLIENT_OPERATION_DURATION, instrument: "genAiClientOperationDuration", method: "record", type: "histogram", value: 60 },
-];
+] satisfies readonly MetricExercise[];
 
-function compareStrings(left, right) {
+function compareStrings(left: string, right: string): number {
   return left.localeCompare(right);
 }
 
 function createRecordingMeter() {
-  const records = [];
+  const records: TestMetricRecord[] = [];
 
   return {
     records,
-    createCounter: name => ({
-      add: (value, attributes = {}) => records.push({ type: "counter", name, value, attributes }),
+    createCounter: (name: string) => ({
+      add: (value: number, attributes: TestAttributes = {}) => records.push({ type: "counter", name, value, attributes }),
     }),
-    createUpDownCounter: name => ({
-      add: (value, attributes = {}) => records.push({ type: "upDownCounter", name, value, attributes }),
+    createUpDownCounter: (name: string) => ({
+      add: (value: number, attributes: TestAttributes = {}) => records.push({ type: "upDownCounter", name, value, attributes }),
     }),
-    createHistogram: name => ({
-      record: (value, attributes = {}) => records.push({ type: "histogram", name, value, attributes }),
+    createHistogram: (name: string) => ({
+      record: (value: number, attributes: TestAttributes = {}) => records.push({ type: "histogram", name, value, attributes }),
     }),
   };
 }
 
-function exerciseMetric(metrics, exercise) {
-  const instrument = metrics[exercise.instrument];
+function exerciseMetric(metrics: ObservMeMetrics, exercise: MetricExercise): void {
+  const instrument = metrics[exercise.instrument] as TestMetricInstrument | undefined;
+  const recordMetric = instrument?.[exercise.method];
 
-  assert.ok(instrument, `${exercise.instrument} should exist for ${exercise.name}`);
-  instrument[exercise.method](exercise.value, exerciseLabels);
+  if (typeof recordMetric !== "function") assert.fail(`${exercise.instrument} should exist for ${exercise.name}`);
+  recordMetric(exercise.value, exerciseLabels);
 }
 
-function findMetricRecord(records, exercise) {
+function findMetricRecord(records: readonly TestMetricRecord[], exercise: MetricExercise): TestMetricRecord | undefined {
   return records.find(record => record.name === exercise.name && record.type === exercise.type && record.value === exercise.value);
 }
 

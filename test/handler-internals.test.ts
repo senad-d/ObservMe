@@ -37,6 +37,8 @@ import {
   toolMetricLabels,
 } from "../src/pi/handler-internals.ts";
 import type { ObservMeTelemetrySession } from "../src/pi/handlers.ts";
+import { mergeRecordConfig } from "./support/telemetry-types.ts";
+import type { TestLogRecord } from "./support/telemetry-types.ts";
 
 const hexadecimalHash = /^[a-f0-9]{64}$/u;
 const lowCardinalityLabelKeys = ["environment", "agent_role"];
@@ -51,19 +53,8 @@ function cloneConfig(overrides: Record<string, unknown> = {}) {
   return mergeConfig(structuredClone(defaultObservMeConfig), overrides);
 }
 
-function mergeConfig(base, overlay) {
-  for (const [key, value] of Object.entries(overlay)) {
-    if (isPlainObject(base[key]) && isPlainObject(value)) {
-      mergeConfig(base[key], value);
-      continue;
-    }
-    base[key] = value;
-  }
-  return base;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function mergeConfig<T extends Record<string, unknown>>(base: T, overlay: Record<string, unknown> = {}): T {
+  return mergeRecordConfig(base, overlay);
 }
 
 function createSession(overrides: Record<string, unknown> = {}): ObservMeTelemetrySession {
@@ -95,10 +86,10 @@ function createSession(overrides: Record<string, unknown> = {}): ObservMeTelemet
 }
 
 function createFakeLogger() {
-  const records: Array<Record<string, unknown>> = [];
+  const records: TestLogRecord[] = [];
   return {
     records,
-    emit: (record: Record<string, unknown>) => records.push(record),
+    emit: (record: TestLogRecord) => records.push(record),
   };
 }
 
