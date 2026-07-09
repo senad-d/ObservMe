@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed npm dependency installation by pinning TypeScript to a version supported by the current `typescript-eslint` peer range.
 - Added focused coverage for missing or partial Pi runtime capabilities across lifecycle bootstrap, status/root commands, and backfill fallbacks.
 - Recorded final-pass package, Pi runtime, Collector, Grafana-stack, and operator Grafana validation outcomes, including the current live-stack Tempo LLM content blocker and cleanup evidence.
 - Documented and tested trusted-project config bootstrap behavior across Pi startup, reload, new-session, resume, and fork lifecycles, including untrusted and missing-project-context skips.
