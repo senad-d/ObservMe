@@ -4,7 +4,7 @@ import { recordObsSessionCost, recordObsSessionToolCall } from "../commands/obs-
 import { recordObsStatusQueueDrop } from "../commands/obs-status.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import { trySha256 } from "../privacy/hash.ts";
-import { applyContentCapturePolicy } from "../privacy/content-capture.ts";
+import { applyContentCapturePolicy, type ContentCapturePolicyResult } from "../privacy/content-capture.ts";
 import {
   AGENT_RUN_ATTRIBUTES,
   BASH_ATTRIBUTES,
@@ -33,6 +33,7 @@ import type {
 } from "./handlers.ts";
 
 const OBSERVME_SEMCONV_VERSION = "0.1.0";
+const REDACTION_FAILURE_REASON_MAX_CHARS = 240;
 
 type LlmContentKind = "prompt" | "response" | "thinking";
 
@@ -105,7 +106,7 @@ export function recordRedactionFailure(
 ): void {
   const normalizedOperation = normalizeMetricValue(operation, "redaction");
   const errorClass = normalizeMetricValue(readString(attributes, LOG_ATTRIBUTES.ERROR_TYPE) ?? readString(attributes, "error_class") ?? "redaction_error", "redaction_error");
-  const logAttributes = { operation: normalizedOperation, [LOG_ATTRIBUTES.ERROR_TYPE]: errorClass };
+  const logAttributes = { ...attributes, operation: normalizedOperation, [LOG_ATTRIBUTES.ERROR_TYPE]: errorClass };
 
   session.metrics.redactionFailures.add(normalizeFailureCount(count), { operation: normalizedOperation, error_class: errorClass });
   emitSelfObservabilityLog(session, LOG_EVENT_NAMES.REDACTION_FAILED, "redaction", logAttributes);
@@ -610,7 +611,7 @@ export function recordRedactedBashContent(
   });
 
   if (!result.captured || result.value === undefined) {
-    recordRedactionFailure(session, "bash_content_capture", result.redactionFailures);
+    recordRedactionFailure(session, "bash_content_capture", result.redactionFailures, buildContentCaptureFailureAttributes(result));
     return;
   }
 
@@ -642,7 +643,7 @@ export function recordRedactedToolContent(
   });
 
   if (!result.captured || result.value === undefined) {
-    recordRedactionFailure(session, "tool_content_capture", result.redactionFailures);
+    recordRedactionFailure(session, "tool_content_capture", result.redactionFailures, buildContentCaptureFailureAttributes(result));
     return;
   }
 
@@ -666,7 +667,7 @@ export function recordRedactedSpanContent(
   });
 
   if (!result.captured || result.value === undefined) {
-    recordRedactionFailure(session, "llm_content_capture", result.redactionFailures);
+    recordRedactionFailure(session, "llm_content_capture", result.redactionFailures, buildContentCaptureFailureAttributes(result));
     return undefined;
   }
 
@@ -678,6 +679,17 @@ export function recordRedactedSpanContent(
     truncated: result.truncated,
     originalLength: result.originalLength,
   };
+}
+
+export function buildContentCaptureFailureAttributes(result: ContentCapturePolicyResult): AttributeMap {
+  return withoutUndefinedAttributes({ reason: summarizeContentCaptureErrors(result.errors) });
+}
+
+export function summarizeContentCaptureErrors(errors: readonly string[]): string | undefined {
+  const firstError = errors.find(error => error.trim().length > 0);
+  if (!firstError) return undefined;
+  if (firstError.length <= REDACTION_FAILURE_REASON_MAX_CHARS) return firstError;
+  return `${firstError.slice(0, REDACTION_FAILURE_REASON_MAX_CHARS - 1)}…`;
 }
 
 export function emitCapturedContentLog(

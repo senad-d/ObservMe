@@ -206,7 +206,7 @@ Rules:
 5. System environment variables
 6. Explicit runtime options
 
-Copy `.env.example` to `.env` for project-local extension variables, or export the same `OBSERVME_*` names in the shell before starting Pi. System environment variables override `.env` values, and `.env` must never be committed.
+Copy `.env.example` to `.env` for project-local extension variables, or export the same `OBSERVME_*` names in the shell before starting Pi. System environment variables override `.env` values, and `.env` must never be committed. If redacted content capture is enabled, set `OBSERVME_HASH_SALT` in the shell or trusted project `.env`; missing salts make capture fail closed.
 
 Automatic project starter file:
 
@@ -306,9 +306,9 @@ capture:
   toolResults: true
 ```
 
-To show LLM chat content in Grafana Tempo and Loki, set `OBSERVME_CAPTURE_PROMPTS=true`, `OBSERVME_CAPTURE_RESPONSES=true`, `OBSERVME_CAPTURE_THINKING=true`, keep `OBSERVME_REDACTION_ENABLED=true`, and acknowledge with `OBSERVME_ALLOW_UNSAFE_CAPTURE=true`. The dashboard shows only new LLM events emitted after these settings and the updated Collector are active; older data dropped by the Collector cannot be recovered.
+To show redacted LLM chat content in Grafana Tempo and Loki, set `OBSERVME_CAPTURE_PROMPTS=true`, `OBSERVME_CAPTURE_RESPONSES=true`, `OBSERVME_CAPTURE_THINKING=true`, keep `OBSERVME_REDACTION_ENABLED=true`, and set `OBSERVME_HASH_SALT` before the conversation occurs. Set `OBSERVME_ALLOW_UNSAFE_CAPTURE=true` only when redaction is disabled for intentionally raw local debugging. The dashboard shows only new LLM events emitted after these settings and the updated Collector are active; older data dropped by the Collector cannot be recovered.
 
-ObservMe must display a warning when unsafe capture is active. Unsafe mode must still pass all configured redactors unless redaction is explicitly disabled with a separately validated exception.
+ObservMe must display a warning when unsafe capture is active. Redacted capture must pass all configured redactors, and raw unsafe capture is permitted only when redaction is explicitly disabled with a separately validated exception.
 
 ## 9. Validation Rules
 

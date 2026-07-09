@@ -190,17 +190,17 @@ If content exceeds limit:
 
 ## 10. Opt-in LLM Content Export
 
-Prompt, response, and thinking bodies are not exported by default. They become visible in Tempo and Loki only when the corresponding capture flag is enabled, redaction remains enabled, and the unsafe-capture acknowledgement is explicit for the session:
+Prompt, response, and thinking bodies are not exported by default. They become visible in Tempo and Loki only when the corresponding capture flag is enabled, redaction remains enabled, and a tenant hash salt is available for the session:
 
 ```text
 OBSERVME_CAPTURE_PROMPTS=true
 OBSERVME_CAPTURE_RESPONSES=true
 OBSERVME_CAPTURE_THINKING=true
 OBSERVME_REDACTION_ENABLED=true
-OBSERVME_ALLOW_UNSAFE_CAPTURE=true
+OBSERVME_HASH_SALT=<project-specific-random-salt>
 ```
 
-When enabled, ObservMe writes the already-redacted value to the LLM span attribute (`pi.llm.prompt.redacted`, `pi.llm.response.redacted`, or `pi.llm.thinking.redacted`) and emits one correlated Loki log whose body is the same redacted value.
+Set `OBSERVME_ALLOW_UNSAFE_CAPTURE=true` only with `OBSERVME_REDACTION_ENABLED=false` for intentionally raw local debugging. When redacted capture is enabled, ObservMe writes the already-redacted value to the LLM span attribute (`pi.llm.prompt.redacted`, `pi.llm.response.redacted`, or `pi.llm.thinking.redacted`) and emits one correlated Loki log whose body is the same redacted value.
 
 Example:
 

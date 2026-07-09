@@ -21,6 +21,8 @@ import {
 import { handleObsTraceCommand } from "../src/commands/obs-trace.ts";
 import { EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE } from "../src/constants.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import { applyContentCapturePolicy } from "../src/privacy/content-capture.ts";
+import { registerTenantSaltEnvironment } from "../src/privacy/hash.ts";
 import {
   LOG_EVENT_NAMES,
   OBSERVME_COUNTER_METRIC_NAMES,
@@ -248,6 +250,39 @@ test("telemetry session resource attributes include a unique instance id without
   assert.equal(merged.resource.attributes["service.instance.id"], "session-instance-test");
   assert.equal(merged.resource.attributes["observme.instance.id"], "session-instance-test");
   assert.equal(merged.resource.attributes["pi.agent.id"], "agent-resource-test");
+});
+
+test("telemetry session resource config preserves trusted .env tenant salt across cloning", () => {
+  const previousSalt = process.env.OBSERVME_HASH_SALT;
+  delete process.env.OBSERVME_HASH_SALT;
+
+  try {
+    const config = structuredClone(defaultObservMeConfig);
+    config.capture.prompts = true;
+    registerTenantSaltEnvironment(config, { OBSERVME_HASH_SALT: "session-clone-salt" });
+    const lineage = {
+      workflowId: "workflow-resource-salt-test",
+      workflowRootAgentId: "agent-root-resource-salt-test",
+      agentId: "agent-resource-salt-test",
+      rootAgentId: "agent-root-resource-salt-test",
+      depth: 0,
+      role: "root",
+      orphaned: false,
+    };
+    const merged = withTelemetrySessionResourceAttributes(config, lineage, "session-instance-salt-test");
+    const result = applyContentCapturePolicy({
+      captureEnabled: merged.capture.prompts,
+      value: "password=prompt-secret",
+      kind: "prompt",
+      config: merged,
+    });
+
+    assert.equal(result.mode, "redacted");
+    assert.equal(result.captured, true);
+  } finally {
+    if (previousSalt === undefined) delete process.env.OBSERVME_HASH_SALT;
+    else process.env.OBSERVME_HASH_SALT = previousSalt;
+  }
 });
 
 function createNotificationContext(notifications) {

@@ -6,6 +6,7 @@ import { resolveProjectLocalFilePath } from "./project-paths.ts";
 import type { ConfigLogSink } from "./validate.ts";
 import { ensureValidObservMeConfig } from "./validate.ts";
 import type { ObservMeConfig } from "./schema.ts";
+import { registerTenantSaltEnvironment } from "../privacy/hash.ts";
 
 export type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends Array<infer U>
@@ -71,9 +72,11 @@ const yamlIndentPattern = /^ */u;
 
 export async function loadFactoryConfig(options: LoadConfigOptions = {}): Promise<ObservMeConfig> {
   const globalConfig = await readConfigFile(resolveGlobalConfigPath(options), options);
+  const environment = options.env ?? process.env;
   const config = mergeConfigLayers([defaultObservMeConfig, globalConfig, envToConfig(options.env), options.runtimeOptions]);
+  const validConfig = ensureValidObservMeConfig(config, { env: options.env, logger: options.logger });
 
-  return ensureValidObservMeConfig(config, { env: options.env, logger: options.logger });
+  return registerTenantSaltEnvironment(validConfig, environment);
 }
 
 export async function loadSessionConfig(options: LoadSessionConfigOptions = {}): Promise<ObservMeConfig> {
@@ -106,13 +109,15 @@ export async function loadSessionConfigWithDiagnostics(options: LoadSessionConfi
     options.runtimeOptions,
   ]);
 
+  const validConfig = ensureValidObservMeConfig(config, {
+    env: effectiveEnvironment,
+    isProjectTrusted: projectTrusted,
+    projectConfigWasRead: Boolean(projectConfig),
+    logger: options.logger,
+  });
+
   return {
-    config: ensureValidObservMeConfig(config, {
-      env: effectiveEnvironment,
-      isProjectTrusted: projectTrusted,
-      projectConfigWasRead: Boolean(projectConfig),
-      logger: options.logger,
-    }),
+    config: registerTenantSaltEnvironment(validConfig, effectiveEnvironment),
     diagnostics,
   };
 }

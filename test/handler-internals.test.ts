@@ -503,6 +503,11 @@ test("live content capture drops prompt, tool result, and bash output when redac
     assert.equal(toolSpan.attributes[TOOL_ATTRIBUTES.PI_TOOL_RESULT_REDACTED], undefined);
     assert.equal(bashSpan.attributes[BASH_ATTRIBUTES.PI_BASH_OUTPUT_REDACTED], undefined);
     assert.equal((session.metrics.redactionFailures as ReturnType<typeof createFakeCounter>).records.length, 3);
+    assert.ok(
+      (session.logger as ReturnType<typeof createFakeLogger>).records.every(record =>
+        String(record.attributes?.reason ?? "").includes("tenant salt env var OBSERVME_HASH_SALT is not set"),
+      ),
+    );
   } finally {
     if (previousSalt === undefined) delete process.env.OBSERVME_HASH_SALT;
     else process.env.OBSERVME_HASH_SALT = previousSalt;

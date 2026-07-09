@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Restored LLM conversation capture by letting trusted project `.env` hash salts drive redaction, surfacing content-capture failure reasons, and extending the LLM Conversations dashboard default range.
 - Completed SonarQube batch 4 remediation by handling ignored fallbacks, simplifying bounded regex and default-assignment findings, using precise type-check errors, and reducing query parsing complexity.
 - Completed SonarQube batch 3 remediation by handling timestamp/stringification fallbacks, replacing literal replacements and default ternaries, simplifying backtracking-prone formatters, and tightening config/query helpers.
 - Completed SonarQube batch 2 remediation by handling Grafana parser failures, simplifying handler/status/config/Grafana/agent/backfill code paths, replacing backtracking-prone regexes, and removing redundant ternaries and array operations.

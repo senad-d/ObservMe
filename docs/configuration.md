@@ -23,7 +23,7 @@ Edit `.pi/observme.yaml` in the project where you run Pi:
 - `query.grafana` — Grafana URL, datasource UIDs, TLS, and IPv4 transport settings for `/obs` query commands.
 - `query.links.traceUrlTemplate` — the Grafana Explore trace-link template used by `/obs trace` and `/obs link`.
 
-Keep credentials out of YAML. Reference environment variables such as `OBSERVME_OTLP_TOKEN`, `OBSERVME_GRAFANA_TOKEN`, `OBSERVME_GRAFANA_PASSWORD`, and `OBSERVME_HASH_SALT`, then set those values in the shell or a trusted project `.env` file.
+Keep credentials out of YAML. Reference environment variables such as `OBSERVME_OTLP_TOKEN`, `OBSERVME_GRAFANA_TOKEN`, `OBSERVME_GRAFANA_PASSWORD`, and `OBSERVME_HASH_SALT`, then set those values in the shell or a trusted project `.env` file. When any content capture flag is enabled with `privacy.redactionEnabled: true`, `OBSERVME_HASH_SALT` must be set before the event occurs; otherwise content capture fails closed and emits `redaction.failed` diagnostics instead of conversation rows.
 
 ## Precedence
 
@@ -33,4 +33,4 @@ Configuration is merged in this order:
 defaults → global ~/.pi/agent/observme.yaml → trusted project .pi/observme.yaml → trusted project .env → system environment variables → runtime options
 ```
 
-Use `~/.pi/agent/observme.yaml` for global defaults that should apply across projects. Use `.pi/observme.yaml` for per-project setup.
+Use `~/.pi/agent/observme.yaml` for global defaults that should apply across projects. Use `.pi/observme.yaml` for per-project setup. Because `.env` and system environment variables have higher precedence than YAML, remove or update stale `OBSERVME_REDACTION_ENABLED`, `OBSERVME_ALLOW_UNSAFE_CAPTURE`, and `OBSERVME_CAPTURE_*` overrides when YAML privacy settings appear to be ignored.

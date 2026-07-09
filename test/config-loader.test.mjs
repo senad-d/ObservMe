@@ -3,6 +3,7 @@ import test from "node:test";
 import { PROJECT_OBSERVME_YAML_TEMPLATE } from "../src/config/bootstrap-project-config.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { loadFactoryConfig, loadSessionConfig, parseObservMeConfigText } from "../src/config/load-config.ts";
+import { applyContentCapturePolicy } from "../src/privacy/content-capture.ts";
 
 const globalConfigYaml = `
 observme:
@@ -305,6 +306,37 @@ test("session loader reads trusted project .env and lets system env override it"
   });
   assert.equal(config.query.grafana.tls.insecureSkipVerify, true);
   assert.equal(config.query.grafana.transport.preferIPv4, true);
+});
+
+test("session loader registers trusted project .env tenant salt for redacted capture", async () => {
+  const previousSalt = process.env.OBSERVME_HASH_SALT;
+  delete process.env.OBSERVME_HASH_SALT;
+
+  try {
+    const config = await loadSessionConfig({
+      globalConfigPath: "missing-global.yaml",
+      projectConfigPath: "missing-project.yaml",
+      envFilePath: "project.env",
+      isProjectTrusted: true,
+      readText: createReader({
+        "project.env": "OBSERVME_CAPTURE_PROMPTS=true\nOBSERVME_HASH_SALT=trusted-project-salt\n",
+      }),
+      env: {},
+    });
+    const result = applyContentCapturePolicy({
+      captureEnabled: config.capture.prompts,
+      value: "password=prompt-secret",
+      kind: "prompt",
+      config,
+    });
+
+    assert.equal(result.mode, "redacted");
+    assert.equal(result.captured, true);
+    assert.match(result.value ?? "", /\[REDACTED:pass_word_assignment:[a-f0-9]{12}\]/u);
+  } finally {
+    if (previousSalt === undefined) delete process.env.OBSERVME_HASH_SALT;
+    else process.env.OBSERVME_HASH_SALT = previousSalt;
+  }
 });
 
 test("factory-safe loader excludes project config and still applies global/env/runtime layers", async () => {

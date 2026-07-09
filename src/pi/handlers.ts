@@ -27,6 +27,7 @@ import type { ObservMeOtelSdkController } from "../otel/sdk.ts";
 import { startOtelSdk } from "../otel/sdk.ts";
 import type { BoundedOtelOperationResult } from "../otel/shutdown.ts";
 import { ObservMeTraceSdk } from "../otel/traces.ts";
+import { inheritTenantSaltEnvironment } from "../privacy/hash.ts";
 import {
   AGENT_RUN_ATTRIBUTES,
   COMMON_SPAN_ATTRIBUTES,
@@ -1551,7 +1552,7 @@ export function withTelemetrySessionResourceAttributes(
     ...buildTelemetryInstanceResourceAttributes(instanceId),
     ...stringifyAttributes(buildResourceLineageAttributes(lineage)),
   };
-  return merged;
+  return inheritTenantSaltEnvironment(merged, config);
 }
 
 export function buildTelemetryInstanceResourceAttributes(instanceId: string): Record<string, string> {

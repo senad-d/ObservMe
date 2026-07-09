@@ -180,7 +180,7 @@ workflow:
   enabled: true
 ```
 
-When optional content capture is enabled, live telemetry and `/obs backfill` use the same policy. With `privacy.redactionEnabled: true`, the redaction pipeline applies size guards, secret detection, optional PII detection, path scrubbing (`hash`, `basename`, `full`, or `drop`), custom regex redactors, truncation metadata, and tenant-salted hashing before export. Redaction failures drop content. With `privacy.redactionEnabled: false` and `privacy.allowUnsafeCapture: true`, captured content is exported raw but still truncated to the configured limit. Hash salts are read from secure environment/runtime config, not hardcoded.
+When optional content capture is enabled, live telemetry and `/obs backfill` use the same policy. With `privacy.redactionEnabled: true`, the redaction pipeline applies size guards, secret detection, optional PII detection, path scrubbing (`hash`, `basename`, `full`, or `drop`), custom regex redactors, truncation metadata, and tenant-salted hashing before export. Redaction failures drop content and emit `redaction.failed` diagnostics. With `privacy.redactionEnabled: false` and `privacy.allowUnsafeCapture: true`, captured content is exported raw but still truncated to the configured limit. Hash salts are read from secure environment/runtime config, not hardcoded.
 
 Metadata such as token counts, duration, status, model/provider, tool name, and agent role/depth is captured by default. High-cardinality identifiers (session IDs, workflow IDs, agent IDs, trace/span IDs, entry IDs) are allowed on spans/logs for drill-down but are blocked from Prometheus metric labels.
 
@@ -214,17 +214,19 @@ Create a Grafana service-account token in Grafana (Administration → Users and 
 
 ### Show LLM chat content in Grafana
 
-LLM prompt, response, and thinking bodies are hidden by default. To display already-redacted chat content in Tempo span attributes and Loki log panels, restart Pi with explicit capture and the unsafe-capture acknowledgement:
+LLM prompt, response, and thinking bodies are hidden by default. To display redacted chat content in Tempo span attributes and Loki log panels, restart Pi with explicit capture and a tenant hash salt:
 
 ```bash
 export OBSERVME_CAPTURE_PROMPTS=true
 export OBSERVME_CAPTURE_RESPONSES=true
 export OBSERVME_CAPTURE_THINKING=true
 export OBSERVME_REDACTION_ENABLED=true
-export OBSERVME_ALLOW_UNSAFE_CAPTURE=true
+export OBSERVME_HASH_SALT="$(openssl rand -hex 32)"
 ```
 
-Only new LLM events emitted after these settings and the updated Collector are active can show content; older telemetry dropped by the Collector cannot be recovered. Open the **ObservMe LLM Conversations** dashboard for a dedicated redacted chat timeline. Do not query Grafana with raw prompt or response text.
+For intentionally raw local debugging only, set `OBSERVME_REDACTION_ENABLED=false` together with `OBSERVME_ALLOW_UNSAFE_CAPTURE=true`. Environment variables and trusted project `.env` values override `.pi/observme.yaml`, so remove stale overrides before relying on YAML privacy settings.
+
+Only new LLM events emitted after these settings and the updated Collector are active can show content; older telemetry dropped by the Collector cannot be recovered. Open the **ObservMe LLM Conversations** dashboard for a dedicated opt-in chat timeline. Do not query Grafana with raw prompt or response text.
 
 Full configuration schema: `ObservMe-Production-Docs/12-configuration-reference.md`. Full redaction/privacy design: `ObservMe-Production-Docs/06-security-privacy-redaction.md`.
 
