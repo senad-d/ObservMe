@@ -41,6 +41,13 @@ test("extension default factory is named observme", () => {
   assert.equal(extensionModule.default.name, "observme");
 });
 
+test("production extension enables only the process-environment parent lineage boundary", async () => {
+  const source = await readFile(new URL("../src/extension.ts", import.meta.url), "utf8");
+
+  assert.match(source, /registerHandlers\(pi, \{ trustedParentContext: true \}\)/u);
+  assert.match(source, /Only the Pi process environment is eligible/u);
+});
+
 test("extension initialization reports partial command registration failures", () => {
   const registrationError = new Error("Pi command registry unavailable");
   const pi = createPiWithFailingCommandRegistration(registrationError);

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { trace } from "@opentelemetry/api";
+import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import {
   clearObsSessionRuntimeState,
   getLocalObsSessionSnapshot,
@@ -21,8 +22,10 @@ import {
 import { handleObsTraceCommand } from "../src/commands/obs-trace.ts";
 import { EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE } from "../src/constants.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import { loadSessionConfig } from "../src/config/load-config.ts";
 import { applyContentCapturePolicy } from "../src/privacy/content-capture.ts";
 import { registerTenantSaltEnvironment } from "../src/privacy/hash.ts";
+import { COMMON_SPAN_ATTRIBUTES, CONFIG_ATTRIBUTES, LOG_ATTRIBUTES, TOOL_ATTRIBUTES } from "../src/semconv/attributes.ts";
 import {
   LOG_EVENT_NAMES,
   OBSERVME_COUNTER_METRIC_NAMES,
@@ -75,18 +78,26 @@ function createFakeTracer() {
   return {
     spans,
     startSpan: (name, options = {}, parentContext) => {
-      const span = createFakeSpan(name, options.attributes ?? {}, parentContext ? trace.getSpan(parentContext) : undefined);
+      const span = createFakeSpan(
+        name,
+        options.attributes ?? {},
+        parentContext ? trace.getSpan(parentContext) : undefined,
+        parentContext ? trace.getSpanContext(parentContext) : undefined,
+        options.links ?? [],
+      );
       spans.push(span);
       return span;
     },
   };
 }
 
-function createFakeSpan(name, attributes, parentSpan) {
+function createFakeSpan(name, attributes, parentSpan, parentSpanContext, links) {
   return {
     name,
     attributes,
     parentSpan,
+    parentSpanContext,
+    links,
     events: [],
     status: undefined,
     ended: false,
@@ -135,9 +146,9 @@ function createFakeController() {
   };
 }
 
-function createFakeTelemetry(lineage) {
+function createFakeTelemetry(lineage, tracerOverride) {
   const meter = createFakeMeter();
-  const tracer = createFakeTracer();
+  const tracer = tracerOverride ?? createFakeTracer();
   const logger = createFakeLogger();
   const controller = createFakeController();
   const metrics = createObservMeMetrics(meter);
@@ -160,6 +171,47 @@ function createFakeTelemetry(lineage) {
 
 function loadConfig() {
   return Promise.resolve(defaultObservMeConfig);
+}
+
+function createRejectedConfigLoadResult(config, issueCodes = ["unsafe_capture_without_redaction"]) {
+  return {
+    config,
+    diagnostics: {
+      projectTrusted: false,
+      projectConfigStatus: "skipped_untrusted",
+      effectiveSource: "environment",
+      globalConfigLoaded: false,
+      environmentOverrides: true,
+      runtimeOptionsApplied: false,
+      rejection: {
+        issueCodes,
+        issueCount: issueCodes.length,
+      },
+    },
+  };
+}
+
+function completePropagationEnvironment(overrides = {}) {
+  return {
+    OBSERVME_HASH_SALT: "pi-handlers-test-salt",
+    OBSERVME_WORKFLOW_ID: "workflow-propagated",
+    OBSERVME_PARENT_AGENT_ID: "agent-parent-propagated",
+    OBSERVME_ROOT_AGENT_ID: "agent-root-propagated",
+    OBSERVME_PARENT_SESSION_ID: "session-parent-propagated",
+    OBSERVME_PARENT_TRACE_ID: "4bf92f3577b34da6a3ce929d0e0e4736",
+    OBSERVME_PARENT_SPAN_ID: "00f067aa0ba902b7",
+    OBSERVME_AGENT_DEPTH: "2",
+    OBSERVME_SPAWN_ID: "spawn-propagated",
+    traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    tracestate: "vendor=value",
+    ...overrides,
+  };
+}
+
+function metricTotal(records, name) {
+  return records
+    .filter(record => record.name === name)
+    .reduce((total, record) => total + record.value, 0);
 }
 
 function createDeferred() {
@@ -339,6 +391,98 @@ test("session lifecycle handlers tolerate missing trust and partial UI capabilit
   assert.deepEqual(telemetry.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
 });
 
+test("session_start emits one sanitized structured config rejection diagnostic", async () => {
+  const pi = createFakePi();
+  const notifications = [];
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig: () => Promise.resolve(createRejectedConfigLoadResult(defaultObservMeConfig, [
+      "unsafe_capture_without_redaction",
+      "high_cardinality_metric_label",
+    ])),
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")(
+    { sessionId: "session-config-rejected" },
+    createNotificationContext(notifications),
+  );
+
+  const records = telemetry.logger.records.filter(record => record.body === LOG_EVENT_NAMES.CONFIG_REJECTED);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].attributes[LOG_ATTRIBUTES.EVENT_CATEGORY], "config");
+  assert.equal(records[0].attributes[CONFIG_ATTRIBUTES.OBSERVME_CONFIG_SOURCE], "environment");
+  assert.deepEqual(records[0].attributes[CONFIG_ATTRIBUTES.OBSERVME_CONFIG_REJECTION_ISSUE_CODES], [
+    "unsafe_capture_without_redaction",
+    "high_cardinality_metric_label",
+  ]);
+  assert.equal(records[0].attributes[CONFIG_ATTRIBUTES.OBSERVME_CONFIG_REJECTION_ISSUE_COUNT], 2);
+  assert.equal(records[0].attributes[LOG_ATTRIBUTES.TRACE_ID], "11111111111111111111111111111111");
+  assert.equal(records[0].attributes[LOG_ATTRIBUTES.SPAN_ID], "2222222222222222");
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].type, "warning");
+  assert.match(notifications[0].message, /safe defaults/u);
+  assert.deepEqual(getObsStatusRuntimeState().configDiagnostics?.rejection?.issueCodes, [
+    "unsafe_capture_without_redaction",
+    "high_cardinality_metric_label",
+  ]);
+  assert.doesNotMatch(JSON.stringify({ records, notifications }), /token|password|header|\/workspace\/demo|private regex/iu);
+});
+
+test("config rejection diagnostics use UI fallback when logs are disabled and remain fail-open headlessly", async () => {
+  const disabledLogsConfig = structuredClone(defaultObservMeConfig);
+  disabledLogsConfig.logs.enabled = false;
+  const notifications = [];
+  const piWithUi = createFakePi();
+  let uiTelemetry;
+  registerHandlers(piWithUi, {
+    loadConfig: () => Promise.resolve(createRejectedConfigLoadResult(disabledLogsConfig)),
+    startTelemetry: async ({ lineage }) => {
+      uiTelemetry = createFakeTelemetry(lineage);
+      uiTelemetry.config = disabledLogsConfig;
+      uiTelemetry.logger.emit = () => undefined;
+      return uiTelemetry;
+    },
+  });
+
+  await assert.doesNotReject(() =>
+    piWithUi.handlers.get("session_start")(
+      { sessionId: "session-config-rejected-no-logs" },
+      createNotificationContext(notifications),
+    ),
+  );
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].type, "warning");
+  assert.equal(uiTelemetry.logger.records.length, 0);
+  assert.equal(uiTelemetry.tracer.spans.some(span => span.name === SPAN_NAMES.PI_SESSION), true);
+
+  const headlessPi = createFakePi();
+  let headlessTelemetry;
+  registerHandlers(headlessPi, {
+    loadConfig: () => Promise.resolve(createRejectedConfigLoadResult(disabledLogsConfig)),
+    startTelemetry: async ({ lineage }) => {
+      headlessTelemetry = createFakeTelemetry(lineage);
+      headlessTelemetry.config = disabledLogsConfig;
+      headlessTelemetry.logger.emit = record => {
+        if (record.body === LOG_EVENT_NAMES.CONFIG_REJECTED) throw new Error("disabled diagnostic logger");
+        headlessTelemetry.logger.records.push(record);
+      };
+      return headlessTelemetry;
+    },
+  });
+
+  await assert.doesNotReject(() =>
+    headlessPi.handlers.get("session_start")(
+      { sessionId: "session-config-rejected-headless" },
+      { cwd: "/workspace/demo", hasUI: false },
+    ),
+  );
+  assert.equal(headlessTelemetry.tracer.spans.some(span => span.name === SPAN_NAMES.PI_SESSION), true);
+});
+
 test("session_start creates a root pi.session span with documented session and workflow attributes", async () => {
   const pi = createFakePi();
   const statuses = [];
@@ -391,6 +535,160 @@ test("session_start creates a root pi.session span with documented session and w
   assert.ok(span.events.some(event => event.name === LOG_EVENT_NAMES.SESSION_STARTED));
   assert.deepEqual(statuses, [{ key: EXTENSION_STATUS_KEY, value: EXTENSION_STATUS_VALUE }]);
   assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.WORKFLOW_STARTED));
+});
+
+test("child pi.session continues the validated parent spawn context with an in-memory exporter", async t => {
+  const exporter = new InMemorySpanExporter();
+  const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+  const tracer = provider.getTracer("observme-propagated-session-test");
+  const pi = createFakePi();
+  let telemetry;
+  t.after(async () => provider.shutdown());
+
+  registerHandlers(pi, {
+    env: completePropagationEnvironment(),
+    trustedParentContext: true,
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage, tracer);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-propagated-child" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
+
+  const sessionSpan = exporter.getFinishedSpans().find(span => span.name === SPAN_NAMES.PI_SESSION);
+  assert.ok(sessionSpan);
+  assert.equal(sessionSpan.spanContext().traceId, "4bf92f3577b34da6a3ce929d0e0e4736");
+  assert.equal(sessionSpan.parentSpanContext?.spanId, "00f067aa0ba902b7");
+  assert.equal(sessionSpan.attributes["pi.workflow.id"], "workflow-propagated");
+  assert.equal(sessionSpan.attributes["pi.agent.parent_id"], "agent-parent-propagated");
+  assert.equal(sessionSpan.attributes["pi.agent.root_id"], "agent-root-propagated");
+  assert.equal(telemetry.lineage.depth, 3);
+  assert.equal(telemetry.lineage.spawnId, "spawn-propagated");
+  assert.equal(metricTotal(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TRACE_CONTEXT_PROPAGATION_FAILURES_TOTAL), 0);
+});
+
+test("trusted lineage without W3C continuation starts a new trace with a validated parent link", async () => {
+  const pi = createFakePi();
+  const env = completePropagationEnvironment();
+  delete env.traceparent;
+  delete env.tracestate;
+  let telemetry;
+
+  registerHandlers(pi, {
+    env,
+    trustedParentContext: true,
+    requireCompleteParentEnvelope: false,
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-linked-child" }, { cwd: "/workspace/demo" });
+
+  const sessionSpan = telemetry.tracer.spans.find(span => span.name === SPAN_NAMES.PI_SESSION);
+  assert.equal(sessionSpan.parentSpanContext, undefined);
+  assert.equal(sessionSpan.links.length, 1);
+  assert.equal(sessionSpan.links[0].context.traceId, env.OBSERVME_PARENT_TRACE_ID);
+  assert.equal(sessionSpan.links[0].context.spanId, env.OBSERVME_PARENT_SPAN_ID);
+  assert.equal(metricTotal(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TRACE_CONTEXT_PROPAGATION_FAILURES_TOTAL), 1);
+  assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.TRACE_CONTEXT_PROPAGATION_FAILED));
+});
+
+test("invalid process propagation fails open once without logging inherited values", async () => {
+  const pi = createFakePi();
+  const env = completePropagationEnvironment({
+    OBSERVME_WORKFLOW_ID: "workflow-private-inherited",
+    OBSERVME_PARENT_AGENT_ID: "agent-private-inherited",
+    OBSERVME_ROOT_AGENT_ID: "root-private-inherited",
+    OBSERVME_SPAWN_ID: "spawn-private-inherited",
+    traceparent: "private-invalid-traceparent",
+  });
+  let telemetry;
+
+  registerHandlers(pi, {
+    env,
+    trustedParentContext: true,
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await assert.doesNotReject(() =>
+    pi.handlers.get("session_start")({ sessionId: "session-invalid-propagation" }, { cwd: "/workspace/demo" }),
+  );
+
+  const sessionSpan = telemetry.tracer.spans.find(span => span.name === SPAN_NAMES.PI_SESSION);
+  const diagnostics = JSON.stringify(telemetry.logger.records);
+  assert.equal(telemetry.lineage.parentAgentId, undefined);
+  assert.equal(telemetry.lineage.propagationFailure, "malformed_envelope");
+  assert.equal(telemetry.lineage.orphaned, true);
+  assert.equal(sessionSpan.parentSpanContext, undefined);
+  assert.equal(sessionSpan.links.length, 0);
+  assert.equal(metricTotal(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TRACE_CONTEXT_PROPAGATION_FAILURES_TOTAL), 1);
+  assert.equal(metricTotal(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.ORPHAN_AGENTS_TOTAL), 1);
+  for (const inherited of [
+    env.OBSERVME_WORKFLOW_ID,
+    env.OBSERVME_PARENT_AGENT_ID,
+    env.OBSERVME_ROOT_AGENT_ID,
+    env.OBSERVME_PARENT_SESSION_ID,
+    env.OBSERVME_PARENT_TRACE_ID,
+    env.OBSERVME_PARENT_SPAN_ID,
+    env.OBSERVME_SPAWN_ID,
+    env.traceparent,
+    env.tracestate,
+  ]) {
+    assert.equal(diagnostics.includes(inherited), false);
+  }
+});
+
+test("trusted project .env lineage is configuration-only and cannot become process provenance", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "observme-project-lineage-"));
+  const projectEnv = completePropagationEnvironment({
+    OBSERVME_WORKFLOW_ID: "workflow-project-local",
+    OBSERVME_PARENT_AGENT_ID: "agent-project-local",
+    OBSERVME_ROOT_AGENT_ID: "root-project-local",
+    OBSERVME_SPAWN_ID: "spawn-project-local",
+  });
+  await writeFile(
+    join(directory, ".env"),
+    Object.entries(projectEnv).map(([name, value]) => `${name}=${value}`).join("\n"),
+    "utf8",
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    env: { OBSERVME_HASH_SALT: "system-only-salt" },
+    trustedParentContext: true,
+    loadConfig: options => loadSessionConfig({
+      ...options,
+      globalConfigPath: join(directory, "missing-global.yaml"),
+    }),
+    startTelemetry: async ({ config, lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      telemetry.config = config;
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")(
+    { sessionId: "session-env-boundary" },
+    { cwd: directory, isProjectTrusted: () => true },
+  );
+
+  const serialized = JSON.stringify({ lineage: telemetry.lineage, logs: telemetry.logger.records });
+  assert.equal(telemetry.lineage.parentAgentId, undefined);
+  assert.equal(telemetry.lineage.propagationFailure, undefined);
+  assert.equal(serialized.includes("project-local"), false);
+  assert.equal(metricTotal(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TRACE_CONTEXT_PROPAGATION_FAILURES_TOTAL), 0);
 });
 
 test("session_start resume reads only startup header and emits no replayed telemetry by default", async () => {
@@ -470,9 +768,11 @@ test("session header reader parses the first JSONL line and ignores historical e
 
 test("session_shutdown ends root span, updates active workflow metrics, emits lifecycle logs, and flushes with timeout", async () => {
   const pi = createFakePi();
+  let nowMs = 1_000;
   let telemetry;
   registerHandlers(pi, {
     loadConfig,
+    now: () => nowMs,
     startTelemetry: async ({ lineage }) => {
       telemetry = createFakeTelemetry(lineage);
       return telemetry;
@@ -480,6 +780,7 @@ test("session_shutdown ends root span, updates active workflow metrics, emits li
   });
 
   await pi.handlers.get("session_start")({ sessionId: "session-2" }, { cwd: "/workspace/demo" });
+  nowMs = 1_450;
   await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
 
   assert.equal(telemetry.tracer.spans[0].ended, true);
@@ -495,6 +796,14 @@ test("session_shutdown ends root span, updates active workflow metrics, emits li
   assert.ok(
     telemetry.meter.records.some(
       record => record.name === OBSERVME_COUNTER_METRIC_NAMES.WORKFLOWS_COMPLETED_TOTAL && record.value === 1,
+    ),
+  );
+  assert.ok(
+    telemetry.meter.records.some(
+      record =>
+        record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.WORKFLOW_DURATION_MS &&
+        record.value === 450 &&
+        record.attributes.status === "ok",
     ),
   );
 });
@@ -741,8 +1050,7 @@ test("final lifecycle regression keeps runtime state consistent after duplicate 
     },
   });
 
-  // Regression for specs/spec-review-pi-extension-first-pass-tasks-3.md:
-  // duplicate starts must clean up the prior controller before replacing public runtime state.
+  // Duplicate starts must clean up the prior controller before replacing public runtime state.
   await pi.handlers.get("session_start")({ sessionId: "session-final-first" }, { cwd: "/workspace/demo" });
   await pi.handlers.get("agent_start")({ source: "user" }, {});
   await pi.handlers.get("turn_start")({ turnIndex: 1 }, {});
@@ -1124,7 +1432,14 @@ test("tool handlers create pi.tool.call spans, close success/error status, and k
 
   await pi.handlers.get("tool_execution_start")({ toolCallId: "tool-2", toolName: "fetch", toolCategory: "network" }, {});
   await pi.handlers.get("tool_execution_end")(
-    { toolCallId: "tool-2", toolName: "fetch", toolCategory: "network", success: false, errorClass: "TimeoutError" },
+    {
+      toolCallId: "tool-2",
+      toolName: "fetch",
+      toolCategory: "network",
+      success: false,
+      errorClass: "TimeoutError",
+      errorMessage: "raw timeout detail",
+    },
     {},
   );
 
@@ -1153,6 +1468,55 @@ test("tool handlers create pi.tool.call spans, close success/error status, and k
   assert.equal(failureSpan.attributes["pi.tool.success"], false);
   assert.equal(failureSpan.attributes["pi.tool.error"], true);
   assert.equal(failureSpan.attributes["pi.tool.error_class"], "TimeoutError");
+
+  const successLog = telemetry.logger.records.find(record => record.body === LOG_EVENT_NAMES.TOOL_CALL_COMPLETED);
+  const failureLog = telemetry.logger.records.find(record => record.body === LOG_EVENT_NAMES.TOOL_CALL_FAILED);
+  assert.ok(successLog);
+  assert.ok(failureLog);
+  assert.equal(successLog.attributes[LOG_ATTRIBUTES.EVENT_NAME], LOG_EVENT_NAMES.TOOL_CALL_COMPLETED);
+  assert.equal(successLog.attributes[LOG_ATTRIBUTES.EVENT_CATEGORY], "lifecycle");
+  assert.equal(successLog.attributes[LOG_ATTRIBUTES.PI_SESSION_ID], "session-tools");
+  assert.equal(successLog.attributes[LOG_ATTRIBUTES.PI_WORKFLOW_ID], telemetry.lineage.workflowId);
+  assert.equal(successLog.attributes[LOG_ATTRIBUTES.PI_WORKFLOW_ROOT_AGENT_ID], telemetry.lineage.workflowRootAgentId);
+  assert.equal(successLog.attributes[LOG_ATTRIBUTES.PI_AGENT_ID], telemetry.lineage.agentId);
+  assert.equal(successLog.attributes[LOG_ATTRIBUTES.PI_AGENT_PARENT_ID], telemetry.lineage.parentAgentId);
+  assert.equal(successLog.attributes[LOG_ATTRIBUTES.PI_AGENT_ROOT_ID], telemetry.lineage.rootAgentId);
+  assert.equal(successLog.attributes[LOG_ATTRIBUTES.PI_AGENT_RUN_ID], successSpan.attributes[COMMON_SPAN_ATTRIBUTES.PI_AGENT_RUN_ID]);
+  assert.equal(successLog.attributes[LOG_ATTRIBUTES.PI_TURN_ID], successSpan.attributes[LOG_ATTRIBUTES.PI_TURN_ID]);
+  assert.equal(successLog.attributes[TOOL_ATTRIBUTES.PI_TOOL_CALL_ID], "tool-1");
+  assert.equal(successLog.attributes[TOOL_ATTRIBUTES.PI_TOOL_NAME], "read");
+  assert.equal(successLog.attributes[TOOL_ATTRIBUTES.PI_TOOL_CATEGORY], "filesystem");
+  assert.equal(successLog.attributes[LOG_ATTRIBUTES.TRACE_ID], successSpan.spanContext().traceId);
+  assert.equal(successLog.attributes[LOG_ATTRIBUTES.SPAN_ID], successSpan.spanContext().spanId);
+  assert.equal(successLog.attributes[TOOL_ATTRIBUTES.PI_TOOL_SUCCESS], true);
+  assert.equal(successLog.attributes[LOG_ATTRIBUTES.ERROR_TYPE], undefined);
+
+  assert.equal(failureLog.attributes[LOG_ATTRIBUTES.EVENT_NAME], LOG_EVENT_NAMES.TOOL_CALL_FAILED);
+  assert.equal(failureLog.attributes[TOOL_ATTRIBUTES.PI_TOOL_CALL_ID], "tool-2");
+  assert.equal(failureLog.attributes[TOOL_ATTRIBUTES.PI_TOOL_NAME], "fetch");
+  assert.equal(failureLog.attributes[TOOL_ATTRIBUTES.PI_TOOL_CATEGORY], "network");
+  assert.equal(failureLog.attributes[LOG_ATTRIBUTES.TRACE_ID], failureSpan.spanContext().traceId);
+  assert.equal(failureLog.attributes[LOG_ATTRIBUTES.SPAN_ID], failureSpan.spanContext().spanId);
+  assert.equal(failureLog.attributes[TOOL_ATTRIBUTES.PI_TOOL_SUCCESS], false);
+  assert.equal(failureLog.attributes[TOOL_ATTRIBUTES.PI_TOOL_ERROR_CLASS], "TimeoutError");
+  assert.equal(failureLog.attributes[LOG_ATTRIBUTES.ERROR_TYPE], "TimeoutError");
+
+  const operationalToolLogs = JSON.stringify([successLog, failureLog]);
+  assert.doesNotMatch(operationalToolLogs, /secret123|\/workspace\/demo\/README\.md|file contents|raw timeout detail/u);
+  for (const contentAttribute of [
+    TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_HASH,
+    TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_SIZE,
+    TOOL_ATTRIBUTES.PI_TOOL_RESULT_HASH,
+    TOOL_ATTRIBUTES.PI_TOOL_RESULT_SIZE,
+    TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_REDACTED,
+    TOOL_ATTRIBUTES.PI_TOOL_RESULT_REDACTED,
+    TOOL_ATTRIBUTES.GEN_AI_TOOL_CALL_ARGUMENTS,
+    TOOL_ATTRIBUTES.GEN_AI_TOOL_CALL_RESULT,
+  ]) {
+    assert.equal(successLog.attributes[contentAttribute], undefined);
+    assert.equal(failureLog.attributes[contentAttribute], undefined);
+  }
+
   assertMetricValue(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TOOL_CALLS_TOTAL, 1);
   assertMetricValue(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TOOL_FAILURES_TOTAL, 1);
   assertToolMetricLabelsAreLowCardinality(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TOOL_CALLS_TOTAL);
@@ -1381,11 +1745,13 @@ test("bash handlers create pi.bash.execution spans with exit/cancel/truncation a
   assertBashMetricLabelsAreLowCardinality(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.BASH_FAILURES_TOTAL);
 });
 
-test("user_bash pre-execution events do not emit completed bash telemetry", async () => {
+test("user_bash spans record elapsed execution time from the injected clock", async () => {
   const pi = createFakePi();
   let telemetry;
+  let nowMs = 1_000;
   registerHandlers(pi, {
     loadConfig,
+    now: () => nowMs,
     startTelemetry: async ({ lineage }) => {
       telemetry = createFakeTelemetry(lineage);
       return telemetry;
@@ -1397,18 +1763,179 @@ test("user_bash pre-execution events do not emit completed bash telemetry", asyn
   await pi.handlers.get("turn_start")({ turnIndex: 1 }, {});
   await pi.handlers.get("user_bash")({ command: "echo ok", cwd: "/workspace/demo", excludeFromContext: false }, {});
 
-  assert.equal(telemetry.tracer.spans.some(span => span.name === SPAN_NAMES.PI_BASH_EXECUTION), false);
+  const pendingSpan = telemetry.tracer.spans.find(span => span.name === SPAN_NAMES.PI_BASH_EXECUTION);
+  assert.ok(pendingSpan);
+  assert.equal(pendingSpan.ended, false);
+  assert.ok(telemetry.pendingUserBash);
   assertNoMetricRecord(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.BASH_EXECUTIONS_TOTAL);
+  assertNoMetricRecord(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.BASH_DURATION_MS);
   assertObservedOperation(telemetry.meter.records, "user_bash");
 
+  nowMs += 250;
   await pi.handlers.get("bashExecution")({ role: "bashExecution", command: "echo ok", output: "ok", exitCode: 0, cancelled: false, truncated: false }, {});
 
   const bashSpans = telemetry.tracer.spans.filter(span => span.name === SPAN_NAMES.PI_BASH_EXECUTION);
+  const durationRecords = telemetry.meter.records.filter(record => record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.BASH_DURATION_MS);
   assert.equal(bashSpans.length, 1);
+  assert.equal(bashSpans[0], pendingSpan);
+  assert.equal(bashSpans[0].ended, true);
   assert.equal(bashSpans[0].status.code, 1);
   assert.equal(bashSpans[0].attributes["pi.bash.exit_code"], 0);
   assert.equal(bashSpans[0].attributes["pi.bash.output.size"], "ok".length);
+  assert.equal(durationRecords.length, 1);
+  assert.equal(durationRecords[0].value, 250);
+  assert.equal(telemetry.pendingUserBash, undefined);
   assertMetricRecordCount(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.BASH_EXECUTIONS_TOTAL, 1);
+});
+
+test("correlated failed, cancelled, and truncated user bash completions retain outcomes and durations", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  let nowMs = 2_000;
+  registerHandlers(pi, {
+    loadConfig,
+    now: () => nowMs,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-user-bash-outcomes" }, { cwd: "/workspace/demo" });
+
+  await pi.handlers.get("user_bash")({ command: "false", cwd: "/workspace/demo", excludeFromContext: false }, {});
+  nowMs += 40;
+  await pi.handlers.get("bashExecution")({ role: "bashExecution", command: "false", output: "failed", exitCode: 1, cancelled: false, truncated: false }, {});
+
+  await pi.handlers.get("user_bash")({ command: "sleep 10", cwd: "/workspace/demo", excludeFromContext: false }, {});
+  nowMs += 60;
+  await pi.handlers.get("bashExecution")({ role: "bashExecution", command: "sleep 10", output: "", cancelled: true, truncated: false }, {});
+
+  await pi.handlers.get("user_bash")({ command: "printf lots", cwd: "/workspace/demo", excludeFromContext: true }, {});
+  nowMs += 80;
+  await pi.handlers.get("bashExecution")({ role: "bashExecution", command: "printf lots", output: "partial", exitCode: 0, cancelled: false, truncated: true }, {});
+
+  const bashSpans = telemetry.tracer.spans.filter(span => span.name === SPAN_NAMES.PI_BASH_EXECUTION);
+  const durations = telemetry.meter.records
+    .filter(record => record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.BASH_DURATION_MS)
+    .map(record => record.value);
+
+  assert.deepEqual(durations, [40, 60, 80]);
+  assert.equal(bashSpans[0].status.code, 2);
+  assert.equal(bashSpans[0].status.message, "non_zero_exit");
+  assert.equal(bashSpans[1].status.code, 2);
+  assert.equal(bashSpans[1].status.message, "cancelled");
+  assert.equal(bashSpans[2].status.code, 1);
+  assert.equal(bashSpans[2].attributes["pi.bash.truncated"], true);
+  assert.equal(telemetry.pendingUserBash, undefined);
+  assertMetricRecordCount(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.BASH_FAILURES_TOTAL, 2);
+});
+
+test("unmatched bash completions omit duration unless explicit event timestamps are valid", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-unmatched-bash" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("bashExecution")({ role: "bashExecution", command: "echo unmatched", output: "ok", exitCode: 0, timestamp: 5_000 }, {});
+  assertNoMetricRecord(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.BASH_DURATION_MS);
+
+  await pi.handlers.get("bashExecution")({ role: "bashExecution", command: "echo timestamped", output: "ok", exitCode: 0, startedAtMs: 5_000, timestamp: 5_250 }, {});
+  await pi.handlers.get("bashExecution")({ role: "bashExecution", command: "echo backwards", output: "ok", exitCode: 0, startedAtMs: 6_000, timestamp: 5_500 }, {});
+
+  const durations = telemetry.meter.records
+    .filter(record => record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.BASH_DURATION_MS)
+    .map(record => record.value);
+  assert.deepEqual(durations, [250]);
+  assertMetricRecordCount(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.BASH_EXECUTIONS_TOTAL, 3);
+});
+
+test("overlapping user_bash pre-events evict ambiguous state without retaining raw commands or miscorrelating completion", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-overlapping-bash" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("user_bash")({ command: "echo password=first-secret", cwd: "/workspace/demo", excludeFromContext: false }, {});
+  const firstSpan = telemetry.pendingUserBash.span;
+  assert.doesNotMatch(JSON.stringify(telemetry.pendingUserBash), /first-secret/u);
+
+  await pi.handlers.get("user_bash")({ command: "echo token=second-secret", cwd: "/workspace/demo", excludeFromContext: false }, {});
+
+  assert.equal(firstSpan.ended, true);
+  assert.equal(firstSpan.status.code, 2);
+  assert.equal(firstSpan.status.message, "bash_execution_incomplete");
+  assert.equal(firstSpan.attributes[COMMON_SPAN_ATTRIBUTES.OBSERVME_EVICTED], true);
+  assert.equal(telemetry.pendingUserBash, undefined);
+  const dropLog = telemetry.logger.records.find(record => record.body === LOG_EVENT_NAMES.TELEMETRY_DROPPED && record.attributes?.reason === "bash_overlap_ambiguous");
+  assert.equal(dropLog?.attributes?.operation, "bash_execution");
+
+  await pi.handlers.get("bashExecution")({ role: "bashExecution", command: "echo password=first-secret", output: "ok", exitCode: 0 }, {});
+
+  const bashSpans = telemetry.tracer.spans.filter(span => span.name === SPAN_NAMES.PI_BASH_EXECUTION);
+  assert.equal(bashSpans.length, 2);
+  assert.equal(bashSpans[1].ended, true);
+  assertNoMetricRecord(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.BASH_DURATION_MS);
+  assert.doesNotMatch(JSON.stringify({ spans: bashSpans, logs: telemetry.logger.records }), /first-secret|second-secret/u);
+});
+
+test("session shutdown closes an incomplete pending user bash span and clears bounded state", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-pending-bash-shutdown" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("user_bash")({ command: "sleep 10", cwd: "/workspace/demo", excludeFromContext: false }, {});
+  const pendingSpan = telemetry.pendingUserBash.span;
+
+  await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
+
+  assert.equal(pendingSpan.ended, true);
+  assert.equal(pendingSpan.status.code, 2);
+  assert.equal(pendingSpan.status.message, "bash_execution_incomplete");
+  assert.equal(pendingSpan.attributes[COMMON_SPAN_ATTRIBUTES.OBSERVME_EVICTED], false);
+  assert.equal(telemetry.pendingUserBash, undefined);
+  assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.TELEMETRY_DROPPED && record.attributes?.reason === "bash_session_shutdown"));
+  assertActiveSpanValues(telemetry.meter.records, "bash_execution", [1, -1]);
+});
+
+test("tool-driven bash remains a tool span and is not counted as user bash", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-tool-user-bash" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("tool_execution_start")({ toolCallId: "bash-tool", toolName: "bash", args: { command: "pwd" } }, {});
+  await pi.handlers.get("tool_execution_end")({ toolCallId: "bash-tool", toolName: "bash", success: true, result: "ok" }, {});
+
+  assert.equal(telemetry.tracer.spans.filter(span => span.name === SPAN_NAMES.PI_TOOL_CALL).length, 1);
+  assert.equal(telemetry.tracer.spans.filter(span => span.name === SPAN_NAMES.PI_BASH_EXECUTION).length, 0);
+  assertMetricRecordCount(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TOOL_CALLS_TOTAL, 1);
+  assertNoMetricRecord(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.BASH_EXECUTIONS_TOTAL);
 });
 
 test("bash command and output are absent by default and redacted when capture is explicitly enabled", async () => {
@@ -1694,6 +2221,34 @@ test("session_tree includes branch summaryEntry and prior tree-preparation field
   assert.equal(Object.values(branchSpan.attributes).includes("Branch explored an alternate implementation path."), false);
   assert.equal(Object.values(branchSpan.attributes).includes("src/pi/handlers.ts"), false);
   assertMetricIncrementedWithoutIds(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.BRANCHES_TOTAL);
+});
+
+test("failed agent runs increment the bounded error metric once while successful runs do not", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-agent-run-errors" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("agent_start")({ agentRunId: "agent-run-failed", source: "user" }, {});
+  await pi.handlers.get("agent_end")({ agentRunId: "agent-run-failed", status: "failed" }, {});
+  await pi.handlers.get("agent_end")({ agentRunId: "agent-run-failed", status: "failed" }, {});
+  await pi.handlers.get("agent_start")({ agentRunId: "agent-run-ok", source: "user" }, {});
+  await pi.handlers.get("agent_end")({ agentRunId: "agent-run-ok", status: "ok" }, {});
+
+  const errorRecords = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_COUNTER_METRIC_NAMES.AGENT_RUN_ERRORS_TOTAL,
+  );
+  assert.equal(errorRecords.length, 1);
+  assert.equal(errorRecords[0].value, 1);
+  assert.deepEqual(Object.keys(errorRecords[0].attributes).sort(), ["agent_role", "environment"]);
+
+  await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
 });
 
 test("agent-run and turn metrics increment without high-cardinality ids as labels", async () => {
@@ -2136,9 +2691,11 @@ function hasReplayedTelemetry(telemetry) {
 
 test("failed root workflow shutdown records workflow failure telemetry", async () => {
   const pi = createFakePi();
+  let nowMs = 2_000;
   let telemetry;
   registerHandlers(pi, {
     loadConfig,
+    now: () => nowMs,
     startTelemetry: async ({ lineage }) => {
       telemetry = createFakeTelemetry(lineage);
       return telemetry;
@@ -2146,6 +2703,7 @@ test("failed root workflow shutdown records workflow failure telemetry", async (
   });
 
   await pi.handlers.get("session_start")({ sessionId: "session-3" }, { cwd: "/workspace/demo" });
+  nowMs = 2_325;
   await pi.handlers.get("session_shutdown")({ status: "failed", error: "boom" }, {});
 
   assert.equal(telemetry.tracer.spans[0].ended, true);
@@ -2154,6 +2712,14 @@ test("failed root workflow shutdown records workflow failure telemetry", async (
   assert.ok(
     telemetry.meter.records.some(
       record => record.name === OBSERVME_COUNTER_METRIC_NAMES.WORKFLOW_ERRORS_TOTAL && record.value === 1,
+    ),
+  );
+  assert.ok(
+    telemetry.meter.records.some(
+      record =>
+        record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.WORKFLOW_DURATION_MS &&
+        record.value === 325 &&
+        record.attributes.status === "error",
     ),
   );
 });

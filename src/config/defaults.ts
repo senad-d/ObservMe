@@ -1,3 +1,4 @@
+import { RESOURCE_ATTRIBUTES } from "../semconv/attributes.ts";
 import type { ObservMeConfig } from "./schema.ts";
 
 export const defaultObservMeConfig = {
@@ -19,10 +20,10 @@ export const defaultObservMeConfig = {
   },
   resource: {
     attributes: {
-      "service.name": "observme-pi-extension",
-      "observme.tenant.id": "platform",
-      "pi.project.name": "my-project",
-      "deployment.environment.name": "production",
+      [RESOURCE_ATTRIBUTES.SERVICE_NAME]: "observme-pi-extension",
+      [RESOURCE_ATTRIBUTES.OBSERVME_TENANT_ID]: "platform",
+      [RESOURCE_ATTRIBUTES.PI_PROJECT_NAME]: "my-project",
+      [RESOURCE_ATTRIBUTES.DEPLOYMENT_ENVIRONMENT_NAME]: "production",
     },
   },
   workflow: {

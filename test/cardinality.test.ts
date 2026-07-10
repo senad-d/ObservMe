@@ -12,11 +12,14 @@ import {
   type ObservMeTelemetrySession,
 } from "../src/pi/handlers.ts";
 import {
+  completeSubagentSpawn,
   failSubagentSpawn,
   observeTrustedSubagentLineage,
   recordAgentJoin,
   recordAgentWait,
   startSubagentSpawn,
+  type AgentWaitJoinOptions,
+  type StartSubagentSpawnOptions,
   type SubagentTelemetrySession,
 } from "../src/pi/subagent-spawn.ts";
 import { isPlainRecord } from "./support/telemetry-types.ts";
@@ -114,7 +117,7 @@ function metricInventoryRecords() {
       spawn_type: "command",
       spawn_reason: "delegated_task",
     }),
-    ...recordsFor(waitJoinMetricNames(), { agent_role: "root", subagent_depth: "1", status: "failed", reason: "child_completion" }),
+    ...recordsFor(waitJoinMetricNames(), { agent_role: "root", subagent_depth: "1", status: "failed", reason: "child_running" }),
     ...recordsFor(orphanMetricNames(), { status: "orphaned", reason: "orphaned" }),
     ...recordsFor(traceContextMetricNames(), { agent_role: "root", subagent_depth: "1", reason: "trace_context_fallback" }),
     ...recordsFor(subagentFailureMetricNames(), { spawn_type: "command", error_class: "spawn_error" }),
@@ -495,4 +498,47 @@ test("representative emitted metric labels exclude IDs, trace/span context, and 
   const records = [...(await recordHandlerErrorMetric()), ...recordSubagentMetrics()];
 
   assertMetricRecordsUseOnlyAllowedLabels(records);
+});
+
+test("hundreds of arbitrary spawn and wait reasons collapse to bounded enum labels", () => {
+  const telemetry = createTelemetrySession();
+
+  for (let index = 0; index < 300; index += 1) {
+    const started = startSubagentSpawn(
+      telemetry,
+      {
+        spawnId: `spawn-reason-${index}`,
+        childAgentId: `child-reason-${index}`,
+        spawnType: "command",
+        spawnReason: `external_spawn_reason_${index}`,
+      } as unknown as StartSubagentSpawnOptions,
+    );
+    completeSubagentSpawn(telemetry, started.spawnId, { childAgentId: started.childAgentId });
+    recordAgentWait(
+      telemetry,
+      {
+        id: `wait-reason-${index}`,
+        childAgentId: started.childAgentId,
+        childStatus: "active",
+        joinStatus: `external_status_${index}`,
+        reason: `external_wait_reason_${index}`,
+        durationMs: index,
+      } as unknown as AgentWaitJoinOptions,
+    );
+  }
+
+  const spawnRecords = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_COUNTER_METRIC_NAMES.SUBAGENTS_SPAWNED_TOTAL,
+  );
+  const waitRecords = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_WAIT_DURATION_MS,
+  );
+  const spawnReasons = new Set(spawnRecords.map(record => record.attributes.spawn_reason));
+  const waitReasons = new Set(waitRecords.map(record => record.attributes.reason));
+  const waitStatuses = new Set(waitRecords.map(record => record.attributes.status));
+
+  assert.deepEqual([...spawnReasons], ["unknown"]);
+  assert.deepEqual([...waitReasons], ["unknown"]);
+  assert.deepEqual([...waitStatuses], ["unknown"]);
+  assert.doesNotMatch(JSON.stringify([...spawnRecords, ...waitRecords]), /external_(?:spawn|wait)_reason_/u);
 });

@@ -5,7 +5,7 @@
     "childAgentId": "fixture-child-agent",
     "childStatus": "completed",
     "joinStatus": "waiting",
-    "reason": "child_completion",
+    "reason": "child_running",
     "durationMs": 42
   },
   "join": {
@@ -14,7 +14,7 @@
     "childAgentId": "fixture-child-agent",
     "childStatus": "completed",
     "joinStatus": "completed",
-    "reason": "child_result",
+    "reason": "dependency",
     "failurePropagated": false,
     "durationMs": 55
   }

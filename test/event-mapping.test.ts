@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { trace } from "@opentelemetry/api";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import { COMMON_SPAN_ATTRIBUTES, LOG_ATTRIBUTES, TOOL_ATTRIBUTES } from "../src/semconv/attributes.ts";
 import type {
   Handler,
   ObservMeHandlerContext,
@@ -399,6 +400,10 @@ function assertCanonicalHandlerSpans(telemetry: FakeTelemetrySession): void {
   assert.equal(toolSpan.attributes["pi.tool.name"], "read");
   assert.equal(toolSpan.attributes["pi.tool.error_class"], "ToolError");
   assert.equal(bashSpan.attributes["pi.bash.exit_code"], 1);
+  assert.equal(
+    telemetry.meter.records.find(record => record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.BASH_DURATION_MS)?.value,
+    250,
+  );
   assert.equal(compactionSpan.attributes["pi.compaction.first_kept_entry_id"], "entry-kept-123");
   assert.equal(compactionSpan.attributes["pi.compaction.tokens_before"], 50000);
   assert.equal(branchSpan.attributes["pi.branch.from_id"], "leaf-prev");
@@ -419,6 +424,46 @@ function assertModelThinkingLogs(telemetry: FakeTelemetrySession): void {
   assert.equal(modelLogs[1]?.attributes?.["pi.model.id.current"], "claude-updated");
   assert.equal(thinkingLogs[0]?.attributes?.["pi.thinking.level.current"], "high");
   assert.equal(thinkingLogs[1]?.attributes?.["pi.thinking.level.current"], "medium");
+}
+
+function assertToolCompletionLog(telemetry: FakeTelemetrySession): void {
+  const toolSpan = findSpan(telemetry, SPAN_NAMES.PI_TOOL_CALL);
+  const record = telemetry.logger.records.find(log => log.body === LOG_EVENT_NAMES.TOOL_CALL_FAILED);
+
+  assert.ok(record, "expected failed tool completion log");
+  assert.equal(record.attributes?.[LOG_ATTRIBUTES.EVENT_NAME], LOG_EVENT_NAMES.TOOL_CALL_FAILED);
+  assert.equal(record.attributes?.[LOG_ATTRIBUTES.EVENT_CATEGORY], "lifecycle");
+  assert.equal(record.attributes?.[LOG_ATTRIBUTES.PI_SESSION_ID], toolSpan.attributes[COMMON_SPAN_ATTRIBUTES.PI_SESSION_ID]);
+  assert.equal(record.attributes?.[LOG_ATTRIBUTES.PI_WORKFLOW_ID], toolSpan.attributes[COMMON_SPAN_ATTRIBUTES.PI_WORKFLOW_ID]);
+  assert.equal(
+    record.attributes?.[LOG_ATTRIBUTES.PI_WORKFLOW_ROOT_AGENT_ID],
+    toolSpan.attributes[COMMON_SPAN_ATTRIBUTES.PI_WORKFLOW_ROOT_AGENT_ID],
+  );
+  assert.equal(record.attributes?.[LOG_ATTRIBUTES.PI_AGENT_ID], toolSpan.attributes[COMMON_SPAN_ATTRIBUTES.PI_AGENT_ID]);
+  assert.equal(record.attributes?.[LOG_ATTRIBUTES.PI_AGENT_PARENT_ID], toolSpan.attributes[COMMON_SPAN_ATTRIBUTES.PI_AGENT_PARENT_ID]);
+  assert.equal(record.attributes?.[LOG_ATTRIBUTES.PI_AGENT_ROOT_ID], toolSpan.attributes[COMMON_SPAN_ATTRIBUTES.PI_AGENT_ROOT_ID]);
+  assert.equal(record.attributes?.[LOG_ATTRIBUTES.PI_AGENT_RUN_ID], toolSpan.attributes[COMMON_SPAN_ATTRIBUTES.PI_AGENT_RUN_ID]);
+  assert.equal(record.attributes?.[LOG_ATTRIBUTES.PI_TURN_ID], toolSpan.attributes[LOG_ATTRIBUTES.PI_TURN_ID]);
+  assert.equal(record.attributes?.[TOOL_ATTRIBUTES.PI_TOOL_CALL_ID], toolSpan.attributes[TOOL_ATTRIBUTES.PI_TOOL_CALL_ID]);
+  assert.equal(record.attributes?.[TOOL_ATTRIBUTES.PI_TOOL_NAME], toolSpan.attributes[TOOL_ATTRIBUTES.PI_TOOL_NAME]);
+  assert.equal(record.attributes?.[TOOL_ATTRIBUTES.PI_TOOL_CATEGORY], toolSpan.attributes[TOOL_ATTRIBUTES.PI_TOOL_CATEGORY]);
+  assert.equal(record.attributes?.[LOG_ATTRIBUTES.TRACE_ID], toolSpan.spanContext().traceId);
+  assert.equal(record.attributes?.[LOG_ATTRIBUTES.SPAN_ID], toolSpan.spanContext().spanId);
+  assert.equal(record.attributes?.[TOOL_ATTRIBUTES.PI_TOOL_SUCCESS], false);
+  assert.equal(record.attributes?.[LOG_ATTRIBUTES.ERROR_TYPE], "ToolError");
+
+  for (const contentAttribute of [
+    TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_HASH,
+    TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_SIZE,
+    TOOL_ATTRIBUTES.PI_TOOL_RESULT_HASH,
+    TOOL_ATTRIBUTES.PI_TOOL_RESULT_SIZE,
+    TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_REDACTED,
+    TOOL_ATTRIBUTES.PI_TOOL_RESULT_REDACTED,
+    TOOL_ATTRIBUTES.GEN_AI_TOOL_CALL_ARGUMENTS,
+    TOOL_ATTRIBUTES.GEN_AI_TOOL_CALL_RESULT,
+  ]) {
+    assert.equal(record.attributes?.[contentAttribute], undefined);
+  }
 }
 
 function assertRedactedContentPresent(telemetry: FakeTelemetrySession): void {
@@ -475,6 +520,7 @@ test("handler fixtures map Pi events to canonical spans, attributes, parenting, 
   const telemetry = requireTelemetry(harness);
   assertCanonicalHandlerSpans(telemetry);
   assertModelThinkingLogs(telemetry);
+  assertToolCompletionLog(telemetry);
   assertDefaultContentAbsent(telemetry);
   assertNoForbiddenMetricLabels(telemetry.meter.records);
   assertNoHiddenContentExported(telemetry);
@@ -499,6 +545,7 @@ test("handler fixtures export redacted content only when capture is explicitly e
 
   const telemetry = requireTelemetry(harness);
   assertRedactedContentPresent(telemetry);
+  assertToolCompletionLog(telemetry);
   assertNoHiddenContentExported(telemetry);
   assertNoForbiddenMetricLabels(telemetry.meter.records);
 });

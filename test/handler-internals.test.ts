@@ -15,13 +15,16 @@ import {
   bashErrorClass,
   bashExecutionFailed,
   buildBashExecutionAttributes,
+  buildBashPreExecutionAttributes,
   buildBranchAttributes,
   buildBranchPreparationState,
   buildCompactionAttributes,
   buildLlmFinalAttributes,
   buildLlmRequestAttributes,
   buildToolCallInputAttributes,
+  buildToolCompletionLogAttributes,
   buildToolFinalAttributes,
+  buildToolLogCorrelationAttributes,
   buildToolResultAttributes,
   extractAssistantText,
   extractPayloadPromptText,
@@ -36,11 +39,15 @@ import {
   recordOptionalPromptContent,
   recordOptionalToolArguments,
   recordOptionalToolResult,
+  readBashCompletionTimestampMs,
+  readBashPreExecutionTimestampMs,
+  resolveBashEventDurationMs,
+  resolveStandaloneBashEventDurationMs,
   safeJsonLength,
   serializeToolPayload,
   toolMetricLabels,
 } from "../src/pi/handler-internals.ts";
-import type { ObservMeTelemetrySession } from "../src/pi/handlers.ts";
+import type { ObservMeTelemetrySession, ToolCallState } from "../src/pi/handlers.ts";
 import { mergeRecordConfig } from "./support/telemetry-types.ts";
 import type { TestLogRecord } from "./support/telemetry-types.ts";
 
@@ -252,6 +259,39 @@ test("tool attribute builders normalize identity, result payloads, failures, and
     [TOOL_ATTRIBUTES.PI_TOOL_ERROR]: false,
   });
   assert.deepEqual(toolMetricLabels(callAttributes), { tool_name: "read.file", tool_category: "filesystem" });
+
+  const span = createFakeSpan() as unknown as ToolCallState["span"];
+  const correlationAttributes = buildToolLogCorrelationAttributes(session, span, {
+    ...callAttributes,
+    [TOOL_ATTRIBUTES.PI_TOOL_CALL_ID]: "tool-call-1",
+  });
+  const completionAttributes = buildToolCompletionLogAttributes(
+    { span, labels: toolMetricLabels(callAttributes), completionLogAttributes: correlationAttributes },
+    {
+      ...buildToolFinalAttributes({ success: false, errorClass: "TimeoutError" }),
+      [TOOL_ATTRIBUTES.PI_TOOL_RESULT_REDACTED]: "raw private result",
+    },
+  );
+
+  assert.equal(completionAttributes[LOG_ATTRIBUTES.PI_SESSION_ID], "session-123");
+  assert.equal(completionAttributes[LOG_ATTRIBUTES.PI_WORKFLOW_ID], "workflow-1");
+  assert.equal(completionAttributes[LOG_ATTRIBUTES.PI_WORKFLOW_ROOT_AGENT_ID], "agent-root");
+  assert.equal(completionAttributes[LOG_ATTRIBUTES.PI_AGENT_ID], "agent-1");
+  assert.equal(completionAttributes[LOG_ATTRIBUTES.PI_AGENT_PARENT_ID], "agent-parent");
+  assert.equal(completionAttributes[LOG_ATTRIBUTES.PI_AGENT_ROOT_ID], "agent-root");
+  assert.equal(completionAttributes[LOG_ATTRIBUTES.PI_AGENT_RUN_ID], "run-1");
+  assert.equal(completionAttributes[LOG_ATTRIBUTES.PI_TURN_ID], "turn-1");
+  assert.equal(completionAttributes[TOOL_ATTRIBUTES.PI_TOOL_CALL_ID], "tool-call-1");
+  assert.equal(completionAttributes[TOOL_ATTRIBUTES.PI_TOOL_NAME], "read.file");
+  assert.equal(completionAttributes[TOOL_ATTRIBUTES.PI_TOOL_CATEGORY], "filesystem");
+  assert.equal(completionAttributes[LOG_ATTRIBUTES.TRACE_ID], "11111111111111111111111111111111");
+  assert.equal(completionAttributes[LOG_ATTRIBUTES.SPAN_ID], "2222222222222222");
+  assert.equal(completionAttributes[TOOL_ATTRIBUTES.PI_TOOL_SUCCESS], false);
+  assert.equal(completionAttributes[TOOL_ATTRIBUTES.PI_TOOL_ERROR_CLASS], "TimeoutError");
+  assert.equal(completionAttributes[LOG_ATTRIBUTES.ERROR_TYPE], "TimeoutError");
+  assert.equal(completionAttributes[TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_HASH], undefined);
+  assert.equal(completionAttributes[TOOL_ATTRIBUTES.PI_TOOL_RESULT_REDACTED], undefined);
+  assert.doesNotMatch(JSON.stringify(completionAttributes), /private\.txt|raw private result/u);
 });
 
 test("tool payload serialization avoids default object stringification fallbacks", () => {
@@ -280,7 +320,12 @@ test("bash payload normalization handles nested messages, streams, status, and p
     },
   };
 
+  const preAttributes = buildBashPreExecutionAttributes(event, session);
   const attributes = buildBashExecutionAttributes(event, session);
+  assert.match(String(preAttributes[BASH_ATTRIBUTES.PI_BASH_COMMAND_HASH]), hexadecimalHash);
+  assert.equal(preAttributes[BASH_ATTRIBUTES.PI_BASH_EXIT_CODE], undefined);
+  assert.equal(preAttributes[BASH_ATTRIBUTES.PI_BASH_CANCELLED], undefined);
+  assert.equal(preAttributes[BASH_ATTRIBUTES.PI_BASH_TRUNCATED], undefined);
   assert.match(String(attributes[BASH_ATTRIBUTES.PI_BASH_COMMAND_HASH]), hexadecimalHash);
   assert.equal(attributes[BASH_ATTRIBUTES.PI_BASH_EXIT_CODE], 2);
   assert.equal(attributes[BASH_ATTRIBUTES.PI_BASH_CANCELLED], false);
@@ -303,6 +348,31 @@ test("bash payload normalization handles nested messages, streams, status, and p
   assert.equal(hasBashCompletionResult(event), true);
   assert.equal(hasBashCompletionResult({ role: "bashExecution", command: "echo ok", output: "ok" }), true);
   assert.equal(hasBashCompletionResult({ role: "bashExecution", command: "echo ok", result: { exitCode: 0 } }), true);
+});
+
+test("bash timestamp helpers accept trustworthy numeric and ISO pairs without fabricating elapsed time", () => {
+  const preEvent = { command: "echo ok", timestamp: 10_000 };
+  const completion = { role: "bashExecution", command: "echo ok", startedAtMs: 10_000, timestamp: 10_250, exitCode: 0 };
+  const nestedCompletion = {
+    entry: {
+      timestamp: "2026-07-10T12:00:00.250Z",
+      message: {
+        role: "bashExecution",
+        command: "echo ok",
+        output: "ok",
+        startedAt: "2026-07-10T12:00:00.000Z",
+      },
+    },
+  };
+
+  assert.equal(readBashPreExecutionTimestampMs(preEvent), 10_000);
+  assert.equal(readBashCompletionTimestampMs(completion), 10_250);
+  assert.equal(resolveBashEventDurationMs(readBashPreExecutionTimestampMs(preEvent), completion), 250);
+  assert.equal(resolveStandaloneBashEventDurationMs(completion), 250);
+  assert.equal(resolveStandaloneBashEventDurationMs(nestedCompletion), 250);
+  assert.equal(resolveStandaloneBashEventDurationMs({ startedAtMs: 11_000, timestamp: 10_000 }), undefined);
+  assert.equal(resolveStandaloneBashEventDurationMs({ timestamp: 10_000 }), undefined);
+  assert.equal(resolveStandaloneBashEventDurationMs({ startedAtMs: "not-a-time", timestamp: 10_000 }), undefined);
 });
 
 test("branch and compaction builders hash summaries and paths while preserving structural fields", () => {

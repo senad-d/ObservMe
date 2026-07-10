@@ -13,6 +13,12 @@
       "version": "1.0.0"
     },
     {
+      "id": "row",
+      "name": "Row",
+      "type": "panel",
+      "version": ""
+    },
+    {
       "id": "logs",
       "name": "Logs",
       "type": "panel",
@@ -21,6 +27,12 @@
     {
       "id": "table",
       "name": "Table",
+      "type": "panel",
+      "version": ""
+    },
+    {
+      "id": "text",
+      "name": "Text",
       "type": "panel",
       "version": ""
     }
@@ -34,29 +46,117 @@
   "id": null,
   "links": [
     {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
       "targetBlank": false,
-      "title": "Open matching Trace Journey",
-      "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
+      "title": "Overview",
+      "tooltip": "Open the overview with the current time range.",
+      "type": "link",
+      "url": "/d/observme-overview/observme-overview?${__url_time_range}"
     },
     {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
       "targetBlank": false,
-      "title": "Open LLM lifecycle logs",
-      "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}&${provider:queryparam}&${model:queryparam}&${content_kind:queryparam}"
+      "title": "Models",
+      "tooltip": "Open provider/model traffic, reliability, latency, and cost details.",
+      "type": "link",
+      "url": "/d/observme-models/observme-models?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "LLM lifecycle logs",
+      "tooltip": "Open non-content LLM lifecycle logs with the current filters.",
+      "type": "link",
+      "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Trace Journey",
+      "tooltip": "Open matching traces and lifecycle logs with the current context filters.",
+      "type": "link",
+      "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Errors",
+      "tooltip": "Open failure ratios, failure logs, and trace links.",
+      "type": "link",
+      "url": "/d/observme-errors/observme-errors?${__url_time_range}"
     }
   ],
   "liveNow": false,
   "panels": [
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "Privacy and capture state",
+      "type": "row"
+    },
+    {
+      "description": "Visible privacy and empty-state guidance for optional LLM content capture.",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "id": 6,
+      "options": {
+        "code": {
+          "language": "markdown",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "### Privacy and empty-state guidance\n\n- LLM prompt, response, and thinking capture is **opt-in**. Empty panels normally mean capture is disabled or no matching content exists in the selected range.\n- The recommended configuration redacts content before export. If unsafe capture is explicitly enabled while redaction is disabled, these panels can contain raw sensitive content.\n- Filter with session, workflow, agent, run, provider, model, and content-kind labels. **Never put raw prompt, response, or thinking text into Loki queries.**\n- New settings affect only newly emitted events; previously omitted content cannot be recovered.",
+        "mode": "markdown"
+      },
+      "pluginVersion": "11.1.0",
+      "title": "Read before viewing captured content",
+      "type": "text"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "id": 101,
+      "panels": [],
+      "title": "Conversation timeline",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Canonical timeline of opt-in redacted LLM prompts, responses, and thinking for the selected session/workflow/agent/run/provider/model/content-kind filters. Empty can be healthy when capture is disabled or no matching content was emitted; do not query by raw prompt, response, or thinking text.",
+      "description": "Canonical timeline of opt-in LLM prompts, responses, and thinking. The recommended redacted capture mode sanitizes content before export; explicit unsafe capture can expose raw sensitive text. Empty is healthy when capture is disabled or no content matches. Do not query by raw prompt, response, or thinking text.",
       "gridPos": {
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 0
+        "y": 7
       },
       "id": 1,
       "options": {
@@ -69,6 +169,7 @@
         "sortOrder": "Ascending",
         "wrapLogMessage": true
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -77,7 +178,9 @@
           },
           "editorMode": "code",
           "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_category=\"llm_content\"} | json | line_format \"{{.body}}\"",
+          "maxLines": 1000,
           "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -97,16 +200,29 @@
       ]
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "id": 102,
+      "panels": [],
+      "title": "Content by kind",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Captured prompt bodies only, already redacted and opt-in. Use label filters for a session, workflow, agent, run, provider/model, or content kind; do not query by raw prompt text. Empty can mean prompt capture was disabled or no prompts match.",
+      "description": "Opt-in prompt bodies. Recommended capture mode redacts before export; explicit unsafe capture may expose raw sensitive text. Filter by context labels only; do not query by raw prompt text. Empty means prompt capture is disabled or no prompts match.",
       "gridPos": {
         "h": 10,
         "w": 8,
         "x": 0,
-        "y": 12
+        "y": 20
       },
       "id": 2,
       "options": {
@@ -119,6 +235,7 @@
         "sortOrder": "Ascending",
         "wrapLogMessage": true
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -127,7 +244,9 @@
           },
           "editorMode": "code",
           "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_name=\"llm.prompt.captured\"} | json | line_format \"{{.body}}\"",
+          "maxLines": 500,
           "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -151,12 +270,12 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Captured assistant response bodies only, already redacted and opt-in. Use label filters for a session, workflow, agent, run, provider/model, or content kind; do not query by raw response text. Empty can mean response capture was disabled or no responses match.",
+      "description": "Opt-in assistant response bodies. Recommended capture mode redacts before export; explicit unsafe capture may expose raw sensitive text. Filter by context labels only; do not query by raw response text. Empty means response capture is disabled or no responses match.",
       "gridPos": {
         "h": 10,
         "w": 8,
         "x": 8,
-        "y": 12
+        "y": 20
       },
       "id": 3,
       "options": {
@@ -169,6 +288,7 @@
         "sortOrder": "Ascending",
         "wrapLogMessage": true
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -177,7 +297,9 @@
           },
           "editorMode": "code",
           "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_name=\"llm.response.captured\"} | json | line_format \"{{.body}}\"",
+          "maxLines": 500,
           "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -201,12 +323,12 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Captured assistant thinking/reasoning bodies only, already redacted and opt-in. Use label filters for a session, workflow, agent, run, provider/model, or content kind; do not query by raw thinking text. Empty can mean thinking capture was disabled or no thinking logs match.",
+      "description": "Opt-in assistant thinking/reasoning bodies. Recommended capture mode redacts before export; explicit unsafe capture may expose raw sensitive text. Filter by context labels only; do not query by raw thinking text. Empty means thinking capture is disabled or no thinking logs match.",
       "gridPos": {
         "h": 10,
         "w": 8,
         "x": 16,
-        "y": 12
+        "y": 20
       },
       "id": 4,
       "options": {
@@ -219,6 +341,7 @@
         "sortOrder": "Ascending",
         "wrapLogMessage": true
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -227,7 +350,9 @@
           },
           "editorMode": "code",
           "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_name=\"llm.thinking.captured\"} | json | line_format \"{{.body}}\"",
+          "maxLines": 500,
           "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -247,28 +372,26 @@
       ]
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "id": 103,
+      "panels": [],
+      "title": "Trace index",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Trace index for the canonical redacted conversation logs. Labels expose session, workflow, agent, run, provider/model, content kind, and trace_id columns; trace_id links open Tempo. Empty can mean optional content capture is disabled or no matching content exists.",
+      "description": "Trace index for matching opt-in conversation records. The table hides captured bodies and exposes only context labels plus trace/span IDs; trace_id opens Tempo. Recommended capture mode is redacted, while explicit unsafe capture can contain raw content in Loki. Empty means capture is disabled or no content matches.",
       "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
+        "defaults": {},
         "overrides": [
           {
             "matcher": {
@@ -285,16 +408,32 @@
                     "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
                   }
                 ]
+              },
+              {
+                "id": "custom.width",
+                "value": 220
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 180
               }
             ]
           }
         ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 31
       },
       "id": 5,
       "links": [
@@ -319,7 +458,13 @@
           ],
           "show": false
         },
-        "showHeader": true
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "Time"
+          }
+        ]
       },
       "pluginVersion": "11.1.0",
       "targets": [
@@ -329,8 +474,9 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_category=\"llm_content\"}",
+          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_category=\"llm_content\"} | line_format `{\"event\":{{ printf \"%q\" .event_name }},\"category\":{{ printf \"%q\" .event_category }},\"session\":{{ printf \"%q\" .pi_session_id }},\"workflow\":{{ printf \"%q\" .pi_workflow_id }},\"agent\":{{ printf \"%q\" .pi_agent_id }},\"parent_agent\":{{ printf \"%q\" .pi_agent_parent_id }},\"agent_run\":{{ printf \"%q\" .pi_agent_run_id }},\"provider\":{{ printf \"%q\" .gen_ai_provider_name }},\"model\":{{ printf \"%q\" .gen_ai_request_model }},\"content_kind\":{{ printf \"%q\" .pi_llm_content_kind }},\"trace_id\":{{ printf \"%q\" .trace_id }},\"span_id\":{{ printf \"%q\" .span_id }}}`",
           "legendFormat": "{{event_name}} {{pi_session_id}} {{pi_agent_run_id}}",
+          "maxLines": 500,
           "queryType": "range",
           "range": true,
           "refId": "A"
@@ -346,14 +492,30 @@
           }
         },
         {
+          "id": "extractFields",
+          "options": {
+            "format": "json",
+            "keepTime": true,
+            "replace": false,
+            "source": "Line"
+          }
+        },
+        {
           "id": "organize",
           "options": {
+            "excludeByName": {
+              "Line": true,
+              "id": true,
+              "labels": true,
+              "tsNs": true
+            },
             "renameByName": {
               "event_name": "event",
               "event_category": "category",
               "pi_session_id": "session",
               "pi_workflow_id": "workflow",
               "pi_agent_id": "agent",
+              "pi_agent_parent_id": "parent_agent",
               "pi_agent_run_id": "agent_run",
               "gen_ai_provider_name": "provider",
               "gen_ai_request_model": "model",
@@ -366,8 +528,8 @@
       ]
     }
   ],
-  "refresh": "10s",
-  "schemaVersion": 38,
+  "refresh": "30s",
+  "schemaVersion": 39,
   "style": "dark",
   "tags": [
     "observme",
@@ -489,14 +651,14 @@
           "type": "loki",
           "uid": "loki"
         },
-        "definition": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\"}, gen_ai_provider_name)",
+        "definition": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\"}, gen_ai_provider_name)",
         "hide": 0,
         "includeAll": true,
         "label": "Provider",
         "multi": true,
         "name": "provider",
         "options": [],
-        "query": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\"}, gen_ai_provider_name)",
+        "query": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\"}, gen_ai_provider_name)",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -514,14 +676,14 @@
           "type": "loki",
           "uid": "loki"
         },
-        "definition": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\"}, gen_ai_request_model)",
+        "definition": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\"}, gen_ai_request_model)",
         "hide": 0,
         "includeAll": true,
         "label": "Model",
         "multi": true,
         "name": "model",
         "options": [],
-        "query": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\"}, gen_ai_request_model)",
+        "query": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\"}, gen_ai_request_model)",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -539,14 +701,14 @@
           "type": "loki",
           "uid": "loki"
         },
-        "definition": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\"}, pi_llm_content_kind)",
+        "definition": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\"}, pi_llm_content_kind)",
         "hide": 0,
         "includeAll": true,
         "label": "Content kind",
         "multi": true,
         "name": "content_kind",
         "options": [],
-        "query": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\"}, pi_llm_content_kind)",
+        "query": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\"}, pi_llm_content_kind)",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -563,6 +725,6 @@
   "timezone": "browser",
   "title": "ObservMe LLM Conversations",
   "uid": "observme-llm-conversations",
-  "version": 1,
+  "version": 3,
   "weekStart": ""
 }

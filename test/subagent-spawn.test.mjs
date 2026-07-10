@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { trace } from "@opentelemetry/api";
+import { clearObsAgentsRuntimeState, getLocalObsAgentsRuntimeSnapshot } from "../src/commands/obs-agents-runtime.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { createObservMeMetrics, createSpanRegistry, createAgentTreeTracker } from "../src/pi/handlers.ts";
 import { createAgentLineageContext } from "../src/pi/agent-lineage.ts";
 import {
+  completeSubagentSpawn,
   failSubagentSpawn,
   observeTrustedSubagentLineage,
   recordAgentJoin,
@@ -17,6 +19,7 @@ import {
   OBSERVME_HISTOGRAM_METRIC_NAMES,
 } from "../src/semconv/metrics.ts";
 import { SPAN_NAMES } from "../src/semconv/spans.ts";
+import { AGENT_WAIT_REASON_VALUES, SUBAGENT_SPAWN_REASON_VALUES } from "../src/semconv/values.ts";
 
 process.env.OBSERVME_HASH_SALT = "subagent-spawn-test-salt";
 
@@ -145,7 +148,7 @@ test("subagent spawn propagates W3C trace context and ObservMe lineage without e
     command: "pi --prompt super-secret",
     args: ["--unsafe-arg"],
     spawnType: "command",
-    spawnReason: "delegate",
+    spawnReason: "delegated_task",
     env: { PATH: "/usr/bin", SECRET_TOKEN: "top-secret-token" },
   });
 
@@ -179,6 +182,23 @@ test("subagent spawn propagates W3C trace context and ObservMe lineage without e
   assertSubagentMetricLabelsAreLowCardinality(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.SUBAGENTS_SPAWNED_TOTAL);
 });
 
+test("subagent propagation uses the started spawn span context instead of an unrelated parent context", () => {
+  const telemetry = createFakeTelemetry();
+  const unrelatedContext = {
+    traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    spanId: "bbbbbbbbbbbbbbbb",
+    traceFlags: 1,
+  };
+  telemetry.sessionSpan.spanContext = () => unrelatedContext;
+
+  const started = startSubagentSpawn(telemetry, { spawnId: "spawn-context-source", spawnType: "command" });
+
+  assert.equal(started.span.parentSpan, telemetry.sessionSpan);
+  assert.equal(started.env.traceparent, "00-11111111111111111111111111111111-2222222222222222-01");
+  assert.notEqual(started.env.OBSERVME_PARENT_TRACE_ID, unrelatedContext.traceId);
+  assert.notEqual(started.env.OBSERVME_PARENT_SPAN_ID, unrelatedContext.spanId);
+});
+
 test("subagent spawn records fallback telemetry when W3C trace context cannot be propagated", () => {
   const telemetry = createFakeTelemetry({ spanContext: invalidSpanContext });
   const started = startSubagentSpawn(telemetry, { spawnId: "spawn-fallback", spawnType: "command" });
@@ -199,6 +219,110 @@ test("subagent spawn records fallback telemetry when W3C trace context cannot be
   assert.ok(started.span.events.some(event => event.name === LOG_EVENT_NAMES.TRACE_CONTEXT_PROPAGATION_FAILED));
   assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.TRACE_CONTEXT_PROPAGATION_FAILED));
   assertMetricValue(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TRACE_CONTEXT_PROPAGATION_FAILURES_TOTAL, 1);
+});
+
+test("documented spawn and wait reason values pass through unchanged", () => {
+  const telemetry = createFakeTelemetry();
+
+  for (const reason of SUBAGENT_SPAWN_REASON_VALUES) {
+    const started = startSubagentSpawn(telemetry, {
+      spawnId: `spawn-${reason}`,
+      childAgentId: `child-${reason}`,
+      spawnType: "command",
+      spawnReason: reason,
+    });
+    completeSubagentSpawn(telemetry, started.spawnId, { childAgentId: started.childAgentId });
+  }
+
+  for (const reason of AGENT_WAIT_REASON_VALUES) {
+    recordAgentWait(telemetry, {
+      id: `wait-${reason}`,
+      childStatus: "active",
+      joinStatus: "waiting",
+      reason,
+      durationMs: 1,
+    });
+  }
+
+  const spawnRecords = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_COUNTER_METRIC_NAMES.SUBAGENTS_SPAWNED_TOTAL,
+  );
+  const waitRecords = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_WAIT_DURATION_MS,
+  );
+  assert.deepEqual(spawnRecords.map(record => record.attributes.spawn_reason), [...SUBAGENT_SPAWN_REASON_VALUES]);
+  assert.deepEqual(waitRecords.map(record => record.attributes.reason), [...AGENT_WAIT_REASON_VALUES]);
+});
+
+test("spawn and wait reasons stay consistent across spans, logs, runtime hints, and metric labels", () => {
+  clearObsAgentsRuntimeState();
+  const telemetry = createFakeTelemetry();
+  const started = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-untyped-reason",
+    childAgentId: "child-untyped-reason",
+    spawnType: "command",
+    spawnReason: "arbitrary external reason",
+  });
+
+  completeSubagentSpawn(telemetry, started.spawnId, { childAgentId: started.childAgentId });
+  const wait = recordAgentWait(telemetry, {
+    id: "wait-untyped-reason",
+    spawnId: started.spawnId,
+    childAgentId: started.childAgentId,
+    childStatus: "active",
+    joinStatus: "waiting",
+    reason: "arbitrary wait reason",
+    durationMs: 21,
+  });
+  const activeChildWait = recordAgentWait(telemetry, {
+    id: "wait-active-child",
+    childAgentId: started.childAgentId,
+    childStatus: "active",
+    joinStatus: "waiting",
+    durationMs: 22,
+  });
+  const completedChildWait = recordAgentWait(telemetry, {
+    id: "wait-completed-child",
+    childAgentId: started.childAgentId,
+    childStatus: "completed",
+    joinStatus: "completed",
+    durationMs: 23,
+  });
+
+  assert.deepEqual(SUBAGENT_SPAWN_REASON_VALUES, ["delegated_task", "parallel_search", "review", "tool_wrapper", "unknown"]);
+  assert.deepEqual(AGENT_WAIT_REASON_VALUES, ["dependency", "rate_limit", "child_running", "unknown"]);
+  assert.equal(started.span.attributes["pi.agent.spawn.reason"], "unknown");
+  assert.equal(wait.span.attributes["pi.agent.wait.reason"], "unknown");
+  assert.equal(activeChildWait.span.attributes["pi.agent.wait.reason"], "child_running");
+  assert.equal(completedChildWait.span.attributes["pi.agent.wait.reason"], "unknown");
+
+  const spawnRecords = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_COUNTER_METRIC_NAMES.SUBAGENTS_SPAWNED_TOTAL,
+  );
+  const waitRecords = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_WAIT_DURATION_MS,
+  );
+  assert.deepEqual(spawnRecords.map(record => record.attributes.spawn_reason), ["unknown"]);
+  assert.deepEqual(waitRecords.map(record => record.attributes.reason), ["unknown", "child_running", "unknown"]);
+
+  const spawnLogs = telemetry.logger.records.filter(
+    record =>
+      record.attributes["pi.agent.spawn.id"] === started.spawnId &&
+      [LOG_EVENT_NAMES.AGENT_SPAWN_STARTED, LOG_EVENT_NAMES.AGENT_SPAWN_COMPLETED].includes(record.body),
+  );
+  const waitLogs = telemetry.logger.records.filter(
+    record =>
+      record.attributes["pi.agent.spawn.id"] === started.spawnId &&
+      [LOG_EVENT_NAMES.AGENT_WAIT_STARTED, LOG_EVENT_NAMES.AGENT_WAIT_COMPLETED].includes(record.body),
+  );
+  assert.ok(spawnLogs.length >= 2);
+  assert.ok(waitLogs.length >= 2);
+  assert.ok(spawnLogs.every(record => record.attributes["pi.agent.spawn.reason"] === "unknown"));
+  assert.ok(waitLogs.every(record => record.attributes["pi.agent.wait.reason"] === "unknown"));
+
+  const runtimeHint = getLocalObsAgentsRuntimeSnapshot().waitJoinHints.find(hint => hint.id === "wait-untyped-reason");
+  assert.equal(runtimeHint?.reason, "unknown");
+  clearObsAgentsRuntimeState();
 });
 
 test("malformed propagated lineage records a propagation failure and missing parent lineage records an orphan", () => {
@@ -223,16 +347,130 @@ test("malformed propagated lineage records a propagation failure and missing par
   assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.AGENT_ORPHANED));
 });
 
+test("subagent spawn completion and launcher failure record elapsed duration from injected clocks", () => {
+  const telemetry = createFakeTelemetry();
+  let nowMs = 100;
+  const completed = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-duration-completed",
+    childAgentId: "child-duration-completed",
+    spawnType: "command",
+    spawnReason: "delegated_task",
+    now: () => nowMs,
+  });
+
+  nowMs = 350;
+  completeSubagentSpawn(telemetry, completed.spawnId, {
+    childAgentId: completed.childAgentId,
+    childStatus: "completed",
+    now: () => nowMs,
+  });
+
+  nowMs = 500;
+  const failed = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-duration-failed",
+    childAgentId: "child-duration-failed",
+    spawnType: "tool",
+    spawnReason: "tool_wrapper",
+    now: () => nowMs,
+  });
+
+  nowMs = 575;
+  failSubagentSpawn(telemetry, failed.spawnId, {
+    childAgentId: failed.childAgentId,
+    errorClass: "SpawnError",
+    now: () => nowMs,
+  });
+
+  assertHistogramRecorded(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.SUBAGENT_SPAWN_DURATION_MS, 250);
+  assertHistogramRecorded(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.SUBAGENT_SPAWN_DURATION_MS, 75);
+  const durationRecords = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.SUBAGENT_SPAWN_DURATION_MS,
+  );
+  assert.deepEqual(durationRecords.map(record => record.attributes.spawn_reason), ["delegated_task", "tool_wrapper"]);
+  assert.ok(durationRecords.every(record => record.attributes.spawn_id === undefined));
+});
+
+test("child failure and parent recovery metrics deduplicate bounded child transitions", () => {
+  const config = structuredClone(defaultObservMeConfig);
+  config.limits.maxActiveSubagentSpawns = 2;
+  const telemetry = createFakeTelemetry({ config });
+  const failedChild = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-child-failed",
+    childAgentId: "child-failed",
+    spawnType: "command",
+  });
+
+  completeSubagentSpawn(telemetry, failedChild.spawnId, {
+    childAgentId: failedChild.childAgentId,
+    childStatus: "failed",
+    outcome: "failed",
+  });
+  recordAgentJoin(telemetry, {
+    id: "join-child-failed-recovered",
+    childAgentId: failedChild.childAgentId,
+    childStatus: "failed",
+    joinStatus: "completed",
+    failurePropagated: false,
+    durationMs: 15,
+  });
+  recordAgentJoin(telemetry, {
+    id: "join-child-failed-repeated",
+    childAgentId: failedChild.childAgentId,
+    childStatus: "failed",
+    joinStatus: "completed",
+    failurePropagated: false,
+    durationMs: 16,
+  });
+
+  const launcherFailure = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-launcher-failed",
+    childAgentId: "child-never-launched",
+    spawnType: "command",
+  });
+  failSubagentSpawn(telemetry, launcherFailure.spawnId, {
+    childAgentId: launcherFailure.childAgentId,
+    errorClass: "SpawnError",
+  });
+
+  for (let index = 0; index < 5; index += 1) {
+    recordAgentJoin(telemetry, {
+      id: `join-failed-${index}`,
+      childAgentId: `child-failed-${index}`,
+      childStatus: "failed",
+      joinStatus: "failed",
+      failurePropagated: true,
+      durationMs: index,
+    });
+  }
+
+  const childFailureRecords = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_COUNTER_METRIC_NAMES.CHILD_AGENT_FAILURES_TOTAL,
+  );
+  const recoveryRecords = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_COUNTER_METRIC_NAMES.PARENT_RECOVERED_FROM_CHILD_FAILURE_TOTAL,
+  );
+
+  assert.equal(childFailureRecords.length, 6);
+  assert.equal(recoveryRecords.length, 1);
+  assert.deepEqual(Object.keys(childFailureRecords[0].attributes).sort(), ["agent_role", "subagent_depth"]);
+  assert.deepEqual(Object.keys(recoveryRecords[0].attributes).sort(), ["agent_role", "subagent_depth"]);
+  assert.equal(telemetry.childFailureAccounting.size, config.limits.maxActiveSubagentSpawns);
+  assert.equal(
+    telemetry.meter.records.filter(record => record.name === OBSERVME_COUNTER_METRIC_NAMES.SUBAGENT_SPAWN_FAILURES_TOTAL).length,
+    1,
+  );
+});
+
 test("wait and join spans record child status, counts, durations, and spawn failures without high-cardinality metric labels", () => {
   const telemetry = createFakeTelemetry();
-  const started = startSubagentSpawn(telemetry, { spawnId: "spawn-wait", spawnType: "command", spawnReason: "task" });
+  const started = startSubagentSpawn(telemetry, { spawnId: "spawn-wait", spawnType: "command", spawnReason: "delegated_task" });
 
   const wait = recordAgentWait(telemetry, {
     spawnId: started.spawnId,
     childAgentId: started.childAgentId,
     childStatus: "active",
     joinStatus: "waiting",
-    reason: "await_child",
+    reason: "child_running",
     durationMs: 25,
   });
   const join = recordAgentJoin(telemetry, {
@@ -261,7 +499,13 @@ test("wait and join spans record child status, counts, durations, and spawn fail
   assertHistogramRecorded(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_WAIT_DURATION_MS, 25);
   assertHistogramRecorded(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_JOIN_DURATION_MS, 40);
   assertMetricValue(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.SUBAGENT_SPAWN_FAILURES_TOTAL, 1);
+  assertMetricValue(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.CHILD_AGENT_FAILURES_TOTAL, 1);
+  assert.equal(
+    telemetry.meter.records.some(record => record.name === OBSERVME_COUNTER_METRIC_NAMES.PARENT_RECOVERED_FROM_CHILD_FAILURE_TOTAL),
+    false,
+  );
   assertSubagentMetricLabelsAreLowCardinality(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.SUBAGENT_SPAWN_FAILURES_TOTAL);
+  assertSubagentMetricLabelsAreLowCardinality(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.CHILD_AGENT_FAILURES_TOTAL);
 });
 
 function assertMetricValue(records, metricName, value) {

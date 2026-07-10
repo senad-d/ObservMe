@@ -5,7 +5,12 @@ import { join } from "node:path";
 import test from "node:test";
 import { PROJECT_OBSERVME_YAML_TEMPLATE } from "../src/config/bootstrap-project-config.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
-import { loadFactoryConfig, loadSessionConfig, parseObservMeConfigText } from "../src/config/load-config.ts";
+import {
+  loadFactoryConfig,
+  loadSessionConfig,
+  loadSessionConfigWithDiagnostics,
+  parseObservMeConfigText,
+} from "../src/config/load-config.ts";
 import { applyContentCapturePolicy } from "../src/privacy/content-capture.ts";
 
 const globalConfigYaml = `
@@ -74,6 +79,86 @@ const malformedProjectConfigCases = [
     text: '{"observme":{"__proto__":{"polluted":true}}}',
   },
 ];
+
+const rejectionDiagnosticCases = [
+  {
+    name: "invalid structure",
+    runtimeOptions: { environment: "private-invalid-environment" },
+    expectedCode: "invalid_config_shape",
+    sensitiveFragments: ["private-invalid-environment"],
+  },
+  {
+    name: "unsafe capture",
+    runtimeOptions: {
+      capture: { prompts: true },
+      privacy: { redactionEnabled: false, allowUnsafeCapture: false },
+    },
+    expectedCode: "unsafe_capture_without_redaction",
+    sensitiveFragments: [],
+  },
+  {
+    name: "insecure transport",
+    runtimeOptions: {
+      otlp: { endpoint: "http://private-user:private-endpoint-password@collector.test/private-path?token=private-token" },
+    },
+    expectedCode: "insecure_production_transport",
+    sensitiveFragments: ["private-user", "private-endpoint-password", "private-path", "private-token"],
+  },
+  {
+    name: "forbidden metric labels",
+    runtimeOptions: { metrics: { labels: ["pi.session.id.private-label-secret"] } },
+    expectedCode: "high_cardinality_metric_label",
+    sensitiveFragments: ["private-label-secret"],
+  },
+  {
+    name: "malformed lineage",
+    env: { OBSERVME_WORKFLOW_ID: "private-lineage-secret/unsafe" },
+    expectedCode: "malformed_lineage_value",
+    sensitiveFragments: ["private-lineage-secret"],
+  },
+  {
+    name: "oversized queues",
+    runtimeOptions: { traces: { batch: { maxQueueSize: 10_001 } } },
+    expectedCode: "queue_size_exceeds_guardrail",
+    sensitiveFragments: [],
+  },
+];
+
+for (const diagnosticCase of rejectionDiagnosticCases) {
+  test(`session loader preserves sanitized rejection diagnostics for ${diagnosticCase.name}`, async () => {
+    const warnings = [];
+    const loaded = await loadSessionConfigWithDiagnostics({
+      globalConfigPath: "missing-global.yaml",
+      isProjectTrusted: false,
+      readText: createReader({}),
+      env: diagnosticCase.env ?? {},
+      runtimeOptions: diagnosticCase.runtimeOptions,
+      logger: { warn: message => warnings.push(message) },
+    });
+
+    assert.deepEqual(loaded.config, defaultObservMeConfig);
+    assert.deepEqual(loaded.diagnostics.rejection?.issueCodes, [diagnosticCase.expectedCode]);
+    assert.equal(loaded.diagnostics.rejection?.issueCount, 1);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], new RegExp(diagnosticCase.expectedCode, "u"));
+
+    const serializedDiagnostics = JSON.stringify({ diagnostics: loaded.diagnostics, warnings });
+    for (const fragment of diagnosticCase.sensitiveFragments) {
+      assert.equal(serializedDiagnostics.includes(fragment), false);
+    }
+  });
+}
+
+test("session loader emits no rejection diagnostic for safe valid configuration", async () => {
+  const loaded = await loadSessionConfigWithDiagnostics({
+    globalConfigPath: "missing-global.yaml",
+    isProjectTrusted: false,
+    readText: createReader({}),
+    env: {},
+  });
+
+  assert.equal(loaded.diagnostics.rejection, undefined);
+});
 
 for (const malformedProjectConfig of malformedProjectConfigCases) {
   test(`session loader falls back for structurally invalid trusted project config: ${malformedProjectConfig.name}`, async () => {

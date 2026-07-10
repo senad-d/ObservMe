@@ -24,6 +24,24 @@ export const RESOURCE_ATTRIBUTES = {
   PI_PROJECT_NAME: "pi.project.name",
 } as const;
 
+export const SESSION_ATTRIBUTES = {
+  PI_SESSION_ID: "pi.session.id",
+  PI_SESSION_NAME: "pi.session.name",
+  PI_SESSION_CWD_HASH: "pi.session.cwd_hash",
+  PI_SESSION_PARENT_SESSION_HASH: "pi.session.parent_session_hash",
+  PI_SESSION_PERSISTED: "pi.session.persisted",
+  PI_SESSION_FILE_HASH: "pi.session.file_hash",
+  PI_SESSION_VERSION: "pi.session.version",
+  PI_MODEL_PROVIDER_CURRENT: "pi.model.provider.current",
+  PI_MODEL_ID_CURRENT: "pi.model.id.current",
+  PI_THINKING_LEVEL_CURRENT: "pi.thinking.level.current",
+} as const;
+
+export const WORKFLOW_ATTRIBUTES = {
+  PI_WORKFLOW_DURATION_MS: "pi.workflow.duration_ms",
+  PI_WORKFLOW_STATUS: "pi.workflow.status",
+} as const;
+
 export const COMMON_SPAN_ATTRIBUTES = {
   PI_SESSION_ID: "pi.session.id",
   PI_WORKFLOW_ID: "pi.workflow.id",
@@ -44,6 +62,11 @@ export const COMMON_SPAN_ATTRIBUTES = {
   OBSERVME_EVICTED: "observme.evicted",
   OBSERVME_TRUNCATED: "observme.truncated",
   OBSERVME_ORIGINAL_LENGTH: "observme.original_length",
+} as const;
+
+export const AGENT_LINEAGE_ATTRIBUTES = {
+  PI_AGENT_CAPABILITY: "pi.agent.capability",
+  PI_AGENT_ORPHANED: "pi.agent.orphaned",
 } as const;
 
 export const AGENT_RUN_ATTRIBUTES = {
@@ -126,6 +149,7 @@ export const LLM_ATTRIBUTES = {
   PI_LLM_REQUEST_MESSAGE_COUNT: "pi.llm.request.message_count",
   PI_LLM_REQUEST_TOOL_SCHEMA_COUNT: "pi.llm.request.tool_schema_count",
   PI_LLM_REQUEST_INPUT_CHARS: "pi.llm.request.input_chars",
+  PI_LLM_REQUEST_ID: "pi.llm.request.id",
   PI_LLM_STOP_REASON: "pi.llm.stop_reason",
   PI_LLM_ERROR_MESSAGE_HASH: "pi.llm.error_message_hash",
   PI_LLM_USAGE_TOTAL_TOKENS: "pi.llm.usage.total_tokens",
@@ -135,12 +159,18 @@ export const LLM_ATTRIBUTES = {
   PI_LLM_COST_CACHE_READ_USD: "pi.llm.cost.cache_read_usd",
   PI_LLM_COST_CACHE_WRITE_USD: "pi.llm.cost.cache_write_usd",
   PI_LLM_COST_TOTAL_USD: "pi.llm.cost.total_usd",
+  PI_LLM_TOOL_CALL_COUNT: "pi.llm.tool_call_count",
   GEN_AI_INPUT_MESSAGES: "gen_ai.input.messages",
   GEN_AI_OUTPUT_MESSAGES: "gen_ai.output.messages",
   PI_LLM_PROMPT_REDACTED: "pi.llm.prompt.redacted",
   PI_LLM_RESPONSE_REDACTED: "pi.llm.response.redacted",
   PI_LLM_THINKING_REDACTED: "pi.llm.thinking.redacted",
   PI_LLM_CONTENT_KIND: "pi.llm.content.kind",
+} as const;
+
+export const MESSAGE_ATTRIBUTES = {
+  PI_MESSAGE_ROLE: "pi.message.role",
+  PI_MESSAGE_CONTENT_LENGTH: "pi.message.content_length",
 } as const;
 
 export const TOOL_ATTRIBUTES = {
@@ -201,6 +231,12 @@ export const COMPACTION_ATTRIBUTES = {
   PI_COMPACTION_MODIFIED_FILES_COUNT: "pi.compaction.modified_files_count",
 } as const;
 
+export const CONFIG_ATTRIBUTES = {
+  OBSERVME_CONFIG_SOURCE: "observme.config.source",
+  OBSERVME_CONFIG_REJECTION_ISSUE_CODES: "observme.config.rejection.issue_codes",
+  OBSERVME_CONFIG_REJECTION_ISSUE_COUNT: "observme.config.rejection.issue_count",
+} as const;
+
 export const LOG_ATTRIBUTES = {
   EVENT_NAME: "event.name",
   EVENT_CATEGORY: "event.category",
@@ -220,16 +256,21 @@ export const LOG_ATTRIBUTES = {
 
 export const ATTRIBUTE_GROUPS = {
   RESOURCE_ATTRIBUTES,
+  SESSION_ATTRIBUTES,
+  WORKFLOW_ATTRIBUTES,
   COMMON_SPAN_ATTRIBUTES,
+  AGENT_LINEAGE_ATTRIBUTES,
   AGENT_RUN_ATTRIBUTES,
   AGENT_SPAWN_ATTRIBUTES,
   AGENT_WAIT_JOIN_ATTRIBUTES,
   TURN_ATTRIBUTES,
   LLM_ATTRIBUTES,
+  MESSAGE_ATTRIBUTES,
   TOOL_ATTRIBUTES,
   BASH_ATTRIBUTES,
   BRANCH_ATTRIBUTES,
   COMPACTION_ATTRIBUTES,
+  CONFIG_ATTRIBUTES,
   LOG_ATTRIBUTES,
 } as const;
 

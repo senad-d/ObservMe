@@ -3,7 +3,7 @@
   "command": "pi --prompt hidden-subagent-command",
   "args": ["--task", "hidden-subagent-arg"],
   "spawnType": "command",
-  "spawnReason": "delegate",
+  "spawnReason": "delegated_task",
   "childAgentId": "fixture-child-agent",
   "env": {
     "PATH": "/usr/bin",

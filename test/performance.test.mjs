@@ -416,7 +416,7 @@ function runSyntheticSubagentSpawn(harness, subagentDurations, sessionIndex, tur
   const started = measureSubagentStart(subagentDurations, telemetry, {
     spawnId: `perf-spawn-${sessionIndex}-${turnIndex}`,
     spawnType: "command",
-    spawnReason: "synthetic_load",
+    spawnReason: "parallel_search",
   });
 
   measureSubagentComplete(subagentDurations, telemetry, started);

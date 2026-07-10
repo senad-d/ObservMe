@@ -12,40 +12,40 @@ import {
   AGENT_WAIT_JOIN_ATTRIBUTES,
   COMMON_SPAN_ATTRIBUTES,
   LOG_ATTRIBUTES,
+  SESSION_ATTRIBUTES,
 } from "../semconv/attributes.ts";
 import { LOG_EVENT_NAMES } from "../semconv/metrics.ts";
 import { SPAN_NAMES } from "../semconv/spans.ts";
-import type { BoundedMap } from "../util/bounded-map.ts";
+import {
+  AGENT_WAIT_REASON_VALUES,
+  SUBAGENT_SPAWN_REASON_VALUES,
+  type AgentWaitReason,
+  type SubagentSpawnReason,
+} from "../semconv/values.ts";
+import { BoundedMap } from "../util/bounded-map.ts";
 import type { AgentChildStatus, AgentTreeNode, AgentTreeSummary } from "./agent-tree-tracker.ts";
 import { AgentTreeTracker } from "./agent-tree-tracker.ts";
 import type { AgentLineageContext, AgentRole } from "./agent-lineage.ts";
 import { createAgentLineageContext, createPropagationEnvironment, sanitizePropagationEnvironment } from "./agent-lineage.ts";
 import { recordActiveSpanEnd, recordActiveSpanStart } from "./handler-internals.ts";
-import type { TelemetryLogger, TelemetryTracer } from "./handlers.ts";
+import type { TelemetryLogger, TelemetryTracer } from "./handler-types.ts";
+import type {
+  AgentWaitJoinState,
+  ChildFailureAccountingState,
+  SubagentSpawnState,
+  TestableSpan,
+} from "./subagent-types.ts";
+export type {
+  AgentWaitJoinState,
+  ChildFailureAccountingState,
+  SubagentSpawnState,
+  TestableSpan,
+} from "./subagent-types.ts";
 
 export type SubagentSpawnType = "command" | "tool" | "extension" | "unknown";
 export type AgentJoinStatus = "completed" | "failed" | "cancelled" | "timeout" | "unknown" | "waiting";
 export type AttributePrimitive = boolean | number | string;
 export type AttributeMap = Record<string, AttributePrimitive>;
-export type TestableSpan = Span & {
-  readonly name?: string;
-  readonly attributes?: Record<string, unknown>;
-  readonly parentSpan?: Span;
-};
-
-export interface SubagentSpawnState {
-  readonly span: TestableSpan;
-  readonly childAgentId: string;
-  readonly startedAtMs: number;
-  readonly labels: Record<string, string>;
-  readonly traceContextPropagated: boolean;
-}
-
-export interface AgentWaitJoinState {
-  readonly span: TestableSpan;
-  readonly startedAtMs: number;
-  readonly labels: Record<string, string>;
-}
 
 export interface SubagentSpanRegistry {
   readonly activeAgentRuns: Pick<BoundedMap<string, Span>, "get">;
@@ -66,6 +66,9 @@ export interface SubagentMetrics {
   readonly agentTreeWidth: Histogram;
   readonly agentWaitDurationMs: Histogram;
   readonly agentJoinDurationMs: Histogram;
+  readonly subagentSpawnDurationMs: Histogram;
+  readonly childAgentFailures: Counter;
+  readonly parentRecoveredFromChildFailure: Counter;
 }
 
 export interface SubagentTelemetrySession {
@@ -80,6 +83,7 @@ export interface SubagentTelemetrySession {
   currentAgentRunId?: string;
   currentTurnId?: string;
   agentTree?: AgentTreeTracker;
+  childFailureAccounting?: BoundedMap<string, ChildFailureAccountingState>;
 }
 
 export interface BuildSubagentPropagationEnvironmentOptions {
@@ -106,7 +110,7 @@ export interface StartSubagentSpawnOptions {
   readonly args?: readonly string[];
   readonly childAgentId?: string;
   readonly spawnType?: string;
-  readonly spawnReason?: string;
+  readonly spawnReason?: SubagentSpawnReason;
   readonly toolCallId?: string;
   readonly env?: NodeJS.ProcessEnv;
   readonly now?: () => number;
@@ -125,11 +129,13 @@ export interface CompleteSubagentSpawnOptions {
   readonly childAgentId?: string;
   readonly childStatus?: AgentChildStatus;
   readonly outcome?: "completed" | "failed" | "cancelled";
+  readonly now?: () => number;
 }
 
 export interface FailSubagentSpawnOptions {
   readonly childAgentId?: string;
   readonly errorClass?: string;
+  readonly now?: () => number;
 }
 
 export interface SubagentRunnerOptions {
@@ -153,7 +159,7 @@ export interface AgentWaitJoinOptions {
   readonly childAgentId?: string;
   readonly childStatus?: AgentChildStatus;
   readonly joinStatus?: AgentJoinStatus;
-  readonly reason?: string;
+  readonly reason?: AgentWaitReason;
   readonly failurePropagated?: boolean;
   readonly durationMs?: number;
   readonly now?: () => number;
@@ -172,8 +178,19 @@ export interface ObserveTrustedSubagentLineageOptions {
   readonly generateId?: () => string;
 }
 
-const sessionIdAttributeKey = "pi.session.id";
-const defaultWaitReason = "child_completion";
+const waitJoinMetricStatusValues = [
+  "starting",
+  "active",
+  "completed",
+  "failed",
+  "cancelled",
+  "orphaned",
+  "timeout",
+  "unknown",
+  "waiting",
+] as const satisfies readonly (AgentChildStatus | AgentJoinStatus)[];
+
+type WaitJoinMetricStatus = (typeof waitJoinMetricStatusValues)[number];
 
 export async function runSubagentWithObservability<Result>(
   session: SubagentTelemetrySession,
@@ -186,10 +203,18 @@ export async function runSubagentWithObservability<Result>(
 
   try {
     const result = await runner(command, args, { env: started.env, signal: options.signal });
-    completeSubagentSpawn(session, started.spawnId, { childAgentId: started.childAgentId, childStatus: "completed" });
+    completeSubagentSpawn(session, started.spawnId, {
+      childAgentId: started.childAgentId,
+      childStatus: "completed",
+      now: options.now,
+    });
     return result;
   } catch (error) {
-    failSubagentSpawn(session, started.spawnId, { childAgentId: started.childAgentId, errorClass: errorClass(error) });
+    failSubagentSpawn(session, started.spawnId, {
+      childAgentId: started.childAgentId,
+      errorClass: errorClass(error),
+      now: options.now,
+    });
     throw error;
   }
 }
@@ -200,9 +225,10 @@ export function startSubagentSpawn(
 ): StartedSubagentSpawn {
   const spawnId = options.spawnId ?? `spawn-${randomUUID()}`;
   const childAgentId = options.childAgentId ?? `child-${spawnId}`;
-  const labels = subagentSpawnMetricLabels(session, options);
+  const spawnReason = normalizeSpawnReason(options.spawnReason);
+  const labels = subagentSpawnMetricLabels(session, options, spawnReason);
   const parentSpan = resolveSubagentParentSpan(session);
-  const initialAttributes = buildSubagentSpawnAttributes(session, spawnId, childAgentId, options);
+  const initialAttributes = buildSubagentSpawnAttributes(session, spawnId, childAgentId, options, spawnReason);
   const span = startActiveSubagentSpan(session, SPAN_NAMES.PI_AGENT_SPAWN, parentSpan, initialAttributes, "subagent_spawn");
   const propagation = buildSubagentPropagationEnvironment({
     config: session.config,
@@ -226,6 +252,7 @@ export function startSubagentSpawn(
     childAgentId,
     startedAtMs: now(options),
     labels,
+    spawnReason,
     traceContextPropagated: propagation.traceContextPropagated,
   });
   session.metrics.subagentsSpawned.add(1, labels);
@@ -248,10 +275,18 @@ export function completeSubagentSpawn(
 
   const childAgentId = options.childAgentId ?? state.childAgentId;
   const childStatus = options.childStatus ?? "completed";
-  const attributes = buildSubagentCompletionAttributes(session, spawnId, childAgentId, options.outcome ?? "completed");
+  const attributes = buildSubagentCompletionAttributes(
+    session,
+    spawnId,
+    childAgentId,
+    options.outcome ?? "completed",
+    state.spawnReason,
+  );
 
   updateChildStatus(session, childAgentId, childStatus);
+  recordChildFailureCompletion(session, childAgentId, childStatus);
   recordObsAgentsTreeState(session);
+  recordSubagentSpawnDuration(session, state, options);
   state.span.setAttributes(attributes);
   state.span.setStatus({ code: SpanStatusCode.OK });
   state.span.addEvent(LOG_EVENT_NAMES.AGENT_SPAWN_COMPLETED, attributes);
@@ -270,12 +305,13 @@ export function failSubagentSpawn(
 
   const childAgentId = options.childAgentId ?? state.childAgentId;
   const attributes = {
-    ...buildSubagentCompletionAttributes(session, spawnId, childAgentId, "failed"),
+    ...buildSubagentCompletionAttributes(session, spawnId, childAgentId, "failed", state.spawnReason),
     [LOG_ATTRIBUTES.ERROR_TYPE]: normalizeMetricLabel(options.errorClass ?? "subagent_spawn_error", "subagent_spawn_error"),
   };
 
   updateChildStatus(session, childAgentId, "failed");
   recordObsAgentsTreeState(session);
+  recordSubagentSpawnDuration(session, state, options);
   state.span.setAttributes(attributes);
   state.span.setStatus({ code: SpanStatusCode.ERROR, message: String(attributes[LOG_ATTRIBUTES.ERROR_TYPE]) });
   state.span.addEvent(LOG_EVENT_NAMES.AGENT_SPAWN_FAILED, attributes);
@@ -410,16 +446,17 @@ function startWaitJoinSpan(
   kind: "wait" | "join",
 ): StartedAgentWaitJoin {
   const id = options.id ?? `${kind}-${options.spawnId ?? randomUUID()}`;
-  const attributes = buildWaitJoinAttributes(session, options);
+  const reason = normalizeWaitReason(options.reason, options, kind);
+  const attributes = buildWaitJoinAttributes(session, options, reason);
   const spanName = kind === "wait" ? SPAN_NAMES.PI_AGENT_WAIT : SPAN_NAMES.PI_AGENT_JOIN;
   const eventName = kind === "wait" ? LOG_EVENT_NAMES.AGENT_WAIT_STARTED : LOG_EVENT_NAMES.AGENT_JOIN_STARTED;
   const operation = kind === "wait" ? "agent_wait" : "agent_join";
   const span = startActiveSubagentSpan(session, spanName, resolveSubagentParentSpan(session), attributes, operation);
-  const labels = waitJoinMetricLabels(session, options);
-  const state = { span, startedAtMs: now(options), labels };
+  const labels = waitJoinMetricLabels(session, options, reason);
+  const state = { span, startedAtMs: now(options), labels, reason };
 
   waitJoinRegistry(session, kind).set(id, state);
-  recordObsAgentWaitJoinHint(createWaitJoinRuntimeHint(id, options, kind, true));
+  recordObsAgentWaitJoinHint(createWaitJoinRuntimeHint(id, options, kind, reason, true));
   span.addEvent(eventName, attributes);
   emitSubagentLog(session, eventName, attributes);
 
@@ -438,7 +475,7 @@ function endWaitJoinSpan(
 
   if (kind === "join" && options.childAgentId && options.childStatus) updateChildStatus(session, options.childAgentId, options.childStatus);
 
-  const attributes = buildWaitJoinAttributes(session, options);
+  const attributes = buildWaitJoinAttributes(session, options, state.reason);
   const eventName = kind === "wait" ? LOG_EVENT_NAMES.AGENT_WAIT_COMPLETED : LOG_EVENT_NAMES.AGENT_JOIN_COMPLETED;
   const durationMs = resolveDurationMs(state, options);
 
@@ -447,9 +484,10 @@ function endWaitJoinSpan(
   state.span.addEvent(eventName, attributes);
   endSubagentSpan(session, state.span);
   registry.delete(id);
-  recordObsAgentWaitJoinHint(createWaitJoinRuntimeHint(id, options, kind, false, durationMs));
+  recordObsAgentWaitJoinHint(createWaitJoinRuntimeHint(id, options, kind, state.reason, false, durationMs));
   recordObsAgentsTreeState(session);
   recordWaitJoinDuration(session, durationMs, state.labels, kind);
+  if (kind === "join") recordChildJoinAccounting(session, options);
   emitSubagentLog(session, eventName, attributes, waitJoinFailed(options) ? "ERROR" : "INFO");
 }
 
@@ -474,7 +512,76 @@ function recordWaitJoinDuration(
   session.metrics.agentJoinDurationMs.record(durationMs, labels);
 }
 
-function buildWaitJoinAttributes(session: SubagentTelemetrySession, options: AgentWaitJoinOptions): AttributeMap {
+function recordSubagentSpawnDuration(
+  session: SubagentTelemetrySession,
+  state: SubagentSpawnState,
+  options: { readonly now?: () => number },
+): void {
+  session.metrics.subagentSpawnDurationMs.record(Math.max(0, now(options) - state.startedAtMs), state.labels);
+}
+
+function recordChildFailureCompletion(
+  session: SubagentTelemetrySession,
+  childAgentId: string,
+  childStatus: AgentChildStatus,
+): void {
+  if (childStatus !== "failed") return;
+  recordChildFailureAccounting(session, childAgentId, false);
+}
+
+function recordChildJoinAccounting(
+  session: SubagentTelemetrySession,
+  options: AgentWaitJoinOptions,
+): void {
+  if (!options.childAgentId || options.childStatus !== "failed") return;
+
+  const recoveryConfirmed = options.failurePropagated === false && options.joinStatus === "completed";
+  recordChildFailureAccounting(session, options.childAgentId, recoveryConfirmed);
+}
+
+function recordChildFailureAccounting(
+  session: SubagentTelemetrySession,
+  childAgentId: string,
+  recoveryConfirmed: boolean,
+): void {
+  const registry = ensureChildFailureAccounting(session);
+  const current = registry.get(childAgentId);
+  const labels = childFailureMetricLabels(session);
+  const failureRecorded = current?.failureRecorded === true;
+  const recoveryRecorded = current?.recoveryRecorded === true;
+
+  if (!failureRecorded) session.metrics.childAgentFailures.add(1, labels);
+  if (recoveryConfirmed && !recoveryRecorded) session.metrics.parentRecoveredFromChildFailure.add(1, labels);
+
+  registry.set(childAgentId, {
+    failureRecorded: true,
+    recoveryRecorded: recoveryRecorded || recoveryConfirmed,
+  });
+}
+
+function ensureChildFailureAccounting(
+  session: SubagentTelemetrySession,
+): BoundedMap<string, ChildFailureAccountingState> {
+  if (session.childFailureAccounting) return session.childFailureAccounting;
+
+  session.childFailureAccounting = new BoundedMap({
+    maxSize: Math.max(1, session.config.limits.maxActiveSubagentSpawns),
+  });
+  return session.childFailureAccounting;
+}
+
+function childFailureMetricLabels(session: SubagentTelemetrySession): Record<string, string> {
+  return {
+    agent_role: session.lineage.role,
+    subagent_depth: subagentDepthLabel(session),
+  };
+}
+
+function buildWaitJoinAttributes(
+  session: SubagentTelemetrySession,
+  options: AgentWaitJoinOptions,
+  reason: AgentWaitReason,
+): AttributeMap {
   const summary = ensureAgentTree(session).summarize(session.lineage.rootAgentId);
 
   return withoutUndefinedAttributes({
@@ -482,7 +589,7 @@ function buildWaitJoinAttributes(session: SubagentTelemetrySession, options: Age
     [AGENT_WAIT_JOIN_ATTRIBUTES.PI_AGENT_ID]: session.lineage.agentId,
     [AGENT_WAIT_JOIN_ATTRIBUTES.PI_AGENT_CHILD_ID]: options.childAgentId,
     [AGENT_WAIT_JOIN_ATTRIBUTES.PI_AGENT_SPAWN_ID]: options.spawnId,
-    [AGENT_WAIT_JOIN_ATTRIBUTES.PI_AGENT_WAIT_REASON]: normalizeMetricLabel(options.reason ?? defaultWaitReason, defaultWaitReason),
+    [AGENT_WAIT_JOIN_ATTRIBUTES.PI_AGENT_WAIT_REASON]: reason,
     [AGENT_WAIT_JOIN_ATTRIBUTES.PI_AGENT_JOIN_STATUS]: options.joinStatus ?? "waiting",
     [AGENT_WAIT_JOIN_ATTRIBUTES.PI_AGENT_CHILD_STATUS]: options.childStatus ?? "active",
     [AGENT_WAIT_JOIN_ATTRIBUTES.PI_AGENT_FAILURE_PROPAGATED]: options.failurePropagated ?? false,
@@ -491,12 +598,16 @@ function buildWaitJoinAttributes(session: SubagentTelemetrySession, options: Age
   });
 }
 
-function waitJoinMetricLabels(session: SubagentTelemetrySession, options: AgentWaitJoinOptions): Record<string, string> {
+function waitJoinMetricLabels(
+  session: SubagentTelemetrySession,
+  options: AgentWaitJoinOptions,
+  reason: AgentWaitReason,
+): Record<string, string> {
   return {
     agent_role: session.lineage.role,
     subagent_depth: subagentDepthLabel(session),
-    status: normalizeMetricLabel(options.joinStatus ?? options.childStatus ?? "waiting", "waiting"),
-    reason: normalizeMetricLabel(options.reason ?? defaultWaitReason, defaultWaitReason),
+    status: normalizeWaitJoinStatus(options.joinStatus ?? options.childStatus ?? "waiting"),
+    reason,
   };
 }
 
@@ -514,11 +625,12 @@ function buildSubagentSpawnAttributes(
   spawnId: string,
   childAgentId: string,
   options: StartSubagentSpawnOptions,
+  spawnReason: SubagentSpawnReason,
 ): AttributeMap {
   return withoutUndefinedAttributes({
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_ID]: spawnId,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_TYPE]: normalizeSpawnType(options.spawnType),
-    [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_REASON]: normalizeMetricLabel(options.spawnReason ?? "subagent", "subagent"),
+    [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_REASON]: spawnReason,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_TOOL_CALL_ID]: options.toolCallId,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_COMMAND_HASH]: hashCommand(options.command, options.args, session.config),
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILD_ID]: childAgentId,
@@ -537,12 +649,14 @@ function buildSubagentCompletionAttributes(
   spawnId: string,
   childAgentId: string,
   outcome: "completed" | "failed" | "cancelled",
+  spawnReason: SubagentSpawnReason,
 ): AttributeMap {
   const summary = ensureAgentTree(session).summarize(session.lineage.rootAgentId);
 
   return withoutUndefinedAttributes({
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_ID]: spawnId,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILD_ID]: childAgentId,
+    [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_REASON]: spawnReason,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_OUTCOME]: outcome,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILDREN_ACTIVE]: summary.activeChildren,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILD_COUNT]: summary.fanoutCount,
@@ -576,6 +690,7 @@ function createWaitJoinRuntimeHint(
   id: string,
   options: AgentWaitJoinOptions,
   kind: "wait" | "join",
+  reason: AgentWaitReason,
   active: boolean,
   durationMs?: number,
 ) {
@@ -587,7 +702,7 @@ function createWaitJoinRuntimeHint(
     childAgentId: options.childAgentId,
     childStatus: options.childStatus,
     joinStatus: options.joinStatus,
-    reason: options.reason,
+    reason,
     durationMs,
   };
 }
@@ -688,12 +803,13 @@ function traceContextFailureMetricLabels(session: SubagentTelemetrySession): Rec
 function subagentSpawnMetricLabels(
   session: SubagentTelemetrySession,
   options: StartSubagentSpawnOptions,
+  spawnReason: SubagentSpawnReason,
 ): Record<string, string> {
   return {
     agent_role: session.lineage.role,
     subagent_depth: subagentDepthLabel(session),
     spawn_type: normalizeSpawnType(options.spawnType),
-    spawn_reason: normalizeMetricLabel(options.spawnReason ?? "subagent", "subagent"),
+    spawn_reason: spawnReason,
   };
 }
 
@@ -710,6 +826,31 @@ function subagentDepthLabel(session: SubagentTelemetrySession): string {
 
 function normalizeSpawnType(value: string | undefined): SubagentSpawnType {
   if (value === "command" || value === "tool" || value === "extension") return value;
+  return "unknown";
+}
+
+function normalizeSpawnReason(value: unknown): SubagentSpawnReason {
+  if (SUBAGENT_SPAWN_REASON_VALUES.includes(value as SubagentSpawnReason)) return value as SubagentSpawnReason;
+  return "unknown";
+}
+
+function normalizeWaitReason(
+  value: unknown,
+  options: AgentWaitJoinOptions,
+  kind: "wait" | "join",
+): AgentWaitReason {
+  if (AGENT_WAIT_REASON_VALUES.includes(value as AgentWaitReason)) return value as AgentWaitReason;
+  if (value === undefined && isWaitingForActiveChild(options, kind)) return "child_running";
+  return "unknown";
+}
+
+function isWaitingForActiveChild(options: AgentWaitJoinOptions, kind: "wait" | "join"): boolean {
+  if (options.childStatus !== "active") return false;
+  return kind === "wait" || options.joinStatus === "waiting";
+}
+
+function normalizeWaitJoinStatus(value: unknown): WaitJoinMetricStatus {
+  if (waitJoinMetricStatusValues.includes(value as WaitJoinMetricStatus)) return value as WaitJoinMetricStatus;
   return "unknown";
 }
 
@@ -768,7 +909,7 @@ function resolveSubagentParentSpan(session: SubagentTelemetrySession): Span | un
 }
 
 function resolveCurrentSessionId(session: SubagentTelemetrySession): string {
-  return session.sessionAttributes?.[sessionIdAttributeKey]?.toString() ?? `session-${session.lineage.workflowId}`;
+  return session.sessionAttributes?.[SESSION_ATTRIBUTES.PI_SESSION_ID]?.toString() ?? `session-${session.lineage.workflowId}`;
 }
 
 function hashCommand(command: string | undefined, args: readonly string[] | undefined, config: ObservMeConfig): string | undefined {

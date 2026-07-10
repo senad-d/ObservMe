@@ -1,5 +1,13 @@
-import type { Counter, Histogram, Span } from "@opentelemetry/api";
-import { context as otelContext, SpanStatusCode, trace } from "@opentelemetry/api";
+import type { Context, Counter, Histogram, Link, Span, SpanContext } from "@opentelemetry/api";
+import {
+  context as otelContext,
+  createTraceState,
+  isSpanContextValid,
+  ROOT_CONTEXT,
+  SpanStatusCode,
+  TraceFlags,
+  trace,
+} from "@opentelemetry/api";
 import { recordObsSessionCost, recordObsSessionToolCall } from "../commands/obs-session.ts";
 import { recordObsStatusQueueDrop } from "../commands/obs-status.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
@@ -13,13 +21,13 @@ import {
   COMPACTION_ATTRIBUTES,
   LLM_ATTRIBUTES,
   LOG_ATTRIBUTES,
+  SESSION_ATTRIBUTES,
   TOOL_ATTRIBUTES,
   TURN_ATTRIBUTES,
 } from "../semconv/attributes.ts";
 import { LOG_EVENT_NAMES } from "../semconv/metrics.ts";
 import { SPAN_NAMES } from "../semconv/spans.ts";
-import type { AgentLineageContext } from "./agent-lineage.ts";
-import type { AgentWaitJoinState, SubagentSpawnState } from "./subagent-spawn.ts";
+import type { AgentLineageContext, ParentPropagationFailureReason } from "./agent-lineage.ts";
 import type {
   AttributeMap,
   AttributePrimitive,
@@ -30,7 +38,8 @@ import type {
   TelemetryLogger,
   TelemetryTracer,
   ToolCallState,
-} from "./handlers.ts";
+} from "./handler-types.ts";
+import type { AgentWaitJoinState, SubagentSpawnState } from "./subagent-types.ts";
 
 const OBSERVME_SEMCONV_VERSION = "0.1.0";
 const REDACTION_FAILURE_REASON_MAX_CHARS = 240;
@@ -49,19 +58,6 @@ export type SelfObservabilitySession = Pick<
 >;
 export type TelemetryDropTarget = ObservMeMetrics | SelfObservabilitySession;
 
-const sessionAttributeKeys = {
-  SESSION_ID: "pi.session.id",
-  SESSION_NAME: "pi.session.name",
-  SESSION_CWD_HASH: "pi.session.cwd_hash",
-  SESSION_PARENT_SESSION_HASH: "pi.session.parent_session_hash",
-  SESSION_PERSISTED: "pi.session.persisted",
-  SESSION_FILE_HASH: "pi.session.file_hash",
-  SESSION_VERSION: "pi.session.version",
-  MODEL_PROVIDER_CURRENT: "pi.model.provider.current",
-  MODEL_ID_CURRENT: "pi.model.id.current",
-  THINKING_LEVEL_CURRENT: "pi.thinking.level.current",
-} as const;
-
 export function emitLifecycleLog(
   logger: TelemetryLogger,
   eventName: string,
@@ -71,7 +67,7 @@ export function emitLifecycleLog(
   emitStructuredLog(logger, eventName, "lifecycle", attributes, severityText);
 }
 
-function emitStructuredLog(
+export function emitStructuredLog(
   logger: TelemetryLogger,
   eventName: string,
   category: string,
@@ -255,7 +251,11 @@ export function startToolCallState(session: ObservMeTelemetrySession, event: unk
   }
 
   const span = startActiveChildSpan(session, SPAN_NAMES.PI_TOOL_CALL, resolveToolParentSpan(session), attributes, "tool_call");
-  const state = { span, labels: toolMetricLabels(attributes) };
+  const state = {
+    span,
+    labels: toolMetricLabels(attributes),
+    completionLogAttributes: buildToolLogCorrelationAttributes(session, span, attributes),
+  };
 
   session.currentToolCallId = toolCallId;
   session.spans.activeToolCalls.set(toolCallId, state);
@@ -344,7 +344,7 @@ export function buildLlmRequestAttributes(
     ...buildCommonSessionSpanAttributes(resolveCurrentSessionId(session), session.config, session.lineage),
     [COMMON_SPAN_ATTRIBUTES.PI_AGENT_RUN_ID]: session.currentAgentRunId,
     [LOG_ATTRIBUTES.PI_TURN_ID]: session.currentTurnId,
-    "pi.llm.request.id": requestId,
+    [LLM_ATTRIBUTES.PI_LLM_REQUEST_ID]: requestId,
     [LLM_ATTRIBUTES.GEN_AI_OPERATION_NAME]: readString(payload, "operation") ?? readString(payload, "operationName") ?? "chat",
     [LLM_ATTRIBUTES.GEN_AI_PROVIDER_NAME]: provider,
     [LLM_ATTRIBUTES.GEN_AI_REQUEST_MODEL]: model,
@@ -463,6 +463,45 @@ export function buildOptionalToolIdentityAttributes(event: unknown): AttributeMa
     [TOOL_ATTRIBUTES.PI_TOOL_CATEGORY]: category,
     [TOOL_ATTRIBUTES.GEN_AI_TOOL_NAME]: toolName,
     [TOOL_ATTRIBUTES.GEN_AI_TOOL_TYPE]: mapToolType(category),
+  });
+}
+
+export function buildToolLogCorrelationAttributes(
+  session: ObservMeTelemetrySession,
+  span: Span,
+  attributes: AttributeMap,
+): AttributeMap {
+  return withoutUndefinedAttributes({
+    ...buildLineageMetricSafeLogAttributes(session),
+    [LOG_ATTRIBUTES.PI_AGENT_RUN_ID]: session.currentAgentRunId,
+    [LOG_ATTRIBUTES.PI_TURN_ID]: session.currentTurnId,
+    ...buildToolLogIdentityAttributes(attributes),
+    [LOG_ATTRIBUTES.TRACE_ID]: readSpanTraceId(span),
+    [LOG_ATTRIBUTES.SPAN_ID]: readSpanId(span),
+  });
+}
+
+export function buildToolCompletionLogAttributes(
+  state: ToolCallState,
+  finalAttributes: AttributeMap,
+): AttributeMap {
+  const errorClass = readString(finalAttributes, TOOL_ATTRIBUTES.PI_TOOL_ERROR_CLASS);
+  const normalizedErrorClass = errorClass ? normalizeErrorClass(errorClass) : undefined;
+
+  return withoutUndefinedAttributes({
+    ...state.completionLogAttributes,
+    [TOOL_ATTRIBUTES.PI_TOOL_SUCCESS]: readBoolean(finalAttributes, TOOL_ATTRIBUTES.PI_TOOL_SUCCESS),
+    [TOOL_ATTRIBUTES.PI_TOOL_ERROR]: readBoolean(finalAttributes, TOOL_ATTRIBUTES.PI_TOOL_ERROR),
+    [TOOL_ATTRIBUTES.PI_TOOL_ERROR_CLASS]: normalizedErrorClass,
+    [LOG_ATTRIBUTES.ERROR_TYPE]: normalizedErrorClass,
+  });
+}
+
+function buildToolLogIdentityAttributes(attributes: AttributeMap): AttributeMap {
+  return withoutUndefinedAttributes({
+    [TOOL_ATTRIBUTES.PI_TOOL_CALL_ID]: readString(attributes, TOOL_ATTRIBUTES.PI_TOOL_CALL_ID),
+    [TOOL_ATTRIBUTES.PI_TOOL_NAME]: readString(attributes, TOOL_ATTRIBUTES.PI_TOOL_NAME),
+    [TOOL_ATTRIBUTES.PI_TOOL_CATEGORY]: readString(attributes, TOOL_ATTRIBUTES.PI_TOOL_CATEGORY),
   });
 }
 
@@ -719,8 +758,8 @@ export function buildCapturedContentLogAttributes(
     ...buildLineageMetricSafeLogAttributes(session),
     [COMMON_SPAN_ATTRIBUTES.PI_AGENT_RUN_ID]: session.currentAgentRunId,
     [LOG_ATTRIBUTES.PI_TURN_ID]: session.currentTurnId,
-    [LLM_ATTRIBUTES.GEN_AI_PROVIDER_NAME]: readString(session.sessionAttributes, sessionAttributeKeys.MODEL_PROVIDER_CURRENT),
-    [LLM_ATTRIBUTES.GEN_AI_REQUEST_MODEL]: readString(session.sessionAttributes, sessionAttributeKeys.MODEL_ID_CURRENT),
+    [LLM_ATTRIBUTES.GEN_AI_PROVIDER_NAME]: readString(session.sessionAttributes, SESSION_ATTRIBUTES.PI_MODEL_PROVIDER_CURRENT),
+    [LLM_ATTRIBUTES.GEN_AI_REQUEST_MODEL]: readString(session.sessionAttributes, SESSION_ATTRIBUTES.PI_MODEL_ID_CURRENT),
     [LLM_ATTRIBUTES.PI_LLM_CONTENT_KIND]: kind,
     [LOG_ATTRIBUTES.TRACE_ID]: readSpanTraceId(span),
     [LOG_ATTRIBUTES.SPAN_ID]: readSpanId(span),
@@ -747,13 +786,90 @@ export function readSpanId(span: Span | undefined): string | undefined {
 const spanStartTimesMs = new WeakMap<Span, number>();
 const activeSpanOperations = new WeakMap<Span, string>();
 
+export type SessionTraceContextFailureReason = ParentPropagationFailureReason | "trace_context_unavailable";
+
+export interface SessionTraceParentResolution {
+  readonly parentContext?: Context;
+  readonly links?: Link[];
+  readonly continued: boolean;
+  readonly failureReason?: SessionTraceContextFailureReason;
+}
+
+export interface ActiveRootSpanOptions {
+  readonly parentContext?: Context;
+  readonly links?: Link[];
+}
+
+export function resolveSessionTraceParent(lineage: AgentLineageContext): SessionTraceParentResolution {
+  const propagated = lineage.propagatedTraceContext;
+  if (propagated) {
+    const spanContext = createRemoteSpanContext(
+      propagated.traceId,
+      propagated.spanId,
+      propagated.traceFlags,
+      propagated.tracestate,
+    );
+    if (spanContext) {
+      return {
+        parentContext: trace.setSpanContext(ROOT_CONTEXT, spanContext),
+        continued: true,
+      };
+    }
+  }
+
+  const fallbackSpanContext = createRemoteSpanContext(
+    lineage.parentTraceId,
+    lineage.parentSpanId,
+    TraceFlags.NONE,
+  );
+  if (fallbackSpanContext) {
+    return {
+      links: [{ context: fallbackSpanContext }],
+      continued: false,
+      failureReason: lineage.propagationFailure ?? "trace_context_unavailable",
+    };
+  }
+
+  if (lineage.propagationFailure || lineage.parentAgentId) {
+    return {
+      continued: false,
+      failureReason: lineage.propagationFailure ?? "trace_context_unavailable",
+    };
+  }
+
+  return { continued: false };
+}
+
+function createRemoteSpanContext(
+  traceId: string | undefined,
+  spanId: string | undefined,
+  traceFlags: number,
+  tracestate?: string,
+): SpanContext | undefined {
+  if (!traceId || !spanId) return undefined;
+
+  const spanContext: SpanContext = {
+    traceId,
+    spanId,
+    traceFlags: traceFlags & TraceFlags.SAMPLED,
+    isRemote: true,
+    ...(tracestate ? { traceState: createTraceState(tracestate) } : {}),
+  };
+  return isSpanContextValid(spanContext) ? spanContext : undefined;
+}
+
 export function startActiveRootSpan(
   session: ObservMeTelemetrySession,
   name: string,
   attributes: AttributeMap,
   operation: string,
+  options: ActiveRootSpanOptions = {},
 ): Span {
-  const span = session.tracer.startSpan(name, { attributes });
+  const span = session.tracer.startSpan(
+    name,
+    { attributes, ...(options.links && options.links.length > 0 ? { links: options.links } : {}) },
+    options.parentContext ?? ROOT_CONTEXT,
+  );
   spanStartTimesMs.set(span, Date.now());
   recordActiveSpanStart(session.metrics, span, operation);
   return span;
@@ -837,7 +953,23 @@ export function evictWaitJoinState(state: AgentWaitJoinState, target: TelemetryD
   evictSpan(state.span, target);
 }
 
+export function closePendingUserBashOperation(
+  session: ObservMeTelemetrySession,
+  reason: "bash_overlap_ambiguous" | "bash_session_shutdown",
+  evicted: boolean,
+): void {
+  const pending = session.pendingUserBash;
+  if (!pending) return;
+
+  if (evicted) pending.span.setAttribute(COMMON_SPAN_ATTRIBUTES.OBSERVME_EVICTED, true);
+  pending.span.setStatus({ code: SpanStatusCode.ERROR, message: "bash_execution_incomplete" });
+  endActiveSpan(session, pending.span);
+  session.pendingUserBash = undefined;
+  recordTelemetryDrop(session, reason, { operation: "bash_execution" });
+}
+
 export function endAllActiveSpans(session: ObservMeTelemetrySession): void {
+  closePendingUserBashOperation(session, "bash_session_shutdown", false);
   for (const state of session.spans.activeAgentJoins.values()) endActiveSpan(session, state.span);
   for (const state of session.spans.activeAgentWaits.values()) endActiveSpan(session, state.span);
   for (const state of session.spans.activeSubagentSpawns.values()) endActiveSpan(session, state.span);
@@ -853,20 +985,22 @@ export function endAllActiveSpans(session: ObservMeTelemetrySession): void {
   session.spans.activeTurns.clear();
   session.spans.activeAgentRuns.clear();
   session.turnSequences.clear();
+  session.childFailureAccounting?.clear();
 }
 
 export function resolveCurrentSessionId(session: SelfObservabilitySession): string {
-  return readString(session.sessionAttributes, sessionAttributeKeys.SESSION_ID) ?? `session-${session.lineage.workflowId}`;
+  return readString(session.sessionAttributes, SESSION_ATTRIBUTES.PI_SESSION_ID) ?? `session-${session.lineage.workflowId}`;
 }
 
 export function buildLineageMetricSafeLogAttributes(session: SelfObservabilitySession): AttributeMap {
-  return {
+  return withoutUndefinedAttributes({
     [LOG_ATTRIBUTES.PI_SESSION_ID]: resolveCurrentSessionId(session),
     [LOG_ATTRIBUTES.PI_WORKFLOW_ID]: session.lineage.workflowId,
     [LOG_ATTRIBUTES.PI_WORKFLOW_ROOT_AGENT_ID]: session.lineage.workflowRootAgentId,
     [LOG_ATTRIBUTES.PI_AGENT_ID]: session.lineage.agentId,
+    [LOG_ATTRIBUTES.PI_AGENT_PARENT_ID]: session.lineage.parentAgentId,
     [LOG_ATTRIBUTES.PI_AGENT_ROOT_ID]: session.lineage.rootAgentId,
-  };
+  });
 }
 
 export function buildModelChangeAttributes(event: unknown, ctx: ObservMeHandlerContext, session: ObservMeTelemetrySession): AttributeMap {
@@ -877,8 +1011,8 @@ export function buildModelChangeAttributes(event: unknown, ctx: ObservMeHandlerC
     [COMMON_SPAN_ATTRIBUTES.PI_ENTRY_ID]: readChangeEntryId(event, "model_change"),
     [COMMON_SPAN_ATTRIBUTES.PI_ENTRY_PARENT_ID]: readChangeEntryParentId(event, "model_change"),
     [COMMON_SPAN_ATTRIBUTES.PI_ENTRY_TYPE]: readChangeEntryType(event, "model_change"),
-    [sessionAttributeKeys.MODEL_PROVIDER_CURRENT]: resolveSessionModelProvider(event, ctx, session),
-    [sessionAttributeKeys.MODEL_ID_CURRENT]: resolveSessionModelId(event, ctx, session),
+    [SESSION_ATTRIBUTES.PI_MODEL_PROVIDER_CURRENT]: resolveSessionModelProvider(event, ctx, session),
+    [SESSION_ATTRIBUTES.PI_MODEL_ID_CURRENT]: resolveSessionModelId(event, ctx, session),
   });
 }
 
@@ -890,7 +1024,7 @@ export function buildThinkingLevelChangeAttributes(event: unknown, ctx: ObservMe
     [COMMON_SPAN_ATTRIBUTES.PI_ENTRY_ID]: readChangeEntryId(event, "thinking_level_change"),
     [COMMON_SPAN_ATTRIBUTES.PI_ENTRY_PARENT_ID]: readChangeEntryParentId(event, "thinking_level_change"),
     [COMMON_SPAN_ATTRIBUTES.PI_ENTRY_TYPE]: readChangeEntryType(event, "thinking_level_change"),
-    [sessionAttributeKeys.THINKING_LEVEL_CURRENT]: resolveSessionThinkingLevel(event, ctx, session),
+    [SESSION_ATTRIBUTES.PI_THINKING_LEVEL_CURRENT]: resolveSessionThinkingLevel(event, ctx, session),
   });
 }
 
@@ -1178,8 +1312,8 @@ export function updateCurrentSessionAttributes(
 export function modelChangeMetricLabels(session: ObservMeTelemetrySession, attributes: AttributeMap): Record<string, string> {
   return {
     ...metricLabels(session.config, session.lineage),
-    provider: String(attributes[sessionAttributeKeys.MODEL_PROVIDER_CURRENT] ?? "unknown"),
-    model: String(attributes[sessionAttributeKeys.MODEL_ID_CURRENT] ?? "unknown"),
+    provider: String(attributes[SESSION_ATTRIBUTES.PI_MODEL_PROVIDER_CURRENT] ?? "unknown"),
+    model: String(attributes[SESSION_ATTRIBUTES.PI_MODEL_ID_CURRENT] ?? "unknown"),
   };
 }
 
@@ -1238,6 +1372,10 @@ export function mergeToolStateLabels(state: ToolCallState, attributes: Attribute
     ...state.labels,
     ...toolMetricLabelUpdates(attributes),
   };
+  state.completionLogAttributes = {
+    ...state.completionLogAttributes,
+    ...buildToolLogIdentityAttributes(attributes),
+  };
 }
 
 export function toolMetricLabelUpdates(attributes: AttributeMap): Record<string, string> {
@@ -1251,15 +1389,23 @@ export function toolMetricLabelUpdates(attributes: AttributeMap): Record<string,
   return updates;
 }
 
-export function buildBashExecutionAttributes(event: unknown, session: ObservMeTelemetrySession): AttributeMap {
+export function buildBashPreExecutionAttributes(event: unknown, session: ObservMeTelemetrySession): AttributeMap {
   const command = readBashCommand(event);
-  const output = readBashOutput(event);
 
   return withoutUndefinedAttributes({
     ...buildCommonSessionSpanAttributes(resolveCurrentSessionId(session), session.config, session.lineage),
     [COMMON_SPAN_ATTRIBUTES.PI_AGENT_RUN_ID]: session.currentAgentRunId,
     [LOG_ATTRIBUTES.PI_TURN_ID]: session.currentTurnId,
     [BASH_ATTRIBUTES.PI_BASH_COMMAND_HASH]: command === undefined ? undefined : hashValue(command, session.config),
+    [BASH_ATTRIBUTES.PI_BASH_EXCLUDE_FROM_CONTEXT]: readBashExcludeFromContext(event),
+  });
+}
+
+export function buildBashExecutionAttributes(event: unknown, session: ObservMeTelemetrySession): AttributeMap {
+  const output = readBashOutput(event);
+
+  return withoutUndefinedAttributes({
+    ...buildBashPreExecutionAttributes(event, session),
     [BASH_ATTRIBUTES.PI_BASH_EXIT_CODE]: readBashExitCode(event),
     [BASH_ATTRIBUTES.PI_BASH_CANCELLED]: readBashCancelled(event) ?? false,
     [BASH_ATTRIBUTES.PI_BASH_TRUNCATED]: readBashTruncated(event) ?? false,
@@ -1363,6 +1509,90 @@ export function readBashFullOutputPathPresent(event: unknown): boolean {
 export function readBashExcludeFromContext(event: unknown): boolean | undefined {
   const payload = readBashPayload(event);
   return readBoolean(payload, "excludeFromContext") ?? readBoolean(payload, "exclude_from_context");
+}
+
+const bashStartTimestampKeys = [
+  "startedAtMs",
+  "started_at_ms",
+  "startTimeMs",
+  "start_time_ms",
+  "startedAt",
+  "started_at",
+  "startTimestamp",
+  "start_timestamp",
+] as const;
+const bashCompletionTimestampKeys = [
+  "completedAtMs",
+  "completed_at_ms",
+  "endedAtMs",
+  "ended_at_ms",
+  "endTimeMs",
+  "end_time_ms",
+  "completedAt",
+  "completed_at",
+  "endedAt",
+  "ended_at",
+  "endTimestamp",
+  "end_timestamp",
+  "timestamp",
+] as const;
+
+export function readBashPreExecutionTimestampMs(event: unknown): number | undefined {
+  return readBashTimestampMs(event, bashStartTimestampKeys) ?? readBashTimestampMs(event, ["timestamp"]);
+}
+
+export function readBashCompletionTimestampMs(event: unknown): number | undefined {
+  return readBashTimestampMs(event, bashCompletionTimestampKeys);
+}
+
+export function resolveBashEventDurationMs(startedAtMs: number | undefined, completionEvent: unknown): number | undefined {
+  return safeElapsedDurationMs(startedAtMs, readBashCompletionTimestampMs(completionEvent));
+}
+
+export function resolveStandaloneBashEventDurationMs(event: unknown): number | undefined {
+  return safeElapsedDurationMs(readBashTimestampMs(event, bashStartTimestampKeys), readBashCompletionTimestampMs(event));
+}
+
+export function safeElapsedDurationMs(startedAtMs: number | undefined, completedAtMs: number | undefined): number | undefined {
+  if (!isSafeNonNegativeTimeMs(startedAtMs) || !isSafeNonNegativeTimeMs(completedAtMs) || completedAtMs < startedAtMs) return undefined;
+
+  const durationMs = completedAtMs - startedAtMs;
+  return Number.isFinite(durationMs) && durationMs <= Number.MAX_SAFE_INTEGER ? durationMs : undefined;
+}
+
+function readBashTimestampMs(event: unknown, keys: readonly string[]): number | undefined {
+  const payload = readBashPayload(event);
+  const payloadTimestamp = readTimestampMsForKeys(payload, keys);
+  if (payloadTimestamp !== undefined) return payloadTimestamp;
+
+  const eventTimestamp = readTimestampMsForKeys(event, keys);
+  if (eventTimestamp !== undefined) return eventTimestamp;
+
+  return readTimestampMsForKeys(readUnknown(event, "entry"), keys);
+}
+
+function readTimestampMsForKeys(value: unknown, keys: readonly string[]): number | undefined {
+  for (const key of keys) {
+    const timestamp = parseTimestampMs(readUnknown(value, key));
+    if (timestamp !== undefined) return timestamp;
+  }
+
+  return undefined;
+}
+
+function parseTimestampMs(value: unknown): number | undefined {
+  if (typeof value === "number") return isSafeNonNegativeTimeMs(value) ? value : undefined;
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+
+  const numericTimestamp = Number(value);
+  if (isSafeNonNegativeTimeMs(numericTimestamp)) return numericTimestamp;
+
+  const parsedTimestamp = Date.parse(value);
+  return isSafeNonNegativeTimeMs(parsedTimestamp) ? parsedTimestamp : undefined;
+}
+
+function isSafeNonNegativeTimeMs(value: number | undefined): value is number {
+  return value !== undefined && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 }
 
 export function hasBashCompletionResult(event: unknown): boolean {
@@ -1717,11 +1947,11 @@ export function resolveSessionModelProvider(
   ctx: ObservMeHandlerContext,
   session: ObservMeTelemetrySession,
 ): string {
-  return readModelProvider(event, ctx) ?? readString(session.sessionAttributes, sessionAttributeKeys.MODEL_PROVIDER_CURRENT) ?? "unknown";
+  return readModelProvider(event, ctx) ?? readString(session.sessionAttributes, SESSION_ATTRIBUTES.PI_MODEL_PROVIDER_CURRENT) ?? "unknown";
 }
 
 export function resolveSessionModelId(event: unknown, ctx: ObservMeHandlerContext, session: ObservMeTelemetrySession): string {
-  return readModelId(event, ctx) ?? readString(session.sessionAttributes, sessionAttributeKeys.MODEL_ID_CURRENT) ?? "unknown";
+  return readModelId(event, ctx) ?? readString(session.sessionAttributes, SESSION_ATTRIBUTES.PI_MODEL_ID_CURRENT) ?? "unknown";
 }
 
 export function resolveSessionThinkingLevel(
@@ -1729,7 +1959,7 @@ export function resolveSessionThinkingLevel(
   ctx: ObservMeHandlerContext,
   session: ObservMeTelemetrySession,
 ): string {
-  return readThinkingLevel(event, ctx) ?? readString(session.sessionAttributes, sessionAttributeKeys.THINKING_LEVEL_CURRENT) ?? "unknown";
+  return readThinkingLevel(event, ctx) ?? readString(session.sessionAttributes, SESSION_ATTRIBUTES.PI_THINKING_LEVEL_CURRENT) ?? "unknown";
 }
 
 export function readModelProvider(event: unknown, ctx: ObservMeHandlerContext): string | undefined {

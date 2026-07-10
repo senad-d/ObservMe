@@ -202,17 +202,19 @@ Expected behavior:
 - Keep Pi running fail-open.
 - Do not place raw environment values or raw command lines into telemetry.
 
-### Current code rule
+### Current production rule
 
-`src/pi/agent-lineage.ts` only reads propagated lineage when `trustedParentContext` is true. Otherwise it ignores `OBSERVME_*` lineage env vars and generates a new root workflow/agent identity.
+The shipped extension registers session handlers with `trustedParentContext: true`, making the Pi process environment eligible for launcher-provided lineage. Trusted project `.env` values are loaded into ObservMe configuration but are not copied into this lineage input, so a project file cannot establish parent provenance.
 
-That is correct for safety, but it means a child process must have a production path that marks ObservMe-propagated parent context as trusted. Otherwise child telemetry will look like a new root agent even if the environment variables exist.
+Eligibility is not blind acceptance. When any propagation value is present, `src/pi/agent-lineage.ts` requires a complete validated workflow, parent agent, root agent, parent depth, and spawn envelope. Trace-enabled propagation also requires valid W3C `traceparent`; optional `tracestate` and duplicate parent trace/span metadata must validate and agree. A stale inherited child agent id is rejected. Partial, malformed, oversized, or stale envelopes fail open to root/orphan lineage with bounded diagnostics that never include raw inherited values.
+
+ObservMe validates the process envelope but does not cryptographically authenticate the launcher. An ObservMe-aware launcher remains responsible for constructing the envelope immediately before child startup and clearing stale propagation variables. Explicit runtime lineage options remain available to tests and embedders.
 
 For tmux orchestration this is the critical distinction:
 
-- **Child Pi with ObservMe but no trusted parent env:** telemetry exists, but dashboards classify the child as another root agent/session.
-- **Child Pi with ObservMe and trusted parent env:** telemetry exists and dashboards can classify the child as a subagent in the same workflow tree.
-- **Child Pi with partial/broken parent env:** telemetry exists, but the child should be classified as orphaned and lineage-health metrics should increment.
+- **Child Pi with ObservMe but no propagation envelope:** telemetry exists and the child starts as a root-like runtime.
+- **Child Pi with a complete validated process envelope:** telemetry joins the parent workflow and continues the propagated W3C trace.
+- **Child Pi with a partial/broken/stale envelope:** Pi keeps running with root/orphan fallback and one bounded propagation-failure signal.
 
 ## 3. What ObservMe must do at a subagent spawn point
 
@@ -312,10 +314,12 @@ agent:
 
 Validation gates:
 
+- Workflow, parent-agent, root-agent, depth, and spawn values must be present together when any propagated value is supplied.
 - Lineage env values must be short and match the safe character pattern.
-- Parent trace id must be 32 hex characters.
-- Parent span id must be 16 hex characters.
+- Trace-enabled propagation must include a valid W3C `traceparent`; optional `tracestate` is bounded and structurally validated.
+- Parent trace id must be 32 hex characters and parent span id must be 16 hex characters when duplicate metadata is supplied; both must match `traceparent`.
 - Depth must be an integer between 0 and 64.
+- A stale inherited child agent id or uppercase W3C propagation variable invalidates the envelope.
 
 ## 5. Child runtime contract
 
@@ -504,16 +508,15 @@ safe result summary hash/length when available
 
 ### Trust model for propagated lineage
 
-Because the child process also loads ObservMe, the implementation must define how child ObservMe distinguishes trusted ObservMe-propagated env from arbitrary user env.
+The implemented trust boundary is the child Pi process environment plus a complete generated spawn envelope:
 
-Acceptable design options:
+1. The parent creates a fresh `OBSERVME_SPAWN_ID` and validated workflow/parent/root/depth values around the `pi.agent.spawn` span.
+2. The launcher passes those values and W3C context directly to the child process after clearing stale ObservMe and W3C variables.
+3. The shipped child extension makes only the Pi process environment eligible for lineage; trusted project `.env` remains configuration-only.
+4. The child accepts the envelope only when every required value validates and the W3C and duplicate trace metadata agree.
+5. Invalid envelopes fail open without raw-value diagnostics. Explicit runtime overrides are reserved for controlled embedders and tests.
 
-1. **Spawn marker option:** parent sets a generated `OBSERVME_SPAWN_ID`; child accepts parent env only when spawn id and parent/root/workflow values validate.
-2. **Signed lineage option:** parent signs lineage values with a local secret or session secret; child verifies before trusting.
-3. **Explicit child flag option:** orchestrator launches child with an explicit ObservMe option that enables trusted parent env for that process.
-4. **Session correlation option:** parent writes a minimal non-LLM `custom` correlation entry and child verifies it if a persisted session is used.
-
-The selected design must reject malformed or oversized values and must never trust raw env blindly in unrelated Pi invocations.
+This is process-boundary validation, not a cryptographic launcher signature. A future orchestration extension may add signing if it needs stronger provenance against other code running as the same local user, but it must preserve the current bounded validation and fail-open behavior.
 
 ### Isolation and safety
 
@@ -935,49 +938,40 @@ The Agents and Agent Node Graphs dashboards now surface the main operator questi
 
 ## 12. Current implementation checkpoints and gaps
 
-These are documentation findings from reading the current code and dashboards. They are not code changes.
+These checkpoints reflect the current code and dashboards after source-review remediation.
 
 ### Present pieces
 
-- Agent lineage generation exists in `src/pi/agent-lineage.ts`.
+- Agent lineage generation and complete propagated-envelope validation exist in `src/pi/agent-lineage.ts`.
+- The production extension enables process-environment lineage eligibility while keeping trusted project `.env` outside the provenance boundary.
+- Valid W3C context explicitly parents the child `pi.session`; unavailable continuation uses a validated span link or bounded propagation-failure fallback.
 - Bounded agent-tree tracking exists in `src/pi/agent-tree-tracker.ts`.
 - Spawn/wait/join helper functions exist in `src/pi/subagent-spawn.ts`.
-- Session, agent-run, turn, LLM, tool, bash, branch, and compaction handlers are wired in `src/pi/handlers.ts`.
+- Spawn duration is recorded on completion and launcher failure. Child completion/join records child failure and confirmed parent recovery once through bounded deduplication state.
+- Session, agent-run/turn, LLM, tool/bash, and session metadata/tree handlers are split under `src/pi/event-handlers/` behind the stable `src/pi/handlers.ts` facade.
+- Root workflow duration is recorded at shutdown, and failed agent runs increment `observme_agent_run_errors_total`.
 - `/obs agents` is implemented and uses local runtime state, Prometheus aggregates, and Tempo drill-down attributes.
 - Grafana dashboards include agent/subagent panels and alert/SLO rules.
-- Tests cover lineage generation, propagation fallback, orphan handling, wait/join spans, and low-cardinality metric labels.
+- Tests cover child trace parenting, sanitized propagation fallback, spawn duration, child failure/recovery deduplication, wait/join spans, and low-cardinality metric labels.
 
-### Gaps to address before relying on full subagent dashboards
+### Remaining integration gaps before relying on full subagent dashboards
 
 1. **External and tmux subagent launchers are not automatically wrapped.**
    - `src/pi/subagent-spawn.ts` exposes helpers, but arbitrary extensions that call `child_process.spawn` or `tmux new-session` will not be detected automatically.
    - The Pi example subagent extension currently spawns child Pi processes without ObservMe env propagation.
-   - A future tmux orchestration extension must be the owner of this wrapping and lifecycle tracking.
+   - A future tmux orchestration extension must own this wrapping and lifecycle tracking.
 
-2. **Child runtime trust path needs production wiring.**
-   - `src/extension.ts` calls `registerHandlers(pi, { configDirName })` without `trustedParentContext: true`.
-   - `createAgentLineageContext` ignores lineage env unless `trustedParentContext` is true or recovery correlation is present.
-   - A child process can receive `OBSERVME_*` env values but still classify as a new root unless this trust path is intentionally enabled for ObservMe-spawned children.
-   - This matters even when the child definitely has ObservMe installed and loaded inside tmux.
+2. **Some dashboard label expectations remain broader than current emitted labels.**
+   - `observme_active_agents` currently carries `environment` and `agent_role`, not `subagent_depth`.
+   - `observme_subagent_spawn_failures_total` carries `spawn_type` and `error_class`, while some dashboard queries also group by depth/reason.
+   - Orphan signals emitted by tracker and session-propagation paths do not yet share one identical label set.
+   - These missing dimensions do not introduce high cardinality, but affected grouped panels may show blank label values until the metric contract is aligned.
 
-3. **Spawn duration metric is defined and queried, but the helper does not currently record it.**
-   - Dashboard expects `observme_subagent_spawn_duration_ms`.
-   - `SubagentSpawnState.startedAtMs` exists, but completion/failure paths do not currently record the duration histogram.
+3. **Agent capability is not automatically derived from Pi markdown agent definitions.**
+   - If dashboards should show `agent_capability`, the subagent launcher must map agent names/capabilities into a documented bounded enum before metrics use them.
 
-4. **Some dashboard label expectations are broader than current emitted labels.**
-   - `observme_active_agents` is currently incremented with `metricLabels(...)`, which provides `environment` and `agent_role`, not `subagent_depth`.
-   - `observme_subagent_spawn_failures_total` currently emits `spawn_type` and `error_class`, while the dashboard groups by `subagent_depth`, `spawn_type`, `spawn_reason`, and `error_class`.
-   - `observme_orphan_agents_total` currently uses tracker labels such as `status`/`reason`, while dashboards group by `agent_role` and `subagent_depth`.
-
-5. **Child failure/recovery counters exist but are not obviously updated by the current subagent helper paths.**
-   - Dashboards query `observme_child_agent_failures_total` and `observme_parent_recovered_from_child_failure_total`.
-   - Current `failSubagentSpawn` records spawn failures, but child join failures do not appear to increment these counters.
-
-6. **Agent capability is allowed by the requirements but not automatically derived from Pi markdown agent definitions.**
-   - If dashboards should show `agent_capability`, the subagent launcher must map bounded agent names/capabilities into `OBSERVME_AGENT_CAPABILITY` or equivalent low-cardinality labels.
-
-7. **Tmux management state does not exist yet.**
-   - ObservMe currently has in-memory agent-tree runtime state, but not a tmux orchestration registry for session names, panes, attach commands, stop/cleanup state, or result collection.
+4. **Tmux management state does not exist yet.**
+   - ObservMe has bounded in-memory telemetry agent-tree state, but not a tmux orchestration registry for session names, panes, attach commands, stop/cleanup state, or result collection.
    - A future extension must add that management layer while keeping telemetry privacy and cardinality boundaries intact.
 
 ## 13. Decision summary
@@ -988,11 +982,11 @@ Required decisions:
 
 1. **Subagent spawn point:** choose the exact launcher(s) to wrap, including tmux session creation and any direct `child_process.spawn` paths.
 2. **Tmux control model:** decide supported modes (`tmux-interactive`, `tmux-print-json`, `tmux-rpc`), session naming, attach/detach behavior, status detection, and cleanup policy.
-3. **Trust model:** define how a child ObservMe runtime knows that propagated `OBSERVME_*` env values came from an ObservMe parent and are safe to accept.
+3. **Trust model:** use the implemented complete process-envelope boundary; decide whether a future orchestrator also needs cryptographic signing against same-user processes.
 4. **Child ObservMe loading:** decide whether child Pi commands rely on installed ObservMe packages or receive explicit `-e` extension loading.
 5. **Capability mapping:** decide whether Pi markdown agent names map to `agent_capability`, `agent_role`, both, or neither.
-6. **Metric label contract:** align emitted labels with dashboard PromQL while keeping high-cardinality ids out of labels.
-7. **Duration/failure accounting:** record spawn duration and child failure/recovery counters so dashboard panels are meaningful.
+6. **Metric label contract:** align the remaining active-agent, spawn-failure, and orphan dashboard dimensions while keeping high-cardinality ids out of labels.
+7. **Duration/failure accounting:** use the implemented elapsed spawn duration and deduplicated child failure/recovery counters at completion/join transitions.
 8. **Packaging:** ensure both parent and child Pi processes load ObservMe and share compatible config/export endpoints.
 9. **Management command surface:** define commands/tools for list, start, status, attach, send, wait, join, stop, and cleanup.
 

@@ -13,6 +13,12 @@
       "version": "1.0.0"
     },
     {
+      "id": "row",
+      "name": "Row",
+      "type": "panel",
+      "version": ""
+    },
+    {
       "id": "timeseries",
       "name": "Time series",
       "type": "panel",
@@ -27,6 +33,12 @@
     {
       "id": "bargauge",
       "name": "Bar gauge",
+      "type": "panel",
+      "version": ""
+    },
+    {
+      "id": "text",
+      "name": "Text",
       "type": "panel",
       "version": ""
     }
@@ -63,9 +75,19 @@
   },
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "id": null,
   "links": [
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Overview",
+      "tooltip": "Open the overview with the current time range.",
+      "type": "link",
+      "url": "/d/observme-overview/observme-overview?${__url_time_range}"
+    },
     {
       "icon": "external link",
       "includeVars": true,
@@ -81,20 +103,53 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "LLM logs",
-      "tooltip": "Open LLM token and redacted opt-in content logs.",
+      "title": "LLM lifecycle logs",
+      "tooltip": "Open LLM token and non-content lifecycle logs.",
       "type": "link",
       "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "LLM Conversations",
+      "tooltip": "Open optional captured LLM content with privacy guidance.",
+      "type": "link",
+      "url": "/d/observme-llm-conversations/observme-llm-conversations?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Errors",
+      "tooltip": "Open LLM failure ratios, failure logs, and trace links.",
+      "type": "link",
+      "url": "/d/observme-errors/observme-errors?${__url_time_range}"
     }
   ],
   "liveNow": false,
   "panels": [
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "Spend overview",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Total LLM spend in the selected dashboard time range.",
+      "description": "Total provider-reported LLM spend in the selected dashboard range. Missing cost series render as zero. The $40/$50 colors are review references; the $50 alert threshold applies specifically to a one-hour window.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -110,11 +165,11 @@
               },
               {
                 "color": "yellow",
-                "value": 10
+                "value": 40
               },
               {
                 "color": "red",
-                "value": 25
+                "value": 50
               }
             ]
           },
@@ -123,10 +178,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 5,
         "w": 6,
         "x": 0,
-        "y": 0
+        "y": 1
       },
       "id": 1,
       "options": {
@@ -167,7 +222,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Estimated cost per hour using selected-range spend divided by the dashboard range length.",
+      "description": "Average hourly LLM cost estimated from selected-range spend. Yellow/red align with 80%/100% of the default $50-in-1h cost-spike alert threshold; tune for your deployment.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -183,11 +238,11 @@
               },
               {
                 "color": "yellow",
-                "value": 1
+                "value": 40
               },
               {
                 "color": "red",
-                "value": 5
+                "value": 50
               }
             ]
           },
@@ -196,10 +251,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 5,
         "w": 6,
         "x": 6,
-        "y": 0
+        "y": 1
       },
       "id": 2,
       "options": {
@@ -240,7 +295,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Selected-range spend divided by the default $25 review budget threshold. Tune this reference to match deployment budgets.",
+      "description": "Selected-range spend divided by the default $50/hour budget scaled to the dashboard range length. This is an average budget-envelope comparison, not the state of the rolling one-hour cost-spike alert.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -269,10 +324,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 5,
         "w": 6,
         "x": 12,
-        "y": 0
+        "y": 1
       },
       "id": 3,
       "options": {
@@ -299,7 +354,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(sum(increase(observme_llm_cost_usd_total[$__range])) or vector(0)) / 25",
+          "expr": "(sum(increase(observme_llm_cost_usd_total[$__range])) or vector(0)) / (50 * ($__range_s / 3600))",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -313,7 +368,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Simple forecast: selected-range spend normalized to a 24-hour day at the current burn rate.",
+      "description": "Selected-range average burn extrapolated to 24 hours. Yellow/red align with 80%/100% of the default $1,200 daily equivalent; short or unrepresentative ranges can be noisy.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -329,11 +384,11 @@
               },
               {
                 "color": "yellow",
-                "value": 50
+                "value": 960
               },
               {
                 "color": "red",
-                "value": 100
+                "value": 1200
               }
             ]
           },
@@ -342,10 +397,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 5,
         "w": 6,
         "x": 18,
-        "y": 0
+        "y": 1
       },
       "id": 4,
       "options": {
@@ -382,11 +437,24 @@
       "type": "stat"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "id": 101,
+      "panels": [],
+      "title": "Cost attribution",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Selected-range LLM cost grouped by provider.",
+      "description": "Top provider cost totals over the selected range. Missing cost series render as zero; open Models for traffic and cost-efficiency context.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -410,7 +478,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 4
+        "y": 7
       },
       "id": 5,
       "options": {
@@ -438,9 +506,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_cost_usd_total[$__range])) by (provider)",
+          "expr": "(topk(10, sum by (provider) (increase(observme_llm_cost_usd_total[$__range]))) or on() vector(0))",
+          "instant": true,
           "legendFormat": "{{provider}}",
-          "range": true,
+          "range": false,
           "refId": "A"
         }
       ],
@@ -452,7 +521,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Selected-range LLM cost grouped by model.",
+      "description": "Top provider/model cost totals over the selected range. Keeping provider in the grouping prevents identically named models from different providers being merged.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -476,7 +545,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 4
+        "y": 7
       },
       "id": 6,
       "options": {
@@ -504,13 +573,14 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_cost_usd_total[$__range])) by (model)",
-          "legendFormat": "{{model}}",
-          "range": true,
+          "expr": "(topk(10, sum by (provider, model) (increase(observme_llm_cost_usd_total[$__range]))) or on() vector(0))",
+          "instant": true,
+          "legendFormat": "{{provider}} / {{model}}",
+          "range": false,
           "refId": "A"
         }
       ],
-      "title": "Cost by model",
+      "title": "Cost by provider/model",
       "type": "bargauge"
     },
     {
@@ -518,7 +588,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Selected-range LLM cost grouped by environment.",
+      "description": "Selected-range provider-reported LLM cost grouped by deployment environment. Missing cost series render as zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -542,7 +612,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 4
+        "y": 7
       },
       "id": 7,
       "options": {
@@ -570,9 +640,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_cost_usd_total[$__range])) by (environment)",
+          "expr": "(sum by (environment) (increase(observme_llm_cost_usd_total[$__range])) or on() vector(0))",
+          "instant": true,
           "legendFormat": "{{environment}}",
-          "range": true,
+          "range": false,
           "refId": "A"
         }
       ],
@@ -584,13 +655,104 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "LLM cost in each Grafana interval grouped by provider and model. Model/thinking change annotations explain step changes.",
+      "description": "Top provider/model shares of total selected-range LLM spend. This adds explicit percent-of-total context beside the absolute attribution panels; missing cost series render as zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 14,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Models",
+          "url": "/d/observme-models/observme-models?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(topk(10, sum by (provider, model) (increase(observme_llm_cost_usd_total[$__range])) / scalar(clamp_min((sum(increase(observme_llm_cost_usd_total[$__range])) or vector(0)), 1e-9))) or on() vector(0))",
+          "instant": true,
+          "legendFormat": "{{provider}} / {{model}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Cost share by provider/model",
+      "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "id": 102,
+      "panels": [],
+      "title": "Cost trend",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Provider/model LLM cost deltas for each Grafana interval. Missing series render as a zero baseline; model and thinking-level annotations help explain step changes.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -608,21 +770,37 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 12
+        "y": 23
       },
       "id": 8,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Models",
+          "url": "/d/observme-models/observme-models?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open LLM lifecycle logs",
+          "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}"
+        }
+      ],
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "calcs": [
+            "sum",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -630,7 +808,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_cost_usd_total[$__interval])) by (provider, model)",
+          "expr": "(sum by (provider, model) (increase(observme_llm_cost_usd_total[$__interval])) or on() vector(0))",
           "legendFormat": "{{provider}} / {{model}}",
           "range": true,
           "refId": "A"
@@ -640,11 +818,24 @@
       "type": "timeseries"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "id": 103,
+      "panels": [],
+      "title": "Tokens and cache",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Selected-range token totals for input, output, total, reasoning, and cache token families.",
+      "description": "Global selected-range token totals by token type. Provider/model detail stays in Models and LLM lifecycle logs so this panel remains readable as model count grows. Missing series render as zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -668,7 +859,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 20
+        "y": 32
       },
       "id": 9,
       "options": {
@@ -696,9 +887,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_input_tokens_total[$__range])) by (provider, model)",
-          "legendFormat": "input {{provider}} / {{model}}",
-          "range": true,
+          "expr": "sum(increase(observme_llm_input_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "legendFormat": "input",
+          "range": false,
           "refId": "A"
         },
         {
@@ -707,9 +899,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_output_tokens_total[$__range])) by (provider, model)",
-          "legendFormat": "output {{provider}} / {{model}}",
-          "range": true,
+          "expr": "sum(increase(observme_llm_output_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "legendFormat": "output",
+          "range": false,
           "refId": "B"
         },
         {
@@ -718,9 +911,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_total_tokens_total[$__range])) by (provider, model)",
-          "legendFormat": "total {{provider}} / {{model}}",
-          "range": true,
+          "expr": "sum(increase(observme_llm_total_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "legendFormat": "total",
+          "range": false,
           "refId": "C"
         },
         {
@@ -729,9 +923,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_reasoning_tokens_total[$__range])) by (provider, model)",
-          "legendFormat": "reasoning {{provider}} / {{model}}",
-          "range": true,
+          "expr": "sum(increase(observme_llm_reasoning_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "legendFormat": "reasoning",
+          "range": false,
           "refId": "D"
         },
         {
@@ -740,9 +935,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_cache_read_tokens_total[$__range])) by (provider, model)",
-          "legendFormat": "cache read {{provider}} / {{model}}",
-          "range": true,
+          "expr": "sum(increase(observme_llm_cache_read_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "legendFormat": "cache read",
+          "range": false,
           "refId": "E"
         },
         {
@@ -751,9 +947,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_cache_write_tokens_total[$__range])) by (provider, model)",
-          "legendFormat": "cache write {{provider}} / {{model}}",
-          "range": true,
+          "expr": "sum(increase(observme_llm_cache_write_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "legendFormat": "cache write",
+          "range": false,
           "refId": "F"
         },
         {
@@ -762,9 +959,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_cache_write_1h_tokens_total[$__range])) by (provider, model)",
-          "legendFormat": "cache write 1h {{provider}} / {{model}}",
-          "range": true,
+          "expr": "sum(increase(observme_llm_cache_write_1h_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "legendFormat": "cache write 1h",
+          "range": false,
           "refId": "G"
         }
       ],
@@ -776,7 +974,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Cache read, cache write, and Anthropic one-hour cache-write token totals by provider/model.",
+      "description": "Top provider/model cache-read, cache-write, and one-hour cache-write token totals over the selected range. Missing cache metrics render as zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -800,7 +998,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 20
+        "y": 32
       },
       "id": 10,
       "options": {
@@ -828,9 +1026,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_cache_read_tokens_total[$__range])) by (provider, model)",
+          "expr": "(topk(10, sum by (provider, model) (increase(observme_llm_cache_read_tokens_total[$__range]))) or on() vector(0))",
+          "instant": true,
           "legendFormat": "cache read {{provider}} / {{model}}",
-          "range": true,
+          "range": false,
           "refId": "A"
         },
         {
@@ -839,9 +1038,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_cache_write_tokens_total[$__range])) by (provider, model)",
+          "expr": "(topk(10, sum by (provider, model) (increase(observme_llm_cache_write_tokens_total[$__range]))) or on() vector(0))",
+          "instant": true,
           "legendFormat": "cache write {{provider}} / {{model}}",
-          "range": true,
+          "range": false,
           "refId": "B"
         },
         {
@@ -850,9 +1050,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_cache_write_1h_tokens_total[$__range])) by (provider, model)",
+          "expr": "(topk(10, sum by (provider, model) (increase(observme_llm_cache_write_1h_tokens_total[$__range]))) or on() vector(0))",
+          "instant": true,
           "legendFormat": "cache write 1h {{provider}} / {{model}}",
-          "range": true,
+          "range": false,
           "refId": "C"
         }
       ],
@@ -864,27 +1065,21 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Estimated cache-read share of reusable prompt tokens: cache reads divided by input plus cache-read tokens. This is a proxy, not a provider hit-count metric.",
+      "description": "Estimated cache-read share of reusable prompt tokens: cache reads divided by input plus cache-read tokens. This is a proxy, not a provider hit-count or health metric; zero can mean idle workload or unsupported cache accounting.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
           "mappings": [],
+          "max": 1,
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
+                "color": "blue",
                 "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 0.1
-              },
-              {
-                "color": "green",
-                "value": 0.25
               }
             ]
           },
@@ -893,10 +1088,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 5,
         "w": 12,
         "x": 0,
-        "y": 28
+        "y": 40
       },
       "id": 11,
       "options": {
@@ -923,7 +1118,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(sum(increase(observme_llm_cache_read_tokens_total[$__range])) or vector(0)) / clamp_min(((sum(increase(observme_llm_cache_read_tokens_total[$__range])) or vector(0)) + (sum(increase(observme_llm_input_tokens_total[$__range])) or vector(0))), 1)",
+          "expr": "clamp_max((sum(increase(observme_llm_cache_read_tokens_total[$__range])) or vector(0)) / clamp_min(((sum(increase(observme_llm_cache_read_tokens_total[$__range])) or vector(0)) + (sum(increase(observme_llm_input_tokens_total[$__range])) or vector(0))), 1), 1)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -937,7 +1132,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Provider-reported cache-read tokens over the selected range. Treat this as token savings where cache-read accounting is supported.",
+      "description": "Provider-reported cache-read tokens over the selected range. Treat this as an estimated token saving only where cache-read accounting is supported; missing series render as zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -962,10 +1157,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 5,
         "w": 12,
         "x": 12,
-        "y": 28
+        "y": 40
       },
       "id": 12,
       "options": {
@@ -1000,6 +1195,41 @@
       ],
       "title": "Estimated cache savings (tokens)",
       "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "id": 104,
+      "panels": [],
+      "title": "Budget guidance",
+      "type": "row"
+    },
+    {
+      "description": "Visible interpretation guidance for the dashboard's default budget references and forecasts.",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "id": 13,
+      "options": {
+        "code": {
+          "language": "markdown",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "### Default budget references\n\n- **ObservMeCostSpike** alerts when LLM spend exceeds **$50 in 1 hour** for 15 minutes. Tune this budget-dependent threshold for your deployment.\n- **Selected-range budget usage** scales that $50/hour reference to the selected time range; 100% means spend matched the average envelope. It does not detect a short spike hidden inside a longer range.\n- **Projected 24h cost** extrapolates the average burn rate from the selected range. Very short, idle, or unrepresentative ranges can produce misleading forecasts.\n- Cost metrics use provider-reported usage. Missing cost series render as zero and do not prove that a provider supplied complete pricing data.",
+        "mode": "markdown"
+      },
+      "pluginVersion": "11.1.0",
+      "title": "How to interpret budget and forecast panels",
+      "type": "text"
     }
   ],
   "refresh": "30s",
@@ -1007,7 +1237,9 @@
   "tags": [
     "observme",
     "pi",
-    "opentelemetry"
+    "llm",
+    "cost",
+    "tokens"
   ],
   "time": {
     "from": "now-6h",
@@ -1016,6 +1248,6 @@
   "timezone": "browser",
   "title": "ObservMe Cost",
   "uid": "observme-cost",
-  "version": 1,
+  "version": 3,
   "weekStart": ""
 }

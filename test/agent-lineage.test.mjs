@@ -89,6 +89,42 @@ test("trusted parent lineage creates a subagent that preserves workflow and root
   assert.equal(lineage.capability, "code-review");
 });
 
+test("complete trusted child envelope preserves lineage and validated W3C parent context", () => {
+  resetGeneratedIds();
+  const lineage = createAgentLineageContext({
+    config: defaultObservMeConfig,
+    env: {
+      OBSERVME_WORKFLOW_ID: "workflow-parent-complete",
+      OBSERVME_PARENT_AGENT_ID: "agent-parent-complete",
+      OBSERVME_ROOT_AGENT_ID: "agent-root-complete",
+      OBSERVME_PARENT_SESSION_ID: "session-parent-complete",
+      OBSERVME_PARENT_TRACE_ID: "4bf92f3577b34da6a3ce929d0e0e4736",
+      OBSERVME_PARENT_SPAN_ID: "00f067aa0ba902b7",
+      OBSERVME_AGENT_DEPTH: "1",
+      OBSERVME_SPAWN_ID: "spawn-complete",
+      traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      tracestate: "vendor=value",
+    },
+    trustedParentContext: true,
+    requireCompletePropagationEnvelope: true,
+    failOpenInvalidPropagation: true,
+    generateId: nextGeneratedId,
+  });
+
+  assert.equal(lineage.workflowId, "workflow-parent-complete");
+  assert.equal(lineage.parentAgentId, "agent-parent-complete");
+  assert.equal(lineage.rootAgentId, "agent-root-complete");
+  assert.equal(lineage.depth, 2);
+  assert.equal(lineage.spawnId, "spawn-complete");
+  assert.equal(lineage.propagationFailure, undefined);
+  assert.deepEqual(lineage.propagatedTraceContext, {
+    traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+    spanId: "00f067aa0ba902b7",
+    traceFlags: 1,
+    tracestate: "vendor=value",
+  });
+});
+
 test("lineage attributes include root-agent and subagent correlation fields", () => {
   const root = makeLineage({ agentId: "agent-root", rootAgentId: "agent-root", workflowRootAgentId: "agent-root" });
   const child = makeLineage({
@@ -145,6 +181,83 @@ test("malformed and oversized propagated lineage values are rejected", () => {
       }),
     /malformed, oversized, or unsafe/u,
   );
+});
+
+test("partial, malformed, oversized, and stale process envelopes fail open without inherited values", () => {
+  const complete = {
+    OBSERVME_WORKFLOW_ID: "workflow-sensitive-parent",
+    OBSERVME_PARENT_AGENT_ID: "agent-sensitive-parent",
+    OBSERVME_ROOT_AGENT_ID: "agent-sensitive-root",
+    OBSERVME_PARENT_TRACE_ID: "4bf92f3577b34da6a3ce929d0e0e4736",
+    OBSERVME_PARENT_SPAN_ID: "00f067aa0ba902b7",
+    OBSERVME_AGENT_DEPTH: "1",
+    OBSERVME_SPAWN_ID: "spawn-sensitive-parent",
+    traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  };
+  const cases = [
+    {
+      expected: "partial_envelope",
+      env: { OBSERVME_WORKFLOW_ID: complete.OBSERVME_WORKFLOW_ID },
+    },
+    {
+      expected: "malformed_envelope",
+      env: { ...complete, traceparent: "private-invalid-traceparent" },
+    },
+    {
+      expected: "malformed_envelope",
+      env: { ...complete, OBSERVME_WORKFLOW_ID: "w".repeat(129) },
+    },
+    {
+      expected: "stale_envelope",
+      env: { ...complete, OBSERVME_PARENT_SPAN_ID: "1111111111111111" },
+    },
+  ];
+
+  for (const candidate of cases) {
+    const lineage = createAgentLineageContext({
+      config: defaultObservMeConfig,
+      env: candidate.env,
+      trustedParentContext: true,
+      requireCompletePropagationEnvelope: true,
+      failOpenInvalidPropagation: true,
+      generateId: () => "safe-generated",
+    });
+    const serialized = JSON.stringify(lineage);
+
+    assert.equal(lineage.workflowId, "workflow-safe-generated");
+    assert.equal(lineage.parentAgentId, undefined);
+    assert.equal(lineage.rootAgentId, lineage.agentId);
+    assert.equal(lineage.propagationFailure, candidate.expected);
+    assert.equal(lineage.orphaned, true);
+    assert.equal(serialized.includes("sensitive-parent"), false);
+    assert.equal(serialized.includes("private-invalid-traceparent"), false);
+  }
+});
+
+test("trace-disabled child propagation accepts complete lineage and records no synthetic W3C parent", () => {
+  const config = structuredClone(defaultObservMeConfig);
+  config.agent.propagateTraceContext = false;
+  const lineage = createAgentLineageContext({
+    config,
+    env: {
+      OBSERVME_WORKFLOW_ID: "workflow-no-trace",
+      OBSERVME_PARENT_AGENT_ID: "agent-parent-no-trace",
+      OBSERVME_ROOT_AGENT_ID: "agent-root-no-trace",
+      OBSERVME_AGENT_DEPTH: "0",
+      OBSERVME_SPAWN_ID: "spawn-no-trace",
+    },
+    trustedParentContext: true,
+    requireCompletePropagationEnvelope: true,
+    failOpenInvalidPropagation: true,
+    generateId: () => "child-no-trace",
+  });
+
+  assert.equal(lineage.workflowId, "workflow-no-trace");
+  assert.equal(lineage.parentAgentId, "agent-parent-no-trace");
+  assert.equal(lineage.rootAgentId, "agent-root-no-trace");
+  assert.equal(lineage.depth, 1);
+  assert.equal(lineage.propagatedTraceContext, undefined);
+  assert.equal(lineage.propagationFailure, undefined);
 });
 
 test("agent tree tracker records active children, fan-out, depth, width, orphan state, and status", () => {

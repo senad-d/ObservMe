@@ -240,6 +240,18 @@ test("config schema exposes the documented top-level configuration shape", () =>
   assert.equal(observMeConfigSchema.additionalProperties, false);
 });
 
+test("config string enums use the Google-compatible schema representation", () => {
+  const environmentSchema = observMeConfigSchema.properties.environment;
+  const pathModeSchema = observMeConfigSchema.properties.privacy.properties.pathMode;
+
+  assert.equal(environmentSchema.type, "string");
+  assert.deepEqual(environmentSchema.enum, ["production", "development", "test"]);
+  assert.equal("anyOf" in environmentSchema, false);
+  assert.equal(pathModeSchema.type, "string");
+  assert.deepEqual(pathModeSchema.enum, ["hash", "basename", "full", "drop"]);
+  assert.equal("anyOf" in pathModeSchema, false);
+});
+
 test("default config conforms to the exported runtime schema", () => {
   assert.deepEqual(schemaValidationErrors(defaultObservMeConfig), []);
 });

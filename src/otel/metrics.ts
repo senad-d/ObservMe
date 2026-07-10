@@ -6,6 +6,7 @@ import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import type { IMetricReader, PushMetricExporter } from "@opentelemetry/sdk-metrics";
 import { MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import type { MetricsConfig, ObservMeConfig } from "../config/schema.ts";
+import { appendOtlpSignalPath } from "./otlp-endpoint.ts";
 import type { StartOtelSdkFactoryOptions } from "./sdk.ts";
 
 export const OBSERVME_METER_NAME = "@senad-d/observme";
@@ -144,7 +145,7 @@ export function buildOtlpMetricExporterOptions(config: ObservMeConfig): OtlpMetr
 }
 
 export function resolveMetricEndpoint(config: ObservMeConfig): string {
-  return config.otlp.signalEndpoints?.metrics ?? appendSignalPath(config.otlp.endpoint, OTLP_METRIC_SIGNAL_PATH);
+  return config.otlp.signalEndpoints?.metrics ?? appendOtlpSignalPath(config.otlp.endpoint, OTLP_METRIC_SIGNAL_PATH);
 }
 
 function createOtlpMetricExporter(options: OtlpMetricExporterOptions): PushMetricExporter {
@@ -161,15 +162,4 @@ function createMetricProvider(options: MetricProviderOptions): MetricProviderLik
 
 function createMetricResource(config: ObservMeConfig): Resource {
   return resourceFromAttributes(config.resource.attributes);
-}
-
-function appendSignalPath(baseEndpoint: string, signalPath: string): string {
-  const trimmedBaseEndpoint = removeTrailingSlashes(baseEndpoint);
-  return `${trimmedBaseEndpoint}${signalPath}`;
-}
-
-function removeTrailingSlashes(value: string): string {
-  let end = value.length;
-  while (end > 0 && value[end - 1] === "/") end -= 1;
-  return value.slice(0, end);
 }

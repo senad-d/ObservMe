@@ -88,6 +88,7 @@ const documentedLogEventNames = [
   "bash.completed",
   "branch.created",
   "compaction.created",
+  "config.rejected",
   "export.failed",
   "handler.failed",
   "llm.prompt.captured",
@@ -96,8 +97,12 @@ const documentedLogEventNames = [
   "llm.request.started",
   "llm.response.captured",
   "llm.thinking.captured",
+  "message.replayed",
   "model.changed",
   "redaction.failed",
+  "session.duplicate_start",
+  "session.error",
+  "session.named",
   "session.shutdown",
   "session.started",
   "telemetry.dropped",
@@ -124,6 +129,7 @@ test("exports every metric name documented in semantic convention section 12", (
 
 test("exports every log event name documented in semantic convention section 14", () => {
   assert.deepEqual(ALL_LOG_EVENT_NAMES, documentedLogEventNames);
+  assert.equal(LOG_EVENT_NAMES.CONFIG_REJECTED, "config.rejected");
   assert.equal(LOG_EVENT_NAMES.SESSION_STARTED, "session.started");
   assert.equal(LOG_EVENT_NAMES.TRACE_CONTEXT_PROPAGATION_FAILED, "trace_context.propagation_failed");
 });

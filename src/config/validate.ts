@@ -20,6 +20,16 @@ export interface ConfigValidationResult {
   issues: ValidationIssue[];
 }
 
+export interface ConfigRejectionDiagnostic {
+  readonly issueCodes: readonly string[];
+  readonly issueCount: number;
+}
+
+export interface EnsuredObservMeConfig {
+  readonly config: ObservMeConfig;
+  readonly rejection?: ConfigRejectionDiagnostic;
+}
+
 export interface ConfigLogSink {
   warn?: (message: string) => void;
 }
@@ -39,6 +49,25 @@ const maximumLineageValueLength = 128;
 const maximumQueueSize = 10_000;
 const maximumActiveRegistrySize = 100_000;
 const maximumStructuralIssueDetails = 5;
+const maximumConfigDiagnosticCodeInputs = 64;
+const maximumConfigDiagnosticIssueCount = 1_000_000;
+const unknownConfigValidationIssueCode = "unknown_config_validation_issue";
+const knownConfigValidationIssueCodes = new Set([
+  "invalid_config_shape",
+  "unsafe_capture_without_redaction",
+  "insecure_production_transport",
+  "invalid_signal_endpoint_path",
+  "high_cardinality_metric_label",
+  "custom_redaction_pattern_limit",
+  "custom_redaction_pattern_too_long",
+  "custom_redaction_pattern_unsupported_construct",
+  "custom_redaction_pattern_nested_quantifier",
+  "custom_redaction_pattern_empty_match",
+  "invalid_custom_redaction_pattern",
+  "untrusted_project_config_read",
+  "malformed_lineage_value",
+  "queue_size_exceeds_guardrail",
+]);
 const observMeConfigValidator = Compile(observMeConfigSchema);
 
 export function validateObservMeConfig(
@@ -66,11 +95,55 @@ export function ensureValidObservMeConfig(
   config: ObservMeConfig,
   options: ConfigValidationOptions & { logger?: ConfigLogSink } = {},
 ): ObservMeConfig {
-  const result = validateObservMeConfig(config, options);
-  if (result.valid) return config;
+  return ensureValidObservMeConfigWithDiagnostics(config, options).config;
+}
 
-  logValidationRejection(result.issues, options.logger);
-  return structuredClone(defaultObservMeConfig);
+export function ensureValidObservMeConfigWithDiagnostics(
+  config: ObservMeConfig,
+  options: ConfigValidationOptions & { logger?: ConfigLogSink } = {},
+): EnsuredObservMeConfig {
+  const result = validateObservMeConfig(config, options);
+  if (result.valid) return { config };
+
+  const rejection = createConfigRejectionDiagnostic(result.issues);
+  logValidationRejection(rejection, options.logger);
+  return { config: structuredClone(defaultObservMeConfig), rejection };
+}
+
+export function createConfigRejectionDiagnostic(issues: readonly ValidationIssue[]): ConfigRejectionDiagnostic {
+  return normalizeConfigRejectionDiagnostic({
+    issueCodes: issues.map(issue => issue.code),
+    issueCount: issues.length,
+  });
+}
+
+export function normalizeConfigRejectionDiagnostic(
+  rejection: ConfigRejectionDiagnostic,
+): ConfigRejectionDiagnostic {
+  const rawIssueCodes = Array.isArray(rejection.issueCodes)
+    ? rejection.issueCodes.slice(0, maximumConfigDiagnosticCodeInputs)
+    : [];
+  const issueCodes = new Set<string>();
+
+  for (const code of rawIssueCodes) {
+    issueCodes.add(normalizeConfigValidationIssueCode(code));
+  }
+
+  return {
+    issueCodes: [...issueCodes],
+    issueCount: normalizeConfigDiagnosticIssueCount(rejection.issueCount, issueCodes.size),
+  };
+}
+
+function normalizeConfigValidationIssueCode(code: unknown): string {
+  return typeof code === "string" && knownConfigValidationIssueCodes.has(code)
+    ? code
+    : unknownConfigValidationIssueCode;
+}
+
+function normalizeConfigDiagnosticIssueCount(value: number, minimum: number): number {
+  if (!Number.isFinite(value)) return minimum;
+  return Math.max(minimum, Math.min(Math.trunc(value), maximumConfigDiagnosticIssueCount));
 }
 
 export function hasContentCaptureEnabled(config: ObservMeConfig): boolean {
@@ -257,6 +330,10 @@ function validateProjectTrust(options: ConfigValidationOptions): ValidationIssue
 }
 
 function validateLineageEnvironment(config: ObservMeConfig, env: NodeJS.ProcessEnv): ValidationIssue[] {
+  const allEnvironmentNames = configuredLineageEnvironmentNames(config);
+  const environmentNameIssues = validateLineageEnvironmentNames(allEnvironmentNames);
+  if (environmentNameIssues.length > 0) return environmentNameIssues;
+
   const lineageEnvNames = [
     config.workflow.idEnv,
     config.agent.idEnv,
@@ -264,6 +341,7 @@ function validateLineageEnvironment(config: ObservMeConfig, env: NodeJS.ProcessE
     config.agent.rootIdEnv,
     config.agent.parentSessionIdEnv,
     config.agent.spawnIdEnv,
+    config.agent.capabilityEnv,
   ];
   const issues = lineageEnvNames.flatMap(name => validateLineageValue(name, env[name]));
 
@@ -272,6 +350,36 @@ function validateLineageEnvironment(config: ObservMeConfig, env: NodeJS.ProcessE
     ...validateTraceValue(config.agent.parentTraceIdEnv, env[config.agent.parentTraceIdEnv]),
     ...validateSpanValue(config.agent.parentSpanIdEnv, env[config.agent.parentSpanIdEnv]),
     ...validateDepthValue(config.agent.depthEnv, env[config.agent.depthEnv]),
+  ];
+}
+
+function configuredLineageEnvironmentNames(config: ObservMeConfig): string[] {
+  return [
+    config.workflow.idEnv,
+    config.agent.idEnv,
+    config.agent.parentIdEnv,
+    config.agent.rootIdEnv,
+    config.agent.parentSessionIdEnv,
+    config.agent.parentTraceIdEnv,
+    config.agent.parentSpanIdEnv,
+    config.agent.depthEnv,
+    config.agent.spawnIdEnv,
+    config.agent.capabilityEnv,
+  ];
+}
+
+function validateLineageEnvironmentNames(names: string[]): ValidationIssue[] {
+  const normalizedNames = names.map(name => name.toUpperCase());
+  const uniqueNames = new Set(normalizedNames);
+  const malformed = names.some(name => !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u.test(name));
+  const reserved = normalizedNames.some(name => name === "TRACEPARENT" || name === "TRACESTATE");
+  if (!malformed && !reserved && uniqueNames.size === names.length) return [];
+
+  return [
+    {
+      code: "malformed_lineage_value",
+      message: "Configured lineage environment variable names must be unique, safe, and distinct from W3C trace headers.",
+    },
   ];
 }
 
@@ -288,13 +396,13 @@ function validateLineageValue(envName: string, value: string | undefined): Valid
 }
 
 function validateTraceValue(envName: string, value: string | undefined): ValidationIssue[] {
-  if (!value || traceIdPattern.test(value)) return [];
-  return [{ code: "malformed_lineage_value", message: `${envName} must be a 32-character hex trace id.` }];
+  if (!value || (traceIdPattern.test(value) && !/^0{32}$/u.test(value))) return [];
+  return [{ code: "malformed_lineage_value", message: `${envName} must be a non-zero 32-character hex trace id.` }];
 }
 
 function validateSpanValue(envName: string, value: string | undefined): ValidationIssue[] {
-  if (!value || spanIdPattern.test(value)) return [];
-  return [{ code: "malformed_lineage_value", message: `${envName} must be a 16-character hex span id.` }];
+  if (!value || (spanIdPattern.test(value) && !/^0{16}$/u.test(value))) return [];
+  return [{ code: "malformed_lineage_value", message: `${envName} must be a non-zero 16-character hex span id.` }];
 }
 
 function validateDepthValue(envName: string, value: string | undefined): ValidationIssue[] {
@@ -335,8 +443,14 @@ function validateBatchSize(name: string, value: number, queueSize: number): Vali
   return [{ code: "queue_size_exceeds_guardrail", message: `${name} must not exceed its maxQueueSize.` }];
 }
 
-function logValidationRejection(issues: ValidationIssue[], logger: ConfigLogSink | undefined) {
-  for (const issue of issues) {
-    logger?.warn?.(`ObservMe config rejected (${issue.code}): ${issue.message}`);
+function logValidationRejection(rejection: ConfigRejectionDiagnostic, logger: ConfigLogSink | undefined): void {
+  if (!logger?.warn) return;
+
+  try {
+    logger.warn(
+      `ObservMe config rejected (${rejection.issueCodes.join(", ")}); ${rejection.issueCount} issue(s), safe defaults applied.`,
+    );
+  } catch {
+    return;
   }
 }

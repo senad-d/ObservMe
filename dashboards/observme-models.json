@@ -19,6 +19,12 @@
       "version": "1.0.0"
     },
     {
+      "id": "row",
+      "name": "Row",
+      "type": "panel",
+      "version": ""
+    },
+    {
       "id": "timeseries",
       "name": "Time series",
       "type": "panel",
@@ -33,12 +39,6 @@
     {
       "id": "bargauge",
       "name": "Bar gauge",
-      "type": "panel",
-      "version": ""
-    },
-    {
-      "id": "table",
-      "name": "Table",
       "type": "panel",
       "version": ""
     }
@@ -75,28 +75,103 @@
   },
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Cost",
+      "tooltip": "Open spend, token, cache, and budget context.",
+      "type": "link",
+      "url": "/d/observme-cost/observme-cost?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Latency",
+      "tooltip": "Open cross-stage latency percentiles and volume context.",
+      "type": "link",
+      "url": "/d/observme-latency/observme-latency?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Errors",
+      "tooltip": "Open aggregate failure pressure and failure-log drill-downs.",
+      "type": "link",
+      "url": "/d/observme-errors/observme-errors?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "LLM lifecycle logs",
+      "tooltip": "Open privacy-safe LLM lifecycle logs and token/size trends.",
+      "type": "link",
+      "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "LLM Conversations",
+      "tooltip": "Open optional redacted prompt, response, and thinking capture.",
+      "type": "link",
+      "url": "/d/observme-llm-conversations/observme-llm-conversations?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Trace Journey",
+      "tooltip": "Open execution logs and Tempo traces for representative requests.",
+      "type": "link",
+      "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+    }
+  ],
   "liveNow": false,
   "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "Traffic and reliability",
+      "type": "row"
+    },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "LLM request rate grouped by provider and model.",
+      "description": "Top 10 LLM request-rate series grouped by the bounded provider and model labels. No data can mean an idle range or missing request instrumentation; use Export Health before treating an empty panel as healthy.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
               }
             ]
@@ -107,23 +182,39 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
-        "y": 0
+        "y": 1
       },
       "id": 1,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open LLM lifecycle logs",
+          "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open LLM Conversations",
+          "url": "/d/observme-llm-conversations/observme-llm-conversations?${__url_time_range}"
+        }
+      ],
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -131,10 +222,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_llm_requests_total[$__rate_interval])) by (provider, model)",
+          "expr": "topk(10, sum by (provider, model) (rate(observme_llm_requests_total[$__rate_interval])))",
+          "legendFormat": "{{provider}} / {{model}}",
           "range": true,
-          "refId": "A",
-          "legendFormat": "{{provider}} / {{model}}"
+          "refId": "A"
         }
       ],
       "title": "Requests by provider/model",
@@ -145,19 +236,29 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "LLM error ratio grouped by provider and model.",
+      "description": "Top 10 LLM failure ratios by provider/model. Active request series with no matching failure series render as zero without losing labels. Yellow is a 2% review level; red matches the default 5% over 10m ObservMeHighLlmErrorRate alert. No request series remains no data rather than false green health.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "mappings": [],
+          "max": 1,
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.02
+              },
+              {
+                "color": "red",
+                "value": 0.05
               }
             ]
           },
@@ -167,23 +268,39 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 0
+        "w": 12,
+        "x": 12,
+        "y": 1
       },
       "id": 2,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Errors",
+          "url": "/d/observme-errors/observme-errors?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open LLM lifecycle logs",
+          "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}"
+        }
+      ],
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -191,10 +308,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_llm_errors_total[$__rate_interval])) by (provider, model) / clamp_min(sum(rate(observme_llm_requests_total[$__rate_interval])) by (provider, model), 1e-9)",
+          "expr": "topk(10, clamp_max(((sum by (provider, model) (rate(observme_llm_errors_total[$__rate_interval])) or on (provider, model) (0 * sum by (provider, model) (rate(observme_llm_requests_total[$__rate_interval])))) / on (provider, model) clamp_min(sum by (provider, model) (rate(observme_llm_requests_total[$__rate_interval])), 1e-9)), 1))",
+          "legendFormat": "{{provider}} / {{model}}",
           "range": true,
-          "refId": "A",
-          "legendFormat": "{{provider}} / {{model}}"
+          "refId": "A"
         }
       ],
       "title": "Error rate by provider/model",
@@ -205,93 +322,42 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 LLM request duration grouped by provider and model.",
+      "description": "Top 10 provider/model shares of selected-range LLM requests. The denominator is the aggregate LLM request count for the same range. An empty panel means no request series exists; it is not proof of a healthy telemetry path.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "mappings": [],
+          "max": 1,
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
               }
             ]
           },
-          "unit": "ms"
+          "unit": "percentunit"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 0
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 9
       },
-      "id": 3,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
+      "id": 7,
+      "links": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[$__rate_interval])) by (provider, model, le))",
-          "range": true,
-          "refId": "A",
-          "legendFormat": "{{provider}} / {{model}}"
+          "targetBlank": false,
+          "title": "Open Cost",
+          "url": "/d/observme-cost/observme-cost?${__url_time_range}"
         }
       ],
-      "title": "p95 latency by provider/model",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "description": "Selected-range stop-reason totals from provisioned Loki labels on completed LLM request logs.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 8
-      },
-      "id": 4,
       "options": {
         "displayMode": "gradient",
         "maxVizHeight": 300,
@@ -310,6 +376,357 @@
         "sizing": "auto",
         "valueMode": "color"
       },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "topk(10, sum by (provider, model) (increase(observme_llm_requests_total[$__range])) / scalar(clamp_min((sum(increase(observme_llm_requests_total[$__range])) or vector(0)), 1)))",
+          "instant": true,
+          "legendFormat": "{{provider}} / {{model}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Request share by provider/model",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Top 10 selected-range LLM failure totals by provider/model, shown beside failure ratios and request traffic. Active request series with no matching failure series render as labeled zeros. No request telemetry remains no data.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1e-9
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "id": 8,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Errors",
+          "url": "/d/observme-errors/observme-errors?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "topk(10, (sum by (provider, model) (increase(observme_llm_errors_total[$__range])) or on (provider, model) (0 * sum by (provider, model) (increase(observme_llm_requests_total[$__range])))))",
+          "instant": true,
+          "legendFormat": "{{provider}} / {{model}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Selected-range errors by provider/model",
+      "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 101,
+      "panels": [],
+      "title": "Latency",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Top 10 p95 LLM request-duration trends grouped by provider/model. The histogram keeps le, provider, and model during aggregation. Sparse request volume can make p95 jump or disappear; compare the adjacent selected-range request volume before treating a model as a slow offender.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 17
+      },
+      "id": 3,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Latency",
+          "url": "/d/observme-latency/observme-latency?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "topk(10, histogram_quantile(0.95, sum by (provider, model, le) (rate(observme_llm_request_duration_ms_bucket[$__rate_interval]))))",
+          "legendFormat": "{{provider}} / {{model}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "p95 latency by provider/model",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Top 10 selected-range LLM request totals for interpreting the adjacent p95 panel. Low volume makes percentile comparisons statistically sparse. No data means no request counter series exists in the selected range.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 17
+      },
+      "id": 9,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Latency",
+          "url": "/d/observme-latency/observme-latency?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "topk(10, sum by (provider, model) (increase(observme_llm_requests_total[$__range])))",
+          "instant": true,
+          "legendFormat": "{{provider}} / {{model}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Latency request volume",
+      "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "id": 102,
+      "panels": [],
+      "title": "Stop reasons",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Selected-range totals from completed LLM request logs, grouped by the provisioned pi_llm_stop_reason label. This is an instant query over $__range. Empty means no matching completed requests with a non-empty stop reason were observed; inspect LLM lifecycle logs and Export Health if requests were expected.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
+      "id": 4,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open LLM lifecycle logs",
+          "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open LLM Conversations",
+          "url": "/d/observme-llm-conversations/observme-llm-conversations?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -318,32 +735,47 @@
           },
           "editorMode": "code",
           "expr": "sum by (pi_llm_stop_reason) (count_over_time({service_name=\"observme-pi-extension\", event_name=\"llm.request.completed\", pi_llm_stop_reason!=\"\"}[$__range]))",
-          "range": false,
-          "refId": "A",
+          "instant": true,
           "legendFormat": "{{pi_llm_stop_reason}}",
-          "instant": true
+          "queryType": "instant",
+          "range": false,
+          "refId": "A"
         }
       ],
       "title": "Stop reason distribution",
       "type": "bargauge"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "id": 103,
+      "panels": [],
+      "title": "Efficiency",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Rolling LLM cost normalized by LLM request volume for each provider/model. This replaces the previous model-cost-per-global-turn denominator.",
+      "description": "Top 10 rolling provider/model LLM costs per 1,000 LLM requests. Cost and request vectors match explicitly on provider and model; this panel never divides model cost by the global turn counter. Active request series with no cost series render as zero, which can also mean provider cost accounting is unsupported or incomplete rather than free usage.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
               }
             ]
@@ -354,23 +786,39 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 8
+        "w": 16,
+        "x": 0,
+        "y": 34
       },
       "id": 5,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Cost",
+          "url": "/d/observme-cost/observme-cost?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open LLM lifecycle logs",
+          "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}"
+        }
+      ],
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -378,7 +826,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "1000 * sum(rate(observme_llm_cost_usd_total[$__rate_interval])) by (provider, model) / clamp_min(sum(rate(observme_llm_requests_total[$__rate_interval])) by (provider, model), 1e-9)",
+          "expr": "topk(10, 1000 * ((sum by (provider, model) (rate(observme_llm_cost_usd_total[$__rate_interval])) or on (provider, model) (0 * sum by (provider, model) (rate(observme_llm_requests_total[$__rate_interval])))) / on (provider, model) clamp_min(sum by (provider, model) (rate(observme_llm_requests_total[$__rate_interval])), 1e-9)))",
           "legendFormat": "{{provider}} / {{model}}",
           "range": true,
           "refId": "A"
@@ -392,27 +840,20 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Selected-range total LLM cost divided by completed turns. This is intentionally overall, not model-attributed, because turn metrics do not carry provider/model labels.",
+      "description": "Selected-range aggregate LLM cost divided by completed turns. This is intentionally overall because turn counters do not carry provider/model labels. Zero can mean idle workload or absent provider cost accounting; use Cost for the tunable $50/hour budget reference rather than treating this neutral efficiency value as an alert.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
           "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 0.1
-              },
-              {
-                "color": "red",
-                "value": 0.5
               }
             ]
           },
@@ -424,9 +865,16 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 8
+        "y": 34
       },
       "id": 6,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Cost",
+          "url": "/d/observme-cost/observme-cost?${__url_time_range}"
+        }
+      ],
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -463,6 +911,7 @@
   ],
   "refresh": "30s",
   "schemaVersion": 39,
+  "style": "dark",
   "tags": [
     "observme",
     "models",
@@ -479,6 +928,6 @@
   "timezone": "browser",
   "title": "ObservMe Models",
   "uid": "observme-models",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

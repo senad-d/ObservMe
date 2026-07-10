@@ -479,6 +479,7 @@ async function emitRepresentativeObservMeTelemetry(project, ids) {
   registerHandlers(pi, {
     env: createLineageEnv(ids),
     trustedParentContext: true,
+    requireCompleteParentEnvelope: false,
     loadConfig: project.loadConfig,
     startTelemetry: async options => {
       telemetrySession = await startSessionTelemetry(options);

@@ -74,8 +74,12 @@ export const OFFICIAL_GENAI_METRIC_NAMES = {
 } as const;
 
 export const LOG_EVENT_NAMES = {
+  CONFIG_REJECTED: "config.rejected",
   SESSION_STARTED: "session.started",
+  SESSION_NAMED: "session.named",
   SESSION_SHUTDOWN: "session.shutdown",
+  SESSION_ERROR: "session.error",
+  SESSION_DUPLICATE_START: "session.duplicate_start",
   WORKFLOW_STARTED: "workflow.started",
   WORKFLOW_COMPLETED: "workflow.completed",
   WORKFLOW_FAILED: "workflow.failed",
@@ -99,6 +103,7 @@ export const LOG_EVENT_NAMES = {
   LLM_PROMPT_CAPTURED: "llm.prompt.captured",
   LLM_RESPONSE_CAPTURED: "llm.response.captured",
   LLM_THINKING_CAPTURED: "llm.thinking.captured",
+  MESSAGE_REPLAYED: "message.replayed",
   TOOL_CALL_STARTED: "tool.call.started",
   TOOL_CALL_COMPLETED: "tool.call.completed",
   TOOL_CALL_FAILED: "tool.call.failed",

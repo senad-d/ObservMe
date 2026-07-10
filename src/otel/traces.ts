@@ -6,6 +6,7 @@ import type { Sampler, SpanExporter, SpanProcessor } from "@opentelemetry/sdk-tr
 import { BatchSpanProcessor, ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import type { ObservMeConfig, TraceBatchConfig } from "../config/schema.ts";
+import { appendOtlpSignalPath } from "./otlp-endpoint.ts";
 import type { StartOtelSdkFactoryOptions } from "./sdk.ts";
 
 export const OBSERVME_TRACER_NAME = "@senad-d/observme";
@@ -141,7 +142,7 @@ export function buildOtlpTraceExporterOptions(config: ObservMeConfig): OtlpTrace
 }
 
 export function resolveTraceEndpoint(config: ObservMeConfig): string {
-  return config.otlp.signalEndpoints?.traces ?? appendSignalPath(config.otlp.endpoint, OTLP_TRACE_SIGNAL_PATH);
+  return config.otlp.signalEndpoints?.traces ?? appendOtlpSignalPath(config.otlp.endpoint, OTLP_TRACE_SIGNAL_PATH);
 }
 
 function createOtlpTraceExporter(options: OtlpTraceExporterOptions): SpanExporter {
@@ -162,15 +163,4 @@ function createTraceResource(config: ObservMeConfig): Resource {
 
 function createTraceSampler(config: ObservMeConfig): Sampler {
   return new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(config.traces.sampleRatio) });
-}
-
-function appendSignalPath(baseEndpoint: string, signalPath: string): string {
-  const trimmedBaseEndpoint = removeTrailingSlashes(baseEndpoint);
-  return `${trimmedBaseEndpoint}${signalPath}`;
-}
-
-function removeTrailingSlashes(value: string): string {
-  let end = value.length;
-  while (end > 0 && value[end - 1] === "/") end -= 1;
-  return value.slice(0, end);
 }

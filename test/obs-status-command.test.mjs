@@ -124,6 +124,31 @@ test("renderObsStatus reports local enablement, signals, capture flags, drops, a
   );
 });
 
+test("renderObsStatus includes only bounded config rejection codes and counts", () => {
+  const output = renderObsStatus({
+    config: cloneDefaultConfig(),
+    queueDrops: 0,
+    configDiagnostics: {
+      projectTrusted: false,
+      projectConfigStatus: "skipped_untrusted",
+      effectiveSource: "environment",
+      globalConfigLoaded: false,
+      environmentOverrides: true,
+      runtimeOptionsApplied: false,
+      rejection: {
+        issueCodes: ["insecure_production_transport", "malformed_lineage_value"],
+        issueCount: 2,
+      },
+    },
+  });
+
+  assert.match(
+    output,
+    /Config rejection: safe defaults applied \(2 issue\(s\): insecure_production_transport, malformed_lineage_value\)/u,
+  );
+  assert.doesNotMatch(output, /private-token|password|Authorization|\/workspace\/private|custom regex/u);
+});
+
 test("/obs status does not throw when Pi has no UI notification API", async t => {
   resetObsStatusRuntimeState();
   t.after(() => resetObsStatusRuntimeState());

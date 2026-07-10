@@ -1,10 +1,26 @@
 import assert from "node:assert/strict";
+import { readdir, readFile } from "node:fs/promises";
+import { relative } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   ALL_ATTRIBUTE_KEYS,
   COMMON_SPAN_ATTRIBUTES,
   RESOURCE_ATTRIBUTES,
 } from "../src/semconv/attributes.ts";
+import { ALL_LOG_EVENT_NAMES, ALL_METRIC_NAMES } from "../src/semconv/metrics.ts";
+import { ALL_SPAN_NAMES } from "../src/semconv/spans.ts";
+
+const sourceRootUrl = new URL("../src/", import.meta.url);
+const sourceRootPath = fileURLToPath(sourceRootUrl);
+const sourceStringLiteralPattern = /(["'`])([^"'`\r\n]+)\1/gu;
+const telemetryNamespaceNamePattern = /^(?:pi|observme|gen_ai)\.[a-z0-9_.-]+$/u;
+const observMeMetricNamePattern = /^observme_[a-z0-9_]+$/u;
+const logEventNamePattern = /^(?:agent|bash|branch|compaction|export|handler|llm|message|model|redaction|session|telemetry|thinking|tool|trace_context|turn|workflow)\.[a-z0-9_.-]+$/u;
+const documentedNonTelemetryLiteralExceptions = new Set([
+  "config/bootstrap-project-config.ts:observme.yaml",
+  "config/load-config.ts:observme.yaml",
+]);
 
 const documentedAttributeKeys = [
   "deployment.environment.name",
@@ -38,6 +54,9 @@ const documentedAttributeKeys = [
   "observme.capture.prompts",
   "observme.capture.responses",
   "observme.capture.tool_arguments",
+  "observme.config.rejection.issue_codes",
+  "observme.config.rejection.issue_count",
+  "observme.config.source",
   "observme.environment",
   "observme.evicted",
   "observme.instance.id",
@@ -48,6 +67,7 @@ const documentedAttributeKeys = [
   "observme.tenant.id",
   "observme.truncated",
   "observme.version",
+  "pi.agent.capability",
   "pi.agent.child.count",
   "pi.agent.child.id",
   "pi.agent.child.status",
@@ -56,6 +76,7 @@ const documentedAttributeKeys = [
   "pi.agent.failure.propagated",
   "pi.agent.id",
   "pi.agent.join.status",
+  "pi.agent.orphaned",
   "pi.agent.parent_id",
   "pi.agent.role",
   "pi.agent.root_id",
@@ -115,6 +136,7 @@ const documentedAttributeKeys = [
   "pi.llm.error_message_hash",
   "pi.llm.content.kind",
   "pi.llm.prompt.redacted",
+  "pi.llm.request.id",
   "pi.llm.request.input_chars",
   "pi.llm.request.message_count",
   "pi.llm.request.thinking_level",
@@ -123,11 +145,21 @@ const documentedAttributeKeys = [
   "pi.llm.stop_reason",
   "pi.llm.thinking.redacted",
   "pi.llm.usage.cache_write_1h_tokens",
+  "pi.llm.tool_call_count",
   "pi.llm.usage.total_tokens",
+  "pi.message.content_length",
+  "pi.message.role",
   "pi.model.id.current",
   "pi.model.provider.current",
   "pi.project.name",
+  "pi.session.cwd_hash",
+  "pi.session.file_hash",
   "pi.session.id",
+  "pi.session.name",
+  "pi.session.parent_session_hash",
+  "pi.session.persisted",
+  "pi.session.version",
+  "pi.thinking.level.current",
   "pi.tool.arguments.hash",
   "pi.tool.arguments.redacted",
   "pi.tool.arguments.size",
@@ -147,8 +179,10 @@ const documentedAttributeKeys = [
   "pi.turn.user_message.image_count",
   "pi.turn.user_message.length",
   "pi.user.hash",
+  "pi.workflow.duration_ms",
   "pi.workflow.id",
   "pi.workflow.root_agent_id",
+  "pi.workflow.status",
   "service.instance.id",
   "service.name",
   "service.namespace",
@@ -159,7 +193,36 @@ const documentedAttributeKeys = [
   "trace_id",
 ].sort((left, right) => left.localeCompare(right));
 
-test("exports every attribute key documented in semantic convention sections 2-3, 5-11, and 14", () => {
+async function collectTypeScriptSourceFiles(directoryUrl) {
+  const files = [];
+  const entries = await readdir(directoryUrl, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const entryUrl = new URL(entry.isDirectory() ? `${entry.name}/` : entry.name, directoryUrl);
+    if (entry.isDirectory()) files.push(...await collectTypeScriptSourceFiles(entryUrl));
+    if (entry.isFile() && entry.name.endsWith(".ts")) files.push(entryUrl);
+  }
+
+  return files;
+}
+
+function isInlineTelemetryName(value) {
+  return (
+    ALL_ATTRIBUTE_KEYS.includes(value) ||
+    ALL_METRIC_NAMES.includes(value) ||
+    ALL_LOG_EVENT_NAMES.includes(value) ||
+    ALL_SPAN_NAMES.includes(value) ||
+    telemetryNamespaceNamePattern.test(value) ||
+    observMeMetricNamePattern.test(value) ||
+    logEventNamePattern.test(value)
+  );
+}
+
+function sourceLineNumber(source, index) {
+  return source.slice(0, index).split("\n").length;
+}
+
+test("exports every attribute key documented in semantic convention sections 2-11 and 14", () => {
   assert.deepEqual(ALL_ATTRIBUTE_KEYS, documentedAttributeKeys);
 });
 
@@ -174,4 +237,24 @@ test("exports required resource and operational attributes", () => {
 test("attribute key exports are unique and stay out of the bare agent namespace", () => {
   assert.equal(new Set(ALL_ATTRIBUTE_KEYS).size, ALL_ATTRIBUTE_KEYS.length);
   assert.equal(ALL_ATTRIBUTE_KEYS.some(key => key.startsWith("agent.")), false);
+});
+
+test("source uses semantic-convention constants instead of inline telemetry names", async () => {
+  const files = await collectTypeScriptSourceFiles(sourceRootUrl);
+  const violations = [];
+
+  for (const fileUrl of files) {
+    const relativePath = relative(sourceRootPath, fileURLToPath(fileUrl));
+    if (relativePath.startsWith("semconv/")) continue;
+
+    const source = await readFile(fileUrl, "utf8");
+    for (const match of source.matchAll(sourceStringLiteralPattern)) {
+      const value = match[2];
+      if (!isInlineTelemetryName(value)) continue;
+      if (documentedNonTelemetryLiteralExceptions.has(`${relativePath}:${value}`)) continue;
+      violations.push(`${relativePath}:${sourceLineNumber(source, match.index)}:${value}`);
+    }
+  }
+
+  assert.deepEqual(violations, []);
 });

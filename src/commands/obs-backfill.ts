@@ -9,10 +9,12 @@ import { applyContentCapturePolicy } from "../privacy/content-capture.ts";
 import type { ContentLimitKind } from "../privacy/truncate.ts";
 import {
   BASH_ATTRIBUTES,
+  BRANCH_ATTRIBUTES,
   COMMON_SPAN_ATTRIBUTES,
   COMPACTION_ATTRIBUTES,
   LLM_ATTRIBUTES,
   LOG_ATTRIBUTES,
+  MESSAGE_ATTRIBUTES,
   TOOL_ATTRIBUTES,
 } from "../semconv/attributes.ts";
 import { LOG_EVENT_NAMES } from "../semconv/metrics.ts";
@@ -508,7 +510,7 @@ function buildBackfillConfirmationMessage(
     `Window: ${request.since ?? "all current-session entries"}`,
     `Rate limit: ${normalizeMaxRecords(options.maxRecords)} record(s)` ,
     `Content mode: ${contentMode}`,
-    "Replayed telemetry will be marked observme.replayed=true.",
+    `Replayed telemetry will be marked ${COMMON_SPAN_ATTRIBUTES.OBSERVME_REPLAYED}=true.`,
   ].join("\n");
 }
 
@@ -905,9 +907,9 @@ function userMessageToBackfillRecord(
   config: ObservMeConfig,
   baseAttributes: ObsBackfillAttributes,
 ): { readonly record: ObsBackfillTelemetryRecord; readonly contentCaptured: boolean; readonly redactionFailures: number } {
-  const attributes: ObsBackfillAttributes = { ...baseAttributes, "pi.message.role": "user" };
+  const attributes: ObsBackfillAttributes = { ...baseAttributes, [MESSAGE_ATTRIBUTES.PI_MESSAGE_ROLE]: "user" };
   const content = extractTextContent(readUnknown(message, "content"));
-  attributes["pi.message.content_length"] = content?.length ?? 0;
+  attributes[MESSAGE_ATTRIBUTES.PI_MESSAGE_CONTENT_LENGTH] = content?.length ?? 0;
   const contentResult = maybeAttachCapturedContent(attributes, LLM_ATTRIBUTES.PI_LLM_PROMPT_REDACTED, content, "prompt", config, config.capture.prompts);
 
   return {
@@ -964,7 +966,7 @@ function assistantMessageAttributes(message: Record<string, unknown>, baseAttrib
 
   return withoutUndefinedAttributes({
     ...baseAttributes,
-    "pi.message.role": "assistant",
+    [MESSAGE_ATTRIBUTES.PI_MESSAGE_ROLE]: "assistant",
     [LLM_ATTRIBUTES.GEN_AI_PROVIDER_NAME]: readString(message, "provider"),
     [LLM_ATTRIBUTES.GEN_AI_REQUEST_MODEL]: readString(message, "model"),
     [LLM_ATTRIBUTES.GEN_AI_RESPONSE_MODEL]: readString(message, "responseModel"),
@@ -978,8 +980,8 @@ function assistantMessageAttributes(message: Record<string, unknown>, baseAttrib
     [LLM_ATTRIBUTES.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS]: readNumber(usage, "reasoning"),
     [LLM_ATTRIBUTES.PI_LLM_USAGE_TOTAL_TOKENS]: readNumber(usage, "totalTokens"),
     [LLM_ATTRIBUTES.PI_LLM_COST_TOTAL_USD]: readNumber(cost, "total"),
-    "pi.llm.tool_call_count": extractToolCalls(content).length,
-    "pi.message.content_length": extractTextContent(content)?.length ?? 0,
+    [LLM_ATTRIBUTES.PI_LLM_TOOL_CALL_COUNT]: extractToolCalls(content).length,
+    [MESSAGE_ATTRIBUTES.PI_MESSAGE_CONTENT_LENGTH]: extractTextContent(content)?.length ?? 0,
   });
 }
 
@@ -992,7 +994,7 @@ function toolResultMessageToBackfillRecord(
   const failed = readBoolean(message, "isError") === true;
   const attributes = withoutUndefinedAttributes({
     ...baseAttributes,
-    "pi.message.role": "toolResult",
+    [MESSAGE_ATTRIBUTES.PI_MESSAGE_ROLE]: "toolResult",
     [TOOL_ATTRIBUTES.PI_TOOL_CALL_ID]: readString(message, "toolCallId"),
     [TOOL_ATTRIBUTES.PI_TOOL_NAME]: readString(message, "toolName"),
     [TOOL_ATTRIBUTES.PI_TOOL_SUCCESS]: !failed,
@@ -1019,7 +1021,7 @@ function bashExecutionMessageToBackfillRecord(
   const output = readString(message, "output");
   const attributes = withoutUndefinedAttributes({
     ...baseAttributes,
-    "pi.message.role": "bashExecution",
+    [MESSAGE_ATTRIBUTES.PI_MESSAGE_ROLE]: "bashExecution",
     [BASH_ATTRIBUTES.PI_BASH_EXIT_CODE]: readNumber(message, "exitCode"),
     [BASH_ATTRIBUTES.PI_BASH_CANCELLED]: readBoolean(message, "cancelled"),
     [BASH_ATTRIBUTES.PI_BASH_TRUNCATED]: readBoolean(message, "truncated"),
@@ -1042,9 +1044,9 @@ function unknownMessageToBackfillRecord(
   role: string | undefined,
   baseAttributes: ObsBackfillAttributes,
 ): { readonly record: ObsBackfillTelemetryRecord; readonly contentCaptured: false; readonly redactionFailures: 0 } {
-  const attributes = withoutUndefinedAttributes({ ...baseAttributes, "pi.message.role": role ?? "unknown" });
+  const attributes = withoutUndefinedAttributes({ ...baseAttributes, [MESSAGE_ATTRIBUTES.PI_MESSAGE_ROLE]: role ?? "unknown" });
   return {
-    record: createBackfillRecord("message.replayed", entry, attributes),
+    record: createBackfillRecord(LOG_EVENT_NAMES.MESSAGE_REPLAYED, entry, attributes),
     contentCaptured: false,
     redactionFailures: 0,
   };
@@ -1102,9 +1104,9 @@ function branchSummaryEntryToBackfillRecord(
 ): { readonly record: ObsBackfillTelemetryRecord; readonly contentCaptured: false; readonly redactionFailures: 0 } {
   const attributes = withoutUndefinedAttributes({
     ...baseAttributes,
-    "pi.branch.from_id": entry.fromId,
-    "pi.branch.summary.length": entry.summary.length,
-    "pi.branch.from_hook": entry.fromHook === true,
+    [BRANCH_ATTRIBUTES.PI_BRANCH_FROM_ID]: entry.fromId,
+    [BRANCH_ATTRIBUTES.PI_BRANCH_SUMMARY_LENGTH]: entry.summary.length,
+    [BRANCH_ATTRIBUTES.PI_BRANCH_FROM_HOOK]: entry.fromHook === true,
   });
   return {
     record: createBackfillRecord(LOG_EVENT_NAMES.BRANCH_CREATED, entry, attributes),

@@ -4,10 +4,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { defaultObservMeConfig } from "./defaults.ts";
 import { resolveProjectLocalFilePath } from "./project-paths.ts";
-import type { ConfigLogSink } from "./validate.ts";
-import { ensureValidObservMeConfig } from "./validate.ts";
+import type { ConfigLogSink, ConfigRejectionDiagnostic } from "./validate.ts";
+import { ensureValidObservMeConfig, ensureValidObservMeConfigWithDiagnostics } from "./validate.ts";
 import type { ObservMeConfig } from "./schema.ts";
 import { registerTenantSaltEnvironment } from "../privacy/hash.ts";
+import { RESOURCE_ATTRIBUTES } from "../semconv/attributes.ts";
 
 export type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends Array<infer U>
@@ -54,6 +55,7 @@ export interface SessionConfigDiagnostics {
   readonly globalConfigLoaded: boolean;
   readonly environmentOverrides: boolean;
   readonly runtimeOptionsApplied: boolean;
+  readonly rejection?: ConfigRejectionDiagnostic;
 }
 
 export interface LoadSessionConfigResult {
@@ -92,14 +94,6 @@ export async function loadSessionConfigWithDiagnostics(options: LoadSessionConfi
   const effectiveEnvironment = mergeEnvironment(envFile, environment);
   const envFileConfig = envFile ? envToConfig(envFile) : undefined;
   const environmentConfig = envToConfig(environment);
-  const diagnostics = createSessionConfigDiagnostics({
-    globalConfig,
-    projectConfig,
-    projectTrusted,
-    envFileConfig,
-    environmentConfig,
-    runtimeOptions: options.runtimeOptions,
-  });
   const config = mergeConfigLayers([
     defaultObservMeConfig,
     globalConfig,
@@ -108,16 +102,24 @@ export async function loadSessionConfigWithDiagnostics(options: LoadSessionConfi
     environmentConfig,
     options.runtimeOptions,
   ]);
-
-  const validConfig = ensureValidObservMeConfig(config, {
+  const validation = ensureValidObservMeConfigWithDiagnostics(config, {
     env: effectiveEnvironment,
     isProjectTrusted: projectTrusted,
     projectConfigWasRead: Boolean(projectConfig),
     logger: options.logger,
   });
+  const diagnostics = createSessionConfigDiagnostics({
+    globalConfig,
+    projectConfig,
+    projectTrusted,
+    envFileConfig,
+    environmentConfig,
+    runtimeOptions: options.runtimeOptions,
+    rejection: validation.rejection,
+  });
 
   return {
-    config: registerTenantSaltEnvironment(validConfig, effectiveEnvironment),
+    config: registerTenantSaltEnvironment(validation.config, effectiveEnvironment),
     diagnostics,
   };
 }
@@ -173,11 +175,11 @@ export function envToConfig(env: NodeJS.ProcessEnv = process.env): DeepPartial<O
   setBoolean(config, ["privacy", "allowInsecureTransport"], env.OBSERVME_ALLOW_INSECURE_TRANSPORT);
 
   if (env.OBSERVME_TENANT) {
-    setString(config, ["resource", "attributes", "observme.tenant.id"], env.OBSERVME_TENANT);
+    setString(config, ["resource", "attributes", RESOURCE_ATTRIBUTES.OBSERVME_TENANT_ID], env.OBSERVME_TENANT);
   }
 
   if (env.OBSERVME_ENVIRONMENT) {
-    setString(config, ["resource", "attributes", "deployment.environment.name"], env.OBSERVME_ENVIRONMENT);
+    setString(config, ["resource", "attributes", RESOURCE_ATTRIBUTES.DEPLOYMENT_ENVIRONMENT_NAME], env.OBSERVME_ENVIRONMENT);
   }
 
   return config;
@@ -190,6 +192,7 @@ function createSessionConfigDiagnostics(options: {
   readonly envFileConfig?: DeepPartial<ObservMeConfig>;
   readonly environmentConfig: DeepPartial<ObservMeConfig>;
   readonly runtimeOptions?: DeepPartial<ObservMeConfig>;
+  readonly rejection?: ConfigRejectionDiagnostic;
 }): SessionConfigDiagnostics {
   const globalConfigLoaded = options.globalConfig !== undefined;
   const projectConfigStatus = resolveSessionConfigProjectStatus(options.projectTrusted, options.projectConfig);
@@ -208,6 +211,7 @@ function createSessionConfigDiagnostics(options: {
     globalConfigLoaded,
     environmentOverrides,
     runtimeOptionsApplied,
+    rejection: options.rejection,
   };
 }
 

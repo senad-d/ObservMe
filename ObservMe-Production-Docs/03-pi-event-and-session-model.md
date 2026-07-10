@@ -181,6 +181,8 @@ pi.compaction.modified_files_count
 | `session_tree` | emit branch/tree-navigation span/log/metric and include `summaryEntry` when present |
 | `session_shutdown` | end open spans and flush exporters within timeout |
 
+User-bash correlation is intentionally single-flight because Pi does not expose a durable call ID for `user_bash`. ObservMe starts the pending span at `user_bash`, retains only safe span/timing metadata, and completes it from the corresponding `bashExecution` record. Overlapping pre-events evict the ambiguous pending span and emit a bounded drop signal rather than risking a wrong match. An unmatched completion records duration only when it contains a valid start/completion timestamp pair; otherwise duration is omitted. Shutdown closes any pending user-bash span as incomplete. Raw commands and output remain subject to the shared opt-in content-capture policy.
+
 The root `pi.session` span is intentionally long-lived and remains open until `session_shutdown`. During an active session, Tempo searches may show ended child spans before the root span is exported; post-shutdown traces must include the canonical `pi.session` root with the session and workflow attributes.
 
 ## 7. Correlation IDs
@@ -220,6 +222,8 @@ Required lineage behavior:
 7. Propagate W3C `traceparent`/`tracestate` plus ObservMe lineage environment variables such as `OBSERVME_WORKFLOW_ID`, `OBSERVME_PARENT_AGENT_ID`, `OBSERVME_ROOT_AGENT_ID`, and `OBSERVME_PARENT_SESSION_ID`.
 8. In the child, continue the trace when trace context is available; otherwise start a new trace and attach a span link or log event with parent trace/span metadata.
 9. If a child starts with malformed or missing parent lineage, classify it as root or orphan according to config and emit an orphan log/metric.
+
+Only lineage supplied in the child Pi process environment by an ObservMe-aware launcher is eligible for automatic continuation. Project-local `.env` values are configuration inputs and must not establish parent provenance. A propagated child candidate must carry a complete validated workflow/parent/root/depth/spawn envelope and, when trace propagation is enabled, a valid W3C `traceparent`; `tracestate` and duplicate parent trace/span metadata must also validate and agree when present. Partial, malformed, oversized, or stale envelopes fail open to a new root/orphan trace without exporting inherited raw values. Trusted lineage without usable W3C continuation starts a new trace with a validated parent span link when trace/span metadata is available, otherwise it emits the bounded `trace_context.propagation_failed` fallback signal.
 
 Workflow IDs and agent IDs must be generated identifiers or salted hashes. Never derive them directly from raw cwd, username, prompt text, or command line. They are high-cardinality and must not be metric labels.
 

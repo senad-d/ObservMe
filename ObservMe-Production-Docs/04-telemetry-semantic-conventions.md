@@ -52,6 +52,7 @@ pi.agent.parent_id                 = <parent agent id>, optional high-cardinalit
 pi.agent.root_id                   = <root agent id>, optional high-cardinality resource attribute
 pi.agent.role                      = root|subagent
 pi.agent.depth                     = 0 for root, 1+ for subagents
+pi.agent.capability                = optional trusted safe capability name
 pi.cwd.hash                        = sha256(cwd)
 pi.cwd.basename                    = basename(cwd), optional
 deployment.environment.name        = development|test|staging|production|custom
@@ -123,7 +124,21 @@ session.shutdown
 session.error
 ```
 
+Shutdown event/log attributes:
+
+```text
+pi.workflow.duration_ms
+pi.workflow.status                  # ok|error
+```
+
 ## 5. Workflow, Agent, and Subagent Spans
+
+Additional lineage attributes where known:
+
+```text
+pi.agent.capability                 # optional trusted safe capability name
+pi.agent.orphaned                   # true when parent lineage is incomplete
+```
 
 ### 5.1 Agent Run Span
 
@@ -282,6 +297,7 @@ pi.llm.request.thinking_level
 pi.llm.request.message_count
 pi.llm.request.tool_schema_count
 pi.llm.request.input_chars
+pi.llm.request.id                            # in-process provider request correlation
 pi.llm.stop_reason
 pi.llm.error_message_hash
 pi.llm.usage.total_tokens
@@ -291,6 +307,7 @@ pi.llm.cost.output_usd
 pi.llm.cost.cache_read_usd
 pi.llm.cost.cache_write_usd
 pi.llm.cost.total_usd
+pi.llm.tool_call_count                       # replayed assistant-message tool-call count
 ```
 
 Optional content fields when enabled and redacted:
@@ -489,7 +506,16 @@ observme_active_spans
 observme_active_agents
 ```
 
-### 12.5 Export Health self-observability contract
+### 12.5 Lifecycle recording points
+
+- Increment `observme_agent_run_errors_total` only when an ended agent run is classified as failed.
+- Record `observme_workflow_duration_ms` once for a root workflow at shutdown from its stored start time, with bounded `status=ok|error`.
+- Record `observme_subagent_spawn_duration_ms` from spawn start through either launcher completion or launcher failure.
+- Increment `observme_child_agent_failures_total` when an actual child completion/join reports failed status; a launcher failure before child creation is only a spawn failure.
+- Increment `observme_parent_recovered_from_child_failure_total` once when a failed child is joined with `failurePropagated=false` and parent recovery is confirmed.
+- Repeated child completion/join observations use bounded deduplication state and cannot increment the same failure or recovery transition twice.
+
+### 12.6 Export Health self-observability contract
 
 The `ObservMe Export Health` dashboard is a self-observability contract for the ObservMe runtime, not a replacement for `/obs status` or `/obs health`. A healthy local session should still produce positive liveness signals while failure-only signals remain at zero or no matching log rows.
 
@@ -526,7 +552,7 @@ Metric labels for these signals are restricted to the low-cardinality allowlist 
 
 This telemetry contract must not require changing project trust behavior, `/obs status`, `/obs health`, the configured local OTLP endpoint, Grafana authentication/profile, or intentionally enabled local debug capture settings.
 
-### 12.6 Optional official GenAI metrics
+### 12.7 Optional official GenAI metrics
 
 Emit these in addition to ObservMe metrics only when the SDK/backend path handles dotted OTEL metric names correctly:
 
@@ -604,13 +630,31 @@ trace_id
 span_id
 severity
 error.type
+observme.config.source
+observme.config.rejection.issue_codes
+observme.config.rejection.issue_count
+```
+
+Configuration rejection diagnostics use only the bounded effective source, normalized issue codes, and aggregate issue count. They never include rejected values, raw validation messages, paths, headers, environment values, or custom regular expressions.
+
+Operational `tool.call.completed` and `tool.call.failed` logs include every available common session/workflow/agent/run/turn correlation field plus `pi.tool.call.id`, `pi.tool.name`, `pi.tool.category`, matching `trace_id`/`span_id`, success, and bounded `error.type` for failures. These operational logs never copy raw tool arguments, results, prompts, commands, paths, or error messages; opt-in redacted content stays in dedicated capture logs.
+
+Explicit replay logs may also include:
+
+```text
+pi.message.role
+pi.message.content_length
 ```
 
 Event names:
 
 ```text
+config.rejected
 session.started
+session.named
 session.shutdown
+session.error
+session.duplicate_start
 workflow.started
 workflow.completed
 workflow.failed
@@ -634,6 +678,7 @@ llm.request.failed
 llm.prompt.captured
 llm.response.captured
 llm.thinking.captured
+message.replayed
 tool.call.started
 tool.call.completed
 tool.call.failed

@@ -119,11 +119,16 @@ Matched values are replaced with:
 
 ## 6. Path Redaction
 
-Default behavior:
+Path recognition covers standalone and embedded POSIX absolute paths, Windows drive paths, and UNC paths. It must use the matching POSIX or Windows basename/dirname semantics and must not classify normal URLs or harmless slash-separated prose as filesystem paths.
+
+Representative sensitive inputs:
 
 ```text
-/home/alice/projects/customer-x/app.ts -> /<home>/<hash>/app.ts
-/Users/alice/work/acme-secret/main.py -> /<home>/<hash>/main.py
+/home/alice/projects/customer-x/app.ts
+/workspace/project/file.ts
+/etc/hosts
+C:\Users\alice\secret.txt
+\\server\share\secret.txt
 ```
 
 Options:
@@ -132,6 +137,8 @@ Options:
 privacy:
   pathMode: hash        # hash|basename|full|drop
 ```
+
+`hash`, `basename`, and `drop` must remove every recognized raw absolute path. Hashes are deterministic only within the configured tenant salt and fail closed when salt resolution fails. `drop` omits a standalone path and uses a bounded placeholder for an embedded path. `full` is the only explicit mode that preserves raw path text; it is reached only after the relevant content/path capture opt-in, and all other redaction stages still apply. URL credential redaction runs before path handling so the remaining URL is not malformed.
 
 ## 7. Hashing
 

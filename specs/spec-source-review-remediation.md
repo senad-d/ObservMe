@@ -203,7 +203,7 @@ Hardcoding `.pi` breaks rebranded Pi distributions, and direct `mkdir`/`writeFil
 
 ### 4. Centralize every telemetry name in semantic-convention modules
 
-- [ ] Replace inline `pi.*`, `observme.*`, and `gen_ai.*` telemetry keys in reviewed source with typed constants from `src/semconv/`.
+- [x] Replace inline `pi.*`, `observme.*`, and `gen_ai.*` telemetry keys in reviewed source with typed constants from `src/semconv/`.
 
 #### Why
 
@@ -231,7 +231,7 @@ Inline telemetry names can drift from the canonical semantic convention and are 
 
 ### 5. Replace hand-built config enums with `StringEnum`
 
-- [ ] Use `@earendil-works/pi-ai` `StringEnum` for TypeBox string-enum config fields.
+- [x] Use `@earendil-works/pi-ai` `StringEnum` for TypeBox string-enum config fields.
 
 #### Why
 
@@ -259,7 +259,7 @@ Pi documents `StringEnum` as the Google-compatible schema representation; hand-b
 
 ### 6. Enforce bounded subagent reason enums
 
-- [ ] Normalize spawn and wait/join reasons to the exact documented low-cardinality enums before attributes or metric labels are built.
+- [x] Normalize spawn and wait/join reasons to the exact documented low-cardinality enums before attributes or metric labels are built.
 
 #### Why
 
@@ -288,7 +288,7 @@ Sanitizing arbitrary strings to 64 characters does not bound cardinality. Existi
 
 ### 7. Wire trusted child lineage and W3C parent context
 
-- [ ] Make a child ObservMe runtime consume a complete validated parent propagation envelope and continue the parent trace, with a documented fallback link when continuation is unavailable.
+- [x] Make a child ObservMe runtime consume a complete validated parent propagation envelope and continue the parent trace, with a documented fallback link when continuation is unavailable.
 
 #### Why
 
@@ -319,7 +319,7 @@ The parent helper writes W3C and ObservMe environment values, but the production
 
 ### 8. Emit sanitized configuration rejection diagnostics
 
-- [ ] Surface every invalid/unsafe configuration fallback as a bounded, secret-safe runtime diagnostic.
+- [x] Surface every invalid/unsafe configuration fallback as a bounded, secret-safe runtime diagnostic.
 
 #### Why
 
@@ -349,7 +349,7 @@ Falling back to defaults without a logger sink hides security-relevant state cha
 
 ### 9. Record all declared lifecycle and agent-tree metrics
 
-- [ ] Record the currently dormant error/duration/recovery instruments at their authoritative lifecycle transitions.
+- [x] Record the currently dormant error/duration/recovery instruments at their authoritative lifecycle transitions.
 
 #### Why
 
@@ -381,7 +381,7 @@ Constructed but unused instruments make dashboards and SLOs look healthy or empt
 
 ### 10. Measure real user-bash execution duration
 
-- [ ] Correlate `user_bash` pre-execution with its completed `bashExecution` record and omit duration when elapsed time cannot be derived safely.
+- [x] Correlate `user_bash` pre-execution with its completed `bashExecution` record and omit duration when elapsed time cannot be derived safely.
 
 #### Why
 
@@ -412,7 +412,7 @@ Starting and ending the bash span inside the completion handler records instrume
 
 ### 11. Add required correlation to tool completion logs
 
-- [ ] Emit safe tool identity and common session/workflow/agent/turn/trace correlation on tool completion and failure logs.
+- [x] Emit safe tool identity and common session/workflow/agent/turn/trace correlation on tool completion and failure logs.
 
 #### Why
 
@@ -441,7 +441,7 @@ Current final logs contain only success/error fields, so Loki rows cannot identi
 
 ### 12. Split event handlers by responsibility
 
-- [ ] Refactor the multi-domain handler module into focused event-family registration modules while preserving one public registration entrypoint.
+- [x] Refactor the multi-domain handler module into focused event-family registration modules while preserving one public registration entrypoint.
 
 #### Why
 
@@ -471,7 +471,7 @@ Current final logs contain only success/error fields, so Loki rows cannot identi
 
 ### 13. Deduplicate OTLP signal endpoint handling
 
-- [ ] Extract one shared endpoint path helper used by trace, metric, and log exporters.
+- [x] Extract one shared endpoint path helper used by trace, metric, and log exporters.
 
 #### Why
 
@@ -498,7 +498,7 @@ Current final logs contain only success/error fields, so Loki rows cannot identi
 
 ### 14. Close documentation and validation
 
-- [ ] Reconcile documentation with the repaired behavior and run the complete validation matrix.
+- [x] Reconcile documentation with the repaired behavior and run the complete validation matrix.
 
 #### Why
 

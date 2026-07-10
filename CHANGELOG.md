@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Reconciled source-review remediation documentation and completed the full release validation matrix, including Docker-backed Collector integration.
+- Deduplicated OTLP trace, metric, and log base-endpoint path handling behind one shared slash-normalization helper.
+- Remediated the Models dashboard with zero-safe provider/model reliability, bounded traffic and latency context, selected-range stop reasons, corrected cost efficiency, and time-preserving drill-down links.
+- Split Pi event handling into focused lifecycle, agent/turn, LLM, tool/bash, and session-event modules behind the compatible `registerHandlers()` facade.
+- Added safe tool completion and failure log correlation across session, workflow, agent, turn, tool, trace, and span identities without copying operational content.
+- Correlated user-bash pre-execution and completion telemetry with bounded single-flight state so duration reflects real execution time and ambiguous or incomplete operations fail closed.
+- Activated agent-run error, root workflow duration, subagent spawn duration, and deduplicated child failure/recovery metrics with bounded labels and state.
+- Added bounded, secret-safe config rejection diagnostics across structured telemetry, Pi UI fallback, and `/obs status` without blocking session startup.
+- Continued validated launcher-propagated W3C parent traces in child `pi.session` spans, with sanitized fail-open lineage rejection and validated span-link/log fallbacks.
+- Constrained subagent spawn and wait/join reasons to documented bounded enums across spans, logs, runtime hints, and metric labels.
+- Replaced config environment and privacy path-mode literal unions with Pi's Google-compatible `StringEnum` schemas and covered accepted and rejected values.
+- Centralized remaining telemetry attributes and log events in semantic-convention modules and added a source contract guard against inline telemetry names.
 - Bounded per-run turn sequence state and cleaned evicted agent-tree child references while preserving historical fan-out totals.
 - Made trusted project config bootstrap use Pi's distribution config-directory constant and per-file mutation queue, including concurrent creation coverage.
 - Hardened path redaction across POSIX, Windows drive, and UNC absolute paths while preserving normal URLs and slash-separated prose.

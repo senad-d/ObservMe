@@ -9,7 +9,9 @@ const partialInitializationErrorMessage =
 
 export default function observme(pi: ExtensionAPI): void {
   assertRegistrationApiAvailable(pi);
-  registerHandlers(pi);
+  // Only the Pi process environment is eligible for launcher-provided lineage.
+  // Session config loading keeps trusted project .env values out of this boundary.
+  registerHandlers(pi, { trustedParentContext: true });
   registerObsCommandWithPartialInitializationDiagnostic(pi);
 }
 

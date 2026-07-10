@@ -1261,6 +1261,43 @@ async function errorsDashboardUsesParsedLogTablesAndTraceLinks() {
   }
 }
 
+async function repairedLifecycleMetricsMatchDashboardNamesAndGroupingLabels() {
+  const agentDashboard = await readJsonFile(agentDashboardFile);
+  const errorsDashboard = await readJsonFile(errorsDashboardFile);
+  const spawnDurationPanel = assertAgentDashboardPanel(agentDashboard, "p95 subagent-spawn duration");
+  const childFailurePanel = assertAgentDashboardPanel(agentDashboard, "Child-agent failures and recovered child failures");
+  const errorRatePanel = assertNamedPanel(errorsDashboardFile, errorsDashboard, "Error rate");
+  const spawnDurationExpression = expressionsForPanel(spawnDurationPanel).join("\n");
+  const childFailureExpressions = expressionsForPanel(childFailurePanel);
+  const errorRateExpression = expressionsForPanel(errorRatePanel).join("\n");
+
+  assert.ok(
+    spawnDurationExpression.includes("observme_subagent_spawn_duration_ms_bucket"),
+    `${agentDashboardFile}: spawn duration panel must use the production histogram name`,
+  );
+  assert.match(
+    spawnDurationExpression,
+    /by\s*\(agent_role,\s*spawn_type,\s*spawn_reason,\s*le\)/u,
+    `${agentDashboardFile}: spawn duration grouping must match production labels`,
+  );
+  assert.ok(
+    childFailureExpressions.some(expression => expression.includes("observme_child_agent_failures_total")),
+    `${agentDashboardFile}: child failure panel must use the production counter name`,
+  );
+  assert.ok(
+    childFailureExpressions.some(expression => expression.includes("observme_parent_recovered_from_child_failure_total")),
+    `${agentDashboardFile}: recovery panel must use the production counter name`,
+  );
+  assert.ok(
+    childFailureExpressions.every(expression => /by\s*\(agent_role,\s*subagent_depth\)/u.test(expression)),
+    `${agentDashboardFile}: child failure and recovery grouping must match production labels`,
+  );
+  assert.ok(
+    errorRateExpression.includes("observme_agent_run_errors_total"),
+    `${errorsDashboardFile}: error rate must query the production agent-run error counter`,
+  );
+}
+
 async function sizeCharPanelsUseCharacterUnits() {
   for (const path of dashboardFiles) {
     const dashboard = await readJsonFile(path);
@@ -1348,4 +1385,8 @@ test("model and thinking change annotations are surfaced on cost, latency, and m
 test("latency dashboard shows percentile tables, volume companions, and trace links", latencyDashboardShowsQuantilesVolumesAndTraceLinks);
 test("tools dashboard shows failure severity, latency volume, and character-size units", toolsDashboardShowsFailureSeverityAndCharacterSizes);
 test("errors dashboard uses parsed log tables with trace links", errorsDashboardUsesParsedLogTablesAndTraceLinks);
+test(
+  "repaired lifecycle metrics match dashboard names and grouping labels",
+  repairedLifecycleMetricsMatchDashboardNamesAndGroupingLabels,
+);
 test("size character metrics use character units instead of byte units", sizeCharPanelsUseCharacterUnits);

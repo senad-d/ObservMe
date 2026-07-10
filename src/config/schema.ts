@@ -1,8 +1,12 @@
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 
-export type ObservMeEnvironment = "production" | "development" | "test";
+const observMeEnvironments = ["production", "development", "test"] as const;
+const privacyPathModes = ["hash", "basename", "full", "drop"] as const;
+
+export type ObservMeEnvironment = (typeof observMeEnvironments)[number];
 export type OtlpProtocol = "http/protobuf";
-export type PrivacyPathMode = "hash" | "basename" | "full" | "drop";
+export type PrivacyPathMode = (typeof privacyPathModes)[number];
 
 export interface OtlpTlsConfig {
   enabled: boolean;
@@ -184,17 +188,12 @@ export interface ObservMeConfig {
   shutdown: ShutdownConfig;
 }
 
-const environmentSchema = Type.Union([Type.Literal("production"), Type.Literal("development"), Type.Literal("test")]);
+const environmentSchema = StringEnum(observMeEnvironments);
 const otlpProtocolSchema = Type.Literal("http/protobuf");
 const stringRecordSchema = Type.Record(Type.String(), Type.String());
 const positiveIntegerSchema = Type.Integer({ minimum: 1 });
 const ratioSchema = Type.Number({ minimum: 0, maximum: 1 });
-const pathModeSchema = Type.Union([
-  Type.Literal("hash"),
-  Type.Literal("basename"),
-  Type.Literal("full"),
-  Type.Literal("drop"),
-]);
+const pathModeSchema = StringEnum(privacyPathModes);
 
 export const customRedactionPatternSchema = Type.Object(
   {

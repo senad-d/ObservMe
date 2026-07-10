@@ -260,6 +260,16 @@ function formatConfigDiagnosticsLines(diagnostics: SessionConfigDiagnostics | un
   return [
     `Config source: ${formatConfigEffectiveSource(diagnostics.effectiveSource)}`,
     `Project config: ${formatProjectConfigStatus(diagnostics)}`,
+    ...formatConfigRejectionLines(diagnostics),
+  ];
+}
+
+function formatConfigRejectionLines(diagnostics: SessionConfigDiagnostics): string[] {
+  const rejection = diagnostics.rejection;
+  if (!rejection) return [];
+
+  return [
+    `Config rejection: safe defaults applied (${rejection.issueCount} issue(s): ${rejection.issueCodes.join(", ")})`,
   ];
 }
 

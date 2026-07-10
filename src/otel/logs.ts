@@ -6,6 +6,7 @@ import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
 import type { LogRecordExporter, LogRecordProcessor } from "@opentelemetry/sdk-logs";
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
 import type { LogsBatchConfig, ObservMeConfig } from "../config/schema.ts";
+import { appendOtlpSignalPath } from "./otlp-endpoint.ts";
 import type { StartOtelSdkFactoryOptions } from "./sdk.ts";
 
 export const OBSERVME_LOGGER_NAME = "@senad-d/observme";
@@ -139,7 +140,7 @@ export function buildOtlpLogExporterOptions(config: ObservMeConfig): OtlpLogExpo
 }
 
 export function resolveLogEndpoint(config: ObservMeConfig): string {
-  return config.otlp.signalEndpoints?.logs ?? appendSignalPath(config.otlp.endpoint, OTLP_LOG_SIGNAL_PATH);
+  return config.otlp.signalEndpoints?.logs ?? appendOtlpSignalPath(config.otlp.endpoint, OTLP_LOG_SIGNAL_PATH);
 }
 
 function createOtlpLogExporter(options: OtlpLogExporterOptions): LogRecordExporter {
@@ -156,15 +157,4 @@ function createLogProvider(options: LogProviderOptions): LogProviderLike {
 
 function createLogResource(config: ObservMeConfig): Resource {
   return resourceFromAttributes(config.resource.attributes);
-}
-
-function appendSignalPath(baseEndpoint: string, signalPath: string): string {
-  const trimmedBaseEndpoint = removeTrailingSlashes(baseEndpoint);
-  return `${trimmedBaseEndpoint}${signalPath}`;
-}
-
-function removeTrailingSlashes(value: string): string {
-  let end = value.length;
-  while (end > 0 && value[end - 1] === "/") end -= 1;
-  return value.slice(0, end);
 }

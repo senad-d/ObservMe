@@ -5,6 +5,7 @@ import { loadSessionConfig } from "../src/config/load-config.ts";
 import {
   emitUnsafeCaptureWarning,
   ensureValidObservMeConfig,
+  normalizeConfigRejectionDiagnostic,
   validateObservMeConfig,
 } from "../src/config/validate.ts";
 
@@ -27,6 +28,9 @@ function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const documentedEnvironmentValues = ["production", "development", "test"];
+const documentedPathModeValues = ["hash", "basename", "full", "drop"];
+
 function assertValid(config, options) {
   assert.deepEqual(validateObservMeConfig(config, options), { valid: true, issues: [] });
 }
@@ -39,6 +43,32 @@ function assertInvalid(config, code, options) {
 
 test("validation accepts safe defaults", () => {
   assertValid(defaultObservMeConfig, { env: {} });
+});
+
+for (const environment of documentedEnvironmentValues) {
+  test(`validation accepts documented ${environment} environment`, () => {
+    assertValid(cloneDefault({ environment }), { env: {} });
+  });
+}
+
+for (const pathMode of documentedPathModeValues) {
+  test(`validation accepts documented ${pathMode} privacy path mode`, () => {
+    assertValid(cloneDefault({ privacy: { pathMode } }), { env: {} });
+  });
+}
+
+test("unknown environment values fail structural validation and fall back safely", () => {
+  const config = cloneDefault({ environment: "staging" });
+
+  assertInvalid(config, "invalid_config_shape", { env: {} });
+  assert.deepEqual(ensureValidObservMeConfig(config, { env: {} }), defaultObservMeConfig);
+});
+
+test("unknown privacy path modes fail structural validation and fall back safely", () => {
+  const config = cloneDefault({ privacy: { pathMode: "relative" } });
+
+  assertInvalid(config, "invalid_config_shape", { env: {} });
+  assert.deepEqual(ensureValidObservMeConfig(config, { env: {} }), defaultObservMeConfig);
 });
 
 test("validation rejects content capture without redaction unless unsafe capture is explicit", () => {
@@ -203,11 +233,25 @@ test("validation rejects malformed propagated workflow and agent lineage values"
     OBSERVME_PARENT_SPAN_ID: "0123456789abcdef",
     OBSERVME_AGENT_DEPTH: "2",
     OBSERVME_SPAWN_ID: "spawn-123",
+    OBSERVME_AGENT_CAPABILITY: "review",
   };
   assertValid(defaultObservMeConfig, { env });
   assertInvalid(defaultObservMeConfig, "malformed_lineage_value", { env: { ...env, OBSERVME_WORKFLOW_ID: "bad/value" } });
   assertInvalid(defaultObservMeConfig, "malformed_lineage_value", { env: { ...env, OBSERVME_PARENT_TRACE_ID: "not-a-trace" } });
+  assertInvalid(defaultObservMeConfig, "malformed_lineage_value", { env: { ...env, OBSERVME_PARENT_TRACE_ID: "0".repeat(32) } });
+  assertInvalid(defaultObservMeConfig, "malformed_lineage_value", { env: { ...env, OBSERVME_PARENT_SPAN_ID: "0".repeat(16) } });
   assertInvalid(defaultObservMeConfig, "malformed_lineage_value", { env: { ...env, OBSERVME_AGENT_DEPTH: "999" } });
+  assertInvalid(defaultObservMeConfig, "malformed_lineage_value", { env: { ...env, OBSERVME_AGENT_CAPABILITY: "x".repeat(129) } });
+});
+
+test("validation rejects malformed, duplicate, and W3C-reserved lineage environment names", () => {
+  assertInvalid(cloneDefault({ workflow: { idEnv: "NOT SAFE" } }), "malformed_lineage_value", { env: {} });
+  assertInvalid(
+    cloneDefault({ agent: { parentIdEnv: defaultObservMeConfig.agent.rootIdEnv } }),
+    "malformed_lineage_value",
+    { env: {} },
+  );
+  assertInvalid(cloneDefault({ workflow: { idEnv: "traceparent" } }), "malformed_lineage_value", { env: {} });
 });
 
 test("validation rejects queue sizes that exceed memory guardrails", () => {
@@ -271,12 +315,32 @@ test("invalid loaded config falls back to safe defaults and logs rejection reaso
 test("ensureValidObservMeConfig never throws for invalid configuration", () => {
   const warnings = [];
   const config = ensureValidObservMeConfig(
-    cloneDefault({ metrics: { labels: ["trace_id"] } }),
+    cloneDefault({ metrics: { labels: ["trace_id.private-label-secret"] } }),
     { logger: { warn: message => warnings.push(message) } },
   );
 
   assert.deepEqual(config, defaultObservMeConfig);
   assert.ok(warnings.some(message => message.includes("high_cardinality_metric_label")));
+  assert.doesNotMatch(warnings.join("\n"), /private-label-secret/u);
+
+  assert.doesNotThrow(() =>
+    ensureValidObservMeConfig(cloneDefault({ metrics: { labels: ["pi.session.id"] } }), {
+      logger: { warn: () => { throw new Error("diagnostic sink failed"); } },
+    }),
+  );
+});
+
+test("config rejection diagnostics bound and normalize untrusted issue metadata", () => {
+  const diagnostic = normalizeConfigRejectionDiagnostic({
+    issueCodes: Array.from({ length: 1_000 }, (_value, index) => `private-secret-code-${index}`),
+    issueCount: Number.POSITIVE_INFINITY,
+  });
+
+  assert.deepEqual(diagnostic, {
+    issueCodes: ["unknown_config_validation_issue"],
+    issueCount: 1,
+  });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /private-secret/u);
 });
 
 test("ensureValidObservMeConfig falls back to defaults for rejected custom redaction regex", () => {

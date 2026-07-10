@@ -85,6 +85,12 @@ function createRecordingMetrics(records: TestMetricRecord[]) {
     agentTreeWidth: createHistogram(records, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_TREE_WIDTH),
     agentWaitDurationMs: createHistogram(records, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_WAIT_DURATION_MS),
     agentJoinDurationMs: createHistogram(records, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_JOIN_DURATION_MS),
+    subagentSpawnDurationMs: createHistogram(records, OBSERVME_HISTOGRAM_METRIC_NAMES.SUBAGENT_SPAWN_DURATION_MS),
+    childAgentFailures: createCounter(records, OBSERVME_COUNTER_METRIC_NAMES.CHILD_AGENT_FAILURES_TOTAL),
+    parentRecoveredFromChildFailure: createCounter(
+      records,
+      OBSERVME_COUNTER_METRIC_NAMES.PARENT_RECOVERED_FROM_CHILD_FAILURE_TOTAL,
+    ),
   };
 }
 
@@ -445,7 +451,7 @@ test("missing lineage context is classified as root-like, while partial parent c
 test("fan-out, depth, active-child, wait/join, child-status, and propagation metrics stay low-cardinality", () => {
   const session = createSubagentSession();
   const first = startSubagentSpawn(session, { spawnId: "spawn-unit-a", spawnType: "command", spawnReason: "review" });
-  const second = startSubagentSpawn(session, { spawnId: "spawn-unit-b", spawnType: "tool", spawnReason: "analysis" });
+  const second = startSubagentSpawn(session, { spawnId: "spawn-unit-b", spawnType: "tool", spawnReason: "parallel_search" });
   const wait = startAgentWait(session, {
     spawnId: second.spawnId,
     childAgentId: second.childAgentId,

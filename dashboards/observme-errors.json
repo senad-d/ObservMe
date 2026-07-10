@@ -19,6 +19,12 @@
       "version": "1.0.0"
     },
     {
+      "id": "row",
+      "name": "Row",
+      "type": "panel",
+      "version": ""
+    },
+    {
       "id": "timeseries",
       "name": "Time series",
       "type": "panel",
@@ -27,6 +33,12 @@
     {
       "id": "stat",
       "name": "Stat",
+      "type": "panel",
+      "version": ""
+    },
+    {
+      "id": "logs",
+      "name": "Logs",
       "type": "panel",
       "version": ""
     },
@@ -42,7 +54,7 @@
   },
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "id": null,
   "links": [
     {
@@ -50,8 +62,48 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
+      "title": "Overview",
+      "tooltip": "Open the overview with the current time range.",
+      "type": "link",
+      "url": "/d/observme-overview/observme-overview?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Models",
+      "tooltip": "Open provider and model reliability details.",
+      "type": "link",
+      "url": "/d/observme-models/observme-models?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Tools",
+      "tooltip": "Open tool reliability and latency details.",
+      "type": "link",
+      "url": "/d/observme-tools/observme-tools?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Agents",
+      "tooltip": "Open agent and lineage reliability details.",
+      "type": "link",
+      "url": "/d/observme-agents/observme-agents?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "Trace Journey",
-      "tooltip": "Open trace/log drill-downs with the current time range.",
+      "tooltip": "Open trace/log drill-downs with the current time range and context filters.",
       "type": "link",
       "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
     },
@@ -69,13 +121,29 @@
   "liveNow": false,
   "panels": [
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "Error health",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Combined runtime and signal error rate across ObservMe counters.",
+      "description": "Selected-range sum of bounded failure counter increments. This is error-signal pressure, not a unique incident count: one failure can increment more than one lifecycle counter. Missing series are treated as zero.",
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -86,7 +154,341 @@
               },
               {
                 "color": "red",
-                "value": 0
+                "value": 1e-9
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "id": 11,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(increase(observme_workflow_errors_total[$__range])) or vector(0)) + (sum(increase(observme_agent_run_errors_total[$__range])) or vector(0)) + (sum(increase(observme_subagent_spawn_failures_total[$__range])) or vector(0)) + (sum(increase(observme_orphan_agents_total[$__range])) or vector(0)) + (sum(increase(observme_trace_context_propagation_failures_total[$__range])) or vector(0)) + (sum(increase(observme_child_agent_failures_total[$__range])) or vector(0)) + (sum(increase(observme_llm_errors_total[$__range])) or vector(0)) + (sum(increase(observme_tool_failures_total[$__range])) or vector(0)) + (sum(increase(observme_bash_failures_total[$__range])) or vector(0)) + (sum(increase(observme_telemetry_dropped_total[$__range])) or vector(0)) + (sum(increase(observme_redaction_failures_total[$__range])) or vector(0)) + (sum(increase(observme_export_errors_total[$__range])) or vector(0)) + (sum(increase(observme_handler_errors_total[$__range])) or vector(0))",
+          "instant": true,
+          "legendFormat": "error signals",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Total error signals",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Root workflows that ended in an explicit failure during the selected range. Missing series are treated as zero.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1e-9
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "id": 12,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(observme_workflow_errors_total[$__range])) or vector(0)",
+          "instant": true,
+          "legendFormat": "failed workflows",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Failed workflows",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Selected-range LLM failures divided by LLM requests. Yellow starts at 2%; red mirrors the default 5% alert threshold. No requests and no failures render as zero.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.02
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "id": 13,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Models",
+          "url": "/d/observme-models/observme-models?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "clamp_max((sum(increase(observme_llm_errors_total[$__range])) or vector(0)) / clamp_min((sum(increase(observme_llm_requests_total[$__range])) or vector(0)), 1), 1)",
+          "instant": true,
+          "legendFormat": "LLM failure ratio",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "LLM failure ratio",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Selected-range tool failures divided by tool calls. Red mirrors the default 10% alert threshold. No calls and no failures render as zero.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.05
+              },
+              {
+                "color": "red",
+                "value": 0.1
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "id": 14,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Tools",
+          "url": "/d/observme-tools/observme-tools?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "clamp_max((sum(increase(observme_tool_failures_total[$__range])) or vector(0)) / clamp_min((sum(increase(observme_tool_calls_total[$__range])) or vector(0)), 1), 1)",
+          "instant": true,
+          "legendFormat": "tool failure ratio",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Tool failure ratio",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "id": 101,
+      "panels": [],
+      "title": "Error trends",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Failure counter increments per second, separated by signal family so overlapping lifecycle failures are visible instead of being presented as unique incidents. Missing series render as zero.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1e-9
               }
             ]
           },
@@ -96,20 +498,36 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
-        "y": 0
+        "y": 7
       },
       "id": 1,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Agents",
+          "url": "/d/observme-agents/observme-agents?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Export Health",
+          "url": "/d/observme-export-health/observme-export-health?${__url_time_range}"
+        }
+      ],
       "options": {
         "legend": {
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "targets": [
@@ -119,9 +537,76 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_handler_errors_total[$__rate_interval])) + sum(rate(observme_workflow_errors_total[$__rate_interval])) + sum(rate(observme_agent_run_errors_total[$__rate_interval])) + sum(rate(observme_llm_errors_total[$__rate_interval])) + sum(rate(observme_tool_failures_total[$__rate_interval])) + sum(rate(observme_bash_failures_total[$__rate_interval])) + sum(rate(observme_export_errors_total[$__rate_interval]))",
+          "expr": "sum(rate(observme_workflow_errors_total[$__rate_interval])) or vector(0)",
+          "legendFormat": "workflow",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(observme_agent_run_errors_total[$__rate_interval])) or vector(0)",
+          "legendFormat": "agent run",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(observme_llm_errors_total[$__rate_interval])) or vector(0)",
+          "legendFormat": "LLM",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(observme_tool_failures_total[$__rate_interval])) or vector(0)",
+          "legendFormat": "tool",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(observme_bash_failures_total[$__rate_interval])) or vector(0)",
+          "legendFormat": "bash",
+          "range": true,
+          "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(rate(observme_subagent_spawn_failures_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_orphan_agents_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_child_agent_failures_total[$__rate_interval])) or vector(0))",
+          "legendFormat": "lineage",
+          "range": true,
+          "refId": "F"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(rate(observme_telemetry_dropped_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_redaction_failures_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_export_errors_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_handler_errors_total[$__rate_interval])) or vector(0))",
+          "legendFormat": "self-observability",
+          "range": true,
+          "refId": "G"
         }
       ],
       "title": "Error rate",
@@ -132,16 +617,24 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Handler failures grouped by bounded operation and error class labels.",
+      "description": "Safe-handler failures per second grouped by the bounded operation label actually emitted by observme_handler_errors_total. Missing series render as zero.",
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
           "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "red",
+                "value": 1e-9
               }
             ]
           },
@@ -151,20 +644,31 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 0
+        "w": 12,
+        "x": 12,
+        "y": 7
       },
       "id": 2,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Export Health",
+          "url": "/d/observme-export-health/observme-export-health?${__url_time_range}"
+        }
+      ],
       "options": {
         "legend": {
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "targets": [
@@ -174,8 +678,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_handler_errors_total[$__rate_interval])) by (operation, error_class)",
-          "legendFormat": "{{operation}} / {{error_class}}",
+          "expr": "(sum by (operation) (rate(observme_handler_errors_total[$__rate_interval])) or on() vector(0))",
+          "legendFormat": "{{operation}}",
           "range": true,
           "refId": "A"
         }
@@ -188,16 +692,29 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "LLM error ratio grouped by provider and model.",
+      "description": "LLM failures divided by requests for each provider/model. Active request series with no failures render as zero; 2%/5% thresholds mirror dashboard and alert guidance.",
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
           "mappings": [],
+          "max": 1,
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.02
+              },
+              {
+                "color": "red",
+                "value": 0.05
               }
             ]
           },
@@ -207,20 +724,36 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 0
+        "w": 12,
+        "x": 0,
+        "y": 15
       },
       "id": 3,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Models",
+          "url": "/d/observme-models/observme-models?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open matching LLM logs",
+          "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
+        }
+      ],
       "options": {
         "legend": {
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "targets": [
@@ -230,7 +763,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_llm_errors_total[$__rate_interval])) by (provider, model) / clamp_min(sum(rate(observme_llm_requests_total[$__rate_interval])) by (provider, model), 1e-9)",
+          "expr": "(clamp_max(((sum by (provider, model) (rate(observme_llm_errors_total[$__rate_interval])) or (0 * sum by (provider, model) (rate(observme_llm_requests_total[$__rate_interval])))) / clamp_min(sum by (provider, model) (rate(observme_llm_requests_total[$__rate_interval])), 1e-9)), 1) or on() vector(0))",
           "legendFormat": "{{provider}} / {{model}}",
           "range": true,
           "refId": "A"
@@ -244,16 +777,29 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Tool failures divided by tool calls for each low-cardinality tool_name.",
+      "description": "Top 10 tool failure ratios by tool_name. Active call series with no failures render as zero; 5%/10% thresholds mirror dashboard and alert guidance.",
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
           "mappings": [],
+          "max": 1,
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.05
+              },
+              {
+                "color": "red",
+                "value": 0.1
               }
             ]
           },
@@ -263,20 +809,36 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 8
+        "w": 12,
+        "x": 12,
+        "y": 15
       },
       "id": 4,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Tools",
+          "url": "/d/observme-tools/observme-tools?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
+        }
+      ],
       "options": {
         "legend": {
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "targets": [
@@ -286,70 +848,99 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_tool_failures_total[$__rate_interval])) by (tool_name) / clamp_min(sum(rate(observme_tool_calls_total[$__rate_interval])) by (tool_name), 1e-9)",
+          "expr": "(topk(10, clamp_max(((sum by (tool_name) (rate(observme_tool_failures_total[$__rate_interval])) or (0 * sum by (tool_name) (rate(observme_tool_calls_total[$__rate_interval])))) / clamp_min(sum by (tool_name) (rate(observme_tool_calls_total[$__rate_interval])), 1e-9)), 1)) or on() vector(0))",
           "legendFormat": "{{tool_name}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Tool failure rate",
+      "title": "Top tool failure rates",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "id": 102,
+      "panels": [],
+      "title": "Failure stream",
+      "type": "row"
     },
     {
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Broad failure, dropped-telemetry, and orphan-agent log table. Specific parsed log tables below expose labels as columns and link trace_id fields to Tempo when present.",
+      "description": "Newest matching failure, dropped-telemetry, and orphan-agent logs for the selected context. Empty means no matching failure logs in the selected time range. Open a row for structured metadata, then use Trace Journey for correlated spans.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 8
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 24
       },
       "id": 5,
       "options": {
-        "showHeader": true
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\", event_name=~\".*[.]failed|.*[.]dropped|agent[.]orphaned\"}",
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=~\".*[.]failed|.*[.]dropped|agent[.]orphaned\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\"}",
+          "maxLines": 1000,
           "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
-      "title": "Error logs",
-      "type": "table",
+      "title": "Recent failure stream",
+      "type": "logs",
       "links": [
         {
           "targetBlank": false,
-          "title": "Open Trace Journey",
-          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "labelsToFields",
-          "options": {
-            "mode": "columns"
-          }
+          "title": "Open matching Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "id": 103,
+      "panels": [],
+      "title": "Parsed failure details",
+      "type": "row"
     },
     {
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Parsed LLM failure logs. Labels expose event, session, agent, agent run, and stop reason columns; trace_id links open Tempo when present.",
+      "description": "Parsed llm.request.failed rows for the selected context. Provider/model, stop reason, lineage, and trace labels are exposed when present; trace_id opens Tempo. Empty means no matching failure logs in the selected time range.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -389,17 +980,17 @@
         ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 12,
         "x": 0,
-        "y": 16
+        "y": 34
       },
       "id": 6,
       "links": [
         {
           "targetBlank": false,
-          "title": "Open Trace Journey",
-          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+          "title": "Open matching Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
         }
       ],
       "options": {
@@ -412,7 +1003,13 @@
           ],
           "show": false
         },
-        "showHeader": true
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Time"
+          }
+        ]
       },
       "pluginVersion": "11.1.0",
       "targets": [
@@ -422,7 +1019,8 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", event_name=\"llm.request.failed\"}",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"llm.request.failed\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\"}",
+          "maxLines": 500,
           "legendFormat": "{{event_name}}",
           "queryType": "range",
           "range": true,
@@ -462,7 +1060,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Parsed tool failure logs with event/session/agent labels and Tempo trace links when trace_id is present.",
+      "description": "Parsed tool.call.failed rows for the selected context. Session, workflow, agent, run, and trace labels are exposed when present; trace_id opens Tempo. Empty means no matching failure logs in the selected time range.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -502,17 +1100,17 @@
         ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 12,
         "x": 12,
-        "y": 16
+        "y": 34
       },
       "id": 7,
       "links": [
         {
           "targetBlank": false,
-          "title": "Open Trace Journey",
-          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+          "title": "Open matching Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
         }
       ],
       "options": {
@@ -525,7 +1123,13 @@
           ],
           "show": false
         },
-        "showHeader": true
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Time"
+          }
+        ]
       },
       "pluginVersion": "11.1.0",
       "targets": [
@@ -535,7 +1139,8 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", event_name=\"tool.call.failed\"}",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"tool.call.failed\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\"}",
+          "maxLines": 500,
           "legendFormat": "{{event_name}}",
           "queryType": "range",
           "range": true,
@@ -575,7 +1180,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Parsed export failure logs for backend/export diagnosis, with session and trace links when available.",
+      "description": "Parsed export.failed rows for backend/export diagnosis. Context and trace labels are exposed when present; trace_id opens Tempo. Empty means no matching failure logs in the selected time range.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -615,17 +1220,17 @@
         ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 8,
         "x": 0,
-        "y": 24
+        "y": 43
       },
       "id": 8,
       "links": [
         {
           "targetBlank": false,
-          "title": "Open Trace Journey",
-          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+          "title": "Open matching Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
         }
       ],
       "options": {
@@ -638,7 +1243,13 @@
           ],
           "show": false
         },
-        "showHeader": true
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Time"
+          }
+        ]
       },
       "pluginVersion": "11.1.0",
       "targets": [
@@ -648,7 +1259,8 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", event_name=\"export.failed\"}",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"export.failed\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\"}",
+          "maxLines": 500,
           "legendFormat": "{{event_name}}",
           "queryType": "range",
           "range": true,
@@ -688,7 +1300,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Parsed ObservMe handler failure logs for runtime self-observability.",
+      "description": "Parsed handler.failed rows for runtime self-observability. Context and trace labels are exposed when present; trace_id opens Tempo. Empty means no matching failure logs in the selected time range.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -728,17 +1340,17 @@
         ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 8,
         "x": 8,
-        "y": 24
+        "y": 43
       },
       "id": 9,
       "links": [
         {
           "targetBlank": false,
-          "title": "Open Trace Journey",
-          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+          "title": "Open matching Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
         }
       ],
       "options": {
@@ -751,7 +1363,13 @@
           ],
           "show": false
         },
-        "showHeader": true
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Time"
+          }
+        ]
       },
       "pluginVersion": "11.1.0",
       "targets": [
@@ -761,7 +1379,8 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", event_name=\"handler.failed\"}",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"handler.failed\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\"}",
+          "maxLines": 500,
           "legendFormat": "{{event_name}}",
           "queryType": "range",
           "range": true,
@@ -801,7 +1420,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Parsed trace-context propagation failure logs for agent lineage troubleshooting.",
+      "description": "Parsed trace_context.propagation_failed rows for lineage diagnosis. Context and trace labels are exposed when present; trace_id opens Tempo. Empty means no matching failure logs in the selected time range.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -841,17 +1460,17 @@
         ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 8,
         "x": 16,
-        "y": 24
+        "y": 43
       },
       "id": 10,
       "links": [
         {
           "targetBlank": false,
-          "title": "Open Trace Journey",
-          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+          "title": "Open matching Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
         }
       ],
       "options": {
@@ -864,7 +1483,13 @@
           ],
           "show": false
         },
-        "showHeader": true
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Time"
+          }
+        ]
       },
       "pluginVersion": "11.1.0",
       "targets": [
@@ -874,7 +1499,8 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", event_name=\"trace_context.propagation_failed\"}",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"trace_context.propagation_failed\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\"}",
+          "maxLines": 500,
           "legendFormat": "{{event_name}}",
           "queryType": "range",
           "range": true,
@@ -918,7 +1544,108 @@
     "errors"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
+        "definition": "label_values({service_name=\"observme-pi-extension\", event_name=~\".*[.]failed|.*[.]dropped|agent[.]orphaned\"}, pi_session_id)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Session ID",
+        "multi": true,
+        "name": "session_id",
+        "options": [],
+        "query": "label_values({service_name=\"observme-pi-extension\", event_name=~\".*[.]failed|.*[.]dropped|agent[.]orphaned\"}, pi_session_id)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
+        "definition": "label_values({service_name=\"observme-pi-extension\", event_name=~\".*[.]failed|.*[.]dropped|agent[.]orphaned\", pi_session_id=~\"${session_id:regex}\"}, pi_workflow_id)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Workflow ID",
+        "multi": true,
+        "name": "workflow_id",
+        "options": [],
+        "query": "label_values({service_name=\"observme-pi-extension\", event_name=~\".*[.]failed|.*[.]dropped|agent[.]orphaned\", pi_session_id=~\"${session_id:regex}\"}, pi_workflow_id)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
+        "definition": "label_values({service_name=\"observme-pi-extension\", event_name=~\".*[.]failed|.*[.]dropped|agent[.]orphaned\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\"}, pi_agent_id)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Agent ID",
+        "multi": true,
+        "name": "agent_id",
+        "options": [],
+        "query": "label_values({service_name=\"observme-pi-extension\", event_name=~\".*[.]failed|.*[.]dropped|agent[.]orphaned\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\"}, pi_agent_id)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
+        "definition": "label_values({service_name=\"observme-pi-extension\", event_name=~\".*[.]failed|.*[.]dropped|agent[.]orphaned\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\"}, pi_agent_run_id)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Agent run ID",
+        "multi": true,
+        "name": "agent_run_id",
+        "options": [],
+        "query": "label_values({service_name=\"observme-pi-extension\", event_name=~\".*[.]failed|.*[.]dropped|agent[.]orphaned\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\"}, pi_agent_run_id)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
   },
   "time": {
     "from": "now-6h",
@@ -927,6 +1654,6 @@
   "timezone": "browser",
   "title": "ObservMe Errors",
   "uid": "observme-errors",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

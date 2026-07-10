@@ -1,4 +1,5 @@
 import type { ObservMeConfig } from "../config/schema.ts";
+import { LOG_ATTRIBUTES } from "../semconv/attributes.ts";
 import type { GrafanaFetch, GrafanaTransportClient } from "./grafana-transport.ts";
 import { createGrafanaTransport } from "./grafana-transport.ts";
 import { assertNoSensitiveQueryInput } from "../safety/sensitive-input.ts";
@@ -48,11 +49,11 @@ export const FORBIDDEN_HIGH_CARDINALITY_PROMETHEUS_LABELS = [
   "raw_path",
   "raw_prompt",
   "session_id",
-  "span_id",
+  LOG_ATTRIBUTES.SPAN_ID,
   "spawn_id",
   "spawn_tool_call_id",
   "tool_call_id",
-  "trace_id",
+  LOG_ATTRIBUTES.TRACE_ID,
   "workflow_id",
   "workflow_root_agent_id",
 ] as const;

@@ -1,4 +1,5 @@
 import type { LogResult, TimeRange } from "../query/loki.ts";
+import { LOG_ATTRIBUTES } from "../semconv/attributes.ts";
 
 export interface ObsLokiLogSummaryRow {
   readonly timestamp: string;
@@ -32,12 +33,12 @@ const safeEventBodyPattern = /^[A-Za-z0-9_.:-]{1,96}$/u;
 const integerNanosecondsPattern = /^-?\d+$/u;
 const unknownTimestamp = "unknown-time";
 const unknownEventName = "structured-log";
-const eventNameAliases = ["event_name", "event.name"] as const;
-const eventCategoryAliases = ["event_category", "event.category"] as const;
-const severityAliases = ["severity", "severity_text", "level"] as const;
-const errorTypeAliases = ["error_type", "error.type", "error_class"] as const;
-const sessionIdAliases = ["pi_session_id", "pi.session.id"] as const;
-const traceIdAliases = ["trace_id", "trace.id"] as const;
+const eventNameAliases = ["event_name", LOG_ATTRIBUTES.EVENT_NAME] as const;
+const eventCategoryAliases = ["event_category", LOG_ATTRIBUTES.EVENT_CATEGORY] as const;
+const severityAliases = [LOG_ATTRIBUTES.SEVERITY, "severity_text", "level"] as const;
+const errorTypeAliases = ["error_type", LOG_ATTRIBUTES.ERROR_TYPE, "error_class"] as const;
+const sessionIdAliases = ["pi_session_id", LOG_ATTRIBUTES.PI_SESSION_ID] as const;
+const traceIdAliases = [LOG_ATTRIBUTES.TRACE_ID, "trace.id"] as const;
 
 export function createRecentObsLokiTimeRange(options: ObsLokiTimeRangeOptions = {}): TimeRange {
   const to = normalizeDate(options.now?.() ?? new Date());
@@ -150,7 +151,7 @@ function renderObsLokiLogSummaryRow(row: ObsLokiLogSummaryRow): string {
     row.timestamp,
     row.eventName,
     renderOptionalField("category", row.category),
-    renderOptionalField("severity", row.severity),
+    renderOptionalField(LOG_ATTRIBUTES.SEVERITY, row.severity),
     renderOptionalField("error", row.errorType),
     renderOptionalField("session", row.sessionId),
     renderOptionalField("trace", row.traceId),

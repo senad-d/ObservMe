@@ -2,6 +2,7 @@ import { CONFIG_DIR_NAME, withFileMutationQueue } from "@earendil-works/pi-codin
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
+import { RESOURCE_ATTRIBUTES } from "../semconv/attributes.ts";
 import { resolveProjectLocalFilePath } from "./project-paths.ts";
 
 export type ProjectConfigBootstrapStatus = "created" | "exists" | "skipped_untrusted";
@@ -62,10 +63,10 @@ export const PROJECT_OBSERVME_YAML_TEMPLATE = `observme:
 
   resource:
     attributes:
-      service.name: observme-pi-extension
-      observme.tenant.id: local-dev
-      pi.project.name: local-project
-      deployment.environment.name: development
+      ${RESOURCE_ATTRIBUTES.SERVICE_NAME}: observme-pi-extension
+      ${RESOURCE_ATTRIBUTES.OBSERVME_TENANT_ID}: local-dev
+      ${RESOURCE_ATTRIBUTES.PI_PROJECT_NAME}: local-project
+      ${RESOURCE_ATTRIBUTES.DEPLOYMENT_ENVIRONMENT_NAME}: development
 
   workflow:
     idEnv: OBSERVME_WORKFLOW_ID

@@ -192,7 +192,10 @@ Rules:
 
 - Generate a random `pi.agent.id` and `pi.workflow.id` when no trusted value is supplied.
 - For root agents, set `pi.agent.root_id = pi.agent.id`, `pi.workflow.root_agent_id = pi.agent.id`, and `pi.agent.depth = 0`.
-- For subagents, accept parent/root/depth values from the configured environment variables when the parent process is trusted.
+- For subagents, accept parent/root/depth values only from the Pi process environment supplied by a trusted ObservMe-aware launcher or from explicit runtime overrides. Project-local `.env` values may configure ObservMe but must not establish lineage provenance.
+- Require a complete validated workflow, parent agent, root agent, depth, and spawn envelope. When `propagateTraceContext` is true, also require a valid W3C `traceparent`; validate optional `tracestate` and require duplicate parent trace/span metadata to match it.
+- Reject partial, malformed, oversized, or stale propagation fail-open: generate root/orphan identity, emit only bounded sanitized failure telemetry, and never include rejected raw environment values.
+- Continue a valid W3C parent context explicitly on the child `pi.session` span. If trusted lineage has no usable continuation, start a new trace and add a validated parent span link when metadata exists, otherwise emit the documented propagation-failure log/counter fallback.
 - When `propagateTraceContext` is true, propagate W3C `traceparent`/`tracestate` to child processes launched by ObservMe-aware subagent wrappers.
 - When `workflow.enabled` is true, propagate `OBSERVME_WORKFLOW_ID` to child processes and report depth/fan-out/orphan metrics.
 - `writeCorrelationEntry` may append a minimal `custom` session entry for recovery, but it must remain disabled by default and must never use `custom_message`.
@@ -210,12 +213,13 @@ Copy `.env.example` to `.env` for project-local extension variables, or export t
 
 Automatic project starter file:
 
-- On `session_start`, the extension creates `<cwd>/.pi/observme.yaml` when the project is trusted and the file is missing.
+- On `session_start`, the extension creates `<cwd>/<CONFIG_DIR_NAME>/observme.yaml` (`<cwd>/.pi/observme.yaml` in the standard distribution) when the project is trusted and the file is missing.
+- The target is resolved as an absolute contained project path before mutation. The complete existence-check/create/write window uses Pi's per-file mutation queue, so concurrent starts create at most one starter.
 - Existing project config is never overwritten.
-- Edit `<cwd>/.pi/observme.yaml` for custom setup: `otlp.endpoint` / signal-specific endpoints for the Collector, `resource.attributes` for service/project/tenant/environment labels, `capture` and `privacy` for content capture and redaction, and `query.grafana` / `query.links.traceUrlTemplate` for `/obs` query commands.
-- The generated starter mirrors the local debug profile, including content-capture settings; review `capture` and `privacy` before production use.
+- Edit the resolved project `observme.yaml` for custom setup: `otlp.endpoint` / signal-specific endpoints for the Collector, `resource.attributes` for service/project/tenant/environment labels, `capture` and `privacy` for content capture and redaction, and `query.grafana` / `query.links.traceUrlTemplate` for `/obs` query commands.
+- The generated starter mirrors the privacy-preserving local profile; raw content capture is disabled, redaction is enabled, and unsafe capture is disabled.
 - Keep credentials out of YAML. Reference environment variables in YAML and set secrets through the shell or a trusted project `.env`.
-- Use `~/.pi/agent/observme.yaml` only for global defaults that should apply across projects; project `.pi/observme.yaml` overrides it after trust.
+- Use `~/.pi/agent/observme.yaml` only for standard-distribution global defaults that should apply across projects; project `<CONFIG_DIR_NAME>/observme.yaml` overrides it after trust.
 
 ## 5. Safe Production Defaults
 
