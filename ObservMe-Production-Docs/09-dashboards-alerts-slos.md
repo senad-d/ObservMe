@@ -224,10 +224,11 @@ Purpose: identify busy, slow, failing, or oversized tools and connect aggregate 
 Panels:
 
 - Tool calls by name, tool failure rate, and tool p95 latency trend panels.
-- Bash exit codes over the selected range.
+- Interactive user-bash (`!`/`!!`) exit codes over the selected range; assistant Bash tool calls remain in the tool-call panels.
 - Tool result size distribution with character/count semantics when the source metric uses `*_chars`.
 - Tool failures by severity with failure count and failure-rate sorting.
 - Tool latency percentiles with volume so sparse p95/p99 series are not overinterpreted.
+- Captured failed-tool output from `tool.error.captured` logs only when `capture.toolResults` is explicitly enabled; the panel must identify content as opt-in and policy-processed, preserve multiline output, and remain empty when capture is disabled or redaction fails closed.
 
 PromQL examples:
 
@@ -243,7 +244,7 @@ sum(rate(observme_tool_failures_total[$__rate_interval])) by (tool_name) / clamp
 histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (tool_name, le))
 ```
 
-Loki failure rows use `event_name="tool.call.failed"` and should expose `tool_name`, bounded error/status fields, and a Tempo link when trace metadata is present.
+Operational Loki failure rows use `event_name="tool.call.failed"` and should expose `tool_name`, bounded error/status fields, and a Tempo link when trace metadata is present. Captured output uses the separate `event_name="tool.error.captured", event_category="tool_content"` stream so aggregate failure logs remain content-free and broad session-log views can exclude captured bodies.
 
 ## 5. Agent and Subagent Dashboard
 

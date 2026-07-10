@@ -77,6 +77,36 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
+      "title": "Models",
+      "tooltip": "Open provider/model traffic, reliability, and cost context.",
+      "type": "link",
+      "url": "/d/observme-models/observme-models?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Tools",
+      "tooltip": "Open tool traffic, failures, sizes, and latency details.",
+      "type": "link",
+      "url": "/d/observme-tools/observme-tools?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Agents",
+      "tooltip": "Open aggregate agent and subagent orchestration details.",
+      "type": "link",
+      "url": "/d/observme-agents/observme-agents?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "Trace Journey",
       "tooltip": "Open trace/log drill-downs for latency spikes.",
       "type": "link",
@@ -96,11 +126,24 @@
   "liveNow": false,
   "panels": [
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "Latency summary",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 duration for completed Pi turns. Use the Trace Journey link to inspect representative slow workflows.",
+      "description": "Rolling p95 duration for completed Pi turns. Compare Stage operation volume before acting on sparse samples. No series means no turn-duration bucket observations in the query window; latency is intentionally not synthesized as zero, so verify workload and Export Health before treating missing telemetry as healthy.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -124,7 +167,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 0
+        "y": 1
       },
       "id": 1,
       "links": [
@@ -167,7 +210,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 duration for LLM requests. Pair with provider/model volume tables below before acting on sparse series.",
+      "description": "Rolling p95 duration for LLM requests. Compare Stage operation volume and the bounded provider/model table before acting on sparse samples. No series means no LLM-duration bucket observations in the query window; latency is intentionally not synthesized as zero, so verify workload and Export Health before treating missing telemetry as healthy.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -191,7 +234,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 0
+        "y": 1
       },
       "id": 2,
       "links": [
@@ -239,7 +282,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 duration for tool calls. Pair with tool call volume and failure tables before acting on sparse series.",
+      "description": "Rolling p95 duration for tool calls. Compare Stage operation volume and the bounded tool table before acting on sparse samples. No series means no tool-duration bucket observations in the query window; latency is intentionally not synthesized as zero, so verify workload and Export Health before treating missing telemetry as healthy.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -263,7 +306,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 0
+        "y": 1
       },
       "id": 3,
       "links": [
@@ -307,11 +350,24 @@
       "type": "timeseries"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 101,
+      "panels": [],
+      "title": "Stage comparison",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Shared p95 view across user turns, LLMs, tools, bash, agent runs, spawns, waits, and joins for critical-path attribution.",
+      "description": "Rolling p95 comparison across user turns, LLMs, tools, bash, agent runs, spawns, waits, and joins for critical-path attribution. Sparse stages can jump or disappear; compare selected-range operation volume. Missing duration series are left absent rather than shown as a healthy zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -335,7 +391,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 10
       },
       "id": 4,
       "links": [
@@ -455,7 +511,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Instant p50/p95/p99 latency table for turns, LLMs, tools, bash, agent runs, subagent spawn, parent wait, and parent join stages.",
+      "description": "Selected-range p50/p95/p99 latency estimates for turns, LLMs, tools, bash, agent runs, subagent spawn, parent wait, and parent join. Each instant query uses histogram bucket increases over $__range and retains le. Compare Stage operation volume: low counts make percentile ranks sparse, while no value means no matching duration observations or missing instrumentation and is not converted to zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -479,7 +535,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 16
+        "y": 18
       },
       "id": 5,
       "links": [
@@ -508,7 +564,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(observme_turn_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(increase(observme_turn_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "turn p50",
           "format": "table",
           "instant": true,
@@ -521,7 +577,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_turn_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(increase(observme_turn_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "turn p95",
           "format": "table",
           "instant": true,
@@ -534,7 +590,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(observme_turn_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(increase(observme_turn_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "turn p99",
           "format": "table",
           "instant": true,
@@ -547,7 +603,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(observme_llm_request_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(increase(observme_llm_request_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "llm p50",
           "format": "table",
           "instant": true,
@@ -560,7 +616,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(increase(observme_llm_request_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "llm p95",
           "format": "table",
           "instant": true,
@@ -573,7 +629,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(observme_llm_request_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(increase(observme_llm_request_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "llm p99",
           "format": "table",
           "instant": true,
@@ -586,7 +642,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(increase(observme_tool_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "tool p50",
           "format": "table",
           "instant": true,
@@ -599,7 +655,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(increase(observme_tool_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "tool p95",
           "format": "table",
           "instant": true,
@@ -612,7 +668,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(increase(observme_tool_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "tool p99",
           "format": "table",
           "instant": true,
@@ -625,7 +681,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(observme_bash_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(increase(observme_bash_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "bash p50",
           "format": "table",
           "instant": true,
@@ -638,7 +694,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_bash_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(increase(observme_bash_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "bash p95",
           "format": "table",
           "instant": true,
@@ -651,7 +707,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(observme_bash_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(increase(observme_bash_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "bash p99",
           "format": "table",
           "instant": true,
@@ -664,7 +720,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(observme_agent_run_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(increase(observme_agent_run_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "agent run p50",
           "format": "table",
           "instant": true,
@@ -677,7 +733,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_run_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(increase(observme_agent_run_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "agent run p95",
           "format": "table",
           "instant": true,
@@ -690,7 +746,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(observme_agent_run_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(increase(observme_agent_run_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "agent run p99",
           "format": "table",
           "instant": true,
@@ -703,7 +759,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(observme_subagent_spawn_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(increase(observme_subagent_spawn_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "spawn p50",
           "format": "table",
           "instant": true,
@@ -716,7 +772,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_subagent_spawn_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(increase(observme_subagent_spawn_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "spawn p95",
           "format": "table",
           "instant": true,
@@ -729,7 +785,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(observme_subagent_spawn_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(increase(observme_subagent_spawn_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "spawn p99",
           "format": "table",
           "instant": true,
@@ -742,7 +798,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(observme_agent_wait_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(increase(observme_agent_wait_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "wait p50",
           "format": "table",
           "instant": true,
@@ -755,7 +811,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_wait_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(increase(observme_agent_wait_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "wait p95",
           "format": "table",
           "instant": true,
@@ -768,7 +824,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(observme_agent_wait_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(increase(observme_agent_wait_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "wait p99",
           "format": "table",
           "instant": true,
@@ -781,7 +837,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(observme_agent_join_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(increase(observme_agent_join_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "join p50",
           "format": "table",
           "instant": true,
@@ -794,7 +850,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_join_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(increase(observme_agent_join_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "join p95",
           "format": "table",
           "instant": true,
@@ -807,7 +863,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(observme_agent_join_duration_ms_bucket[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(increase(observme_agent_join_duration_ms_bucket[$__range])) by (le))",
           "legendFormat": "join p99",
           "format": "table",
           "instant": true,
@@ -823,7 +879,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Selected-range volume companion for sparse percentile interpretation across turns, LLMs, tools, bash, agent runs, spawns, waits, and joins.",
+      "description": "Selected-range instant operation counts for interpreting sparse percentile estimates. Zero means no matching counter increments were observed; it does not prove duration instrumentation is healthy. Wait/join have no dedicated completion counters, so agent-run volume is contextual rather than an exact wait/join sample count.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -847,7 +903,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 26
+        "y": 28
       },
       "id": 6,
       "options": {
@@ -948,7 +1004,7 @@
           },
           "editorMode": "code",
           "expr": "sum(increase(observme_agent_runs_total[$__range])) by (agent_role)",
-          "legendFormat": "wait/join parent runs {{agent_role}}",
+          "legendFormat": "agent runs by role (wait/join context) {{agent_role}}",
           "format": "table",
           "instant": true,
           "range": false,
@@ -959,11 +1015,24 @@
       "type": "table"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "id": 102,
+      "panels": [],
+      "title": "Top offenders",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Top provider/model p95 LLM latency with selected-range request counts to avoid sparse-series misreads.",
+      "description": "Top 10 provider/model selected-range p95 LLM latency estimates with request counts. Histogram bucket increases retain provider, model, and le. Low request counts make percentile ranks sparse; an absent row means no matching observations and is not a zero-latency result.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -981,13 +1050,26 @@
           },
           "unit": "ms"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 34
+        "y": 37
       },
       "id": 7,
       "links": [
@@ -1021,7 +1103,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "topk(10, histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[$__rate_interval])) by (provider, model, le)))",
+          "expr": "topk(10, histogram_quantile(0.95, sum(increase(observme_llm_request_duration_ms_bucket[$__range])) by (provider, model, le)))",
           "legendFormat": "p95 {{provider}} / {{model}}",
           "format": "table",
           "instant": true,
@@ -1050,7 +1132,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Top tool p95 latency with selected-range call counts.",
+      "description": "Top 10 tool selected-range p95 latency estimates with call counts. Histogram bucket increases retain tool_name and le. Low call counts make percentile ranks sparse; an absent row means no matching observations and is not a zero-latency result.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1068,13 +1150,26 @@
           },
           "unit": "ms"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 34
+        "y": 37
       },
       "id": 8,
       "links": [
@@ -1108,7 +1203,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "topk(10, histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (tool_name, le)))",
+          "expr": "topk(10, histogram_quantile(0.95, sum(increase(observme_tool_duration_ms_bucket[$__range])) by (tool_name, le)))",
           "legendFormat": "p95 {{tool_name}}",
           "format": "table",
           "instant": true,
@@ -1137,7 +1232,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Top agent-role p95 run latency with selected-range run counts.",
+      "description": "Top 10 agent-role selected-range p95 run-latency estimates with run counts. Histogram bucket increases retain agent_role and le. Low run counts make percentile ranks sparse; an absent row means no matching observations and is not a zero-latency result.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1155,13 +1250,26 @@
           },
           "unit": "ms"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 34
+        "y": 37
       },
       "id": 9,
       "links": [
@@ -1195,7 +1303,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "topk(10, histogram_quantile(0.95, sum(rate(observme_agent_run_duration_ms_bucket[$__rate_interval])) by (agent_role, le)))",
+          "expr": "topk(10, histogram_quantile(0.95, sum(increase(observme_agent_run_duration_ms_bucket[$__range])) by (agent_role, le)))",
           "legendFormat": "p95 {{agent_role}}",
           "format": "table",
           "instant": true,
@@ -1220,11 +1328,24 @@
       "type": "table"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "id": 103,
+      "panels": [],
+      "title": "Detailed trends",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "LLM request p95 latency grouped only by low-cardinality provider and model labels. Use the top table above for current volume.",
+      "description": "Top 10 rolling LLM request p95 latency trends grouped only by bounded provider and model labels. Compare the selected-range offender table for request volume. Sparse or absent buckets can make a series jump or disappear; missing duration telemetry is not converted to zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1248,7 +1369,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 42
+        "y": 46
       },
       "id": 10,
       "links": [
@@ -1277,7 +1398,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[$__rate_interval])) by (provider, model, le))",
+          "expr": "topk(10, histogram_quantile(0.95, sum(rate(observme_llm_request_duration_ms_bucket[$__rate_interval])) by (provider, model, le)))",
           "legendFormat": "{{provider}} / {{model}}",
           "range": true,
           "refId": "A"
@@ -1291,7 +1412,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Tool-call p95 latency grouped by documented low-cardinality tool_name label. Use the top table above for current call volume.",
+      "description": "Top 10 rolling tool-call p95 latency trends grouped by the documented bounded tool_name label. Compare the selected-range offender table for call volume. Sparse or absent buckets can make a series jump or disappear; missing duration telemetry is not converted to zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1315,7 +1436,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 42
+        "y": 46
       },
       "id": 11,
       "links": [
@@ -1344,7 +1465,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (tool_name, le))",
+          "expr": "topk(10, histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (tool_name, le)))",
           "legendFormat": "{{tool_name}}",
           "range": true,
           "refId": "A"
@@ -1368,6 +1489,6 @@
   "timezone": "browser",
   "title": "ObservMe Latency",
   "uid": "observme-latency",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

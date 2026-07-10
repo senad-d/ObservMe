@@ -211,10 +211,17 @@ export interface SpanRegistry {
   readonly activeAgentJoins: BoundedMap<string, AgentWaitJoinState>;
 }
 
+export interface CapturedContent {
+  readonly value: string;
+  readonly truncated: boolean;
+  readonly originalLength?: number;
+}
+
 export interface ToolCallState {
   readonly span: Span;
   labels: Record<string, string>;
   completionLogAttributes: AttributeMap;
+  capturedResult?: CapturedContent;
 }
 
 export interface PendingBashOperationState {

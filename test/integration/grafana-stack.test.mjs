@@ -594,7 +594,9 @@ async function emitToolCall(pi, context, toolCallId, toolName, success) {
       toolName,
       success,
       errorClass: success ? undefined : "IntegrationError",
-      result: success ? { content: "grafana-stack result" } : { error: "integration failure" },
+      result: success
+        ? { content: "grafana-stack result" }
+        : { error: "grafana-stack-tool-error-marker api_key=grafana-stack-secret" },
     },
     context,
   );
@@ -729,6 +731,7 @@ async function createGrafanaStackCommandProject(stack) {
   const env = {
     OBSERVME_GRAFANA_USERNAME: stack.grafanaUsername,
     OBSERVME_GRAFANA_PASSWORD: stack.grafanaPassword,
+    OBSERVME_HASH_SALT: randomUUID(),
   };
 
   await mkdir(dirname(configPath), { recursive: true, mode: 0o700 });
@@ -784,6 +787,7 @@ observme:
     prompts: true
     responses: true
     thinking: true
+    toolResults: true
   privacy:
     redactionEnabled: true
     allowUnsafeCapture: true
@@ -979,6 +983,7 @@ test("ObservMe telemetry is queryable through the Grafana stack and /obs command
   await waitForLokiContentLog(stack, range, "llm.prompt.captured", "grafana-stack-prompt-marker");
   await waitForLokiContentLog(stack, range, "llm.response.captured", "grafana-stack-response-marker");
   await waitForLokiContentLog(stack, range, "llm.thinking.captured", "grafana-stack-thinking-marker");
+  await waitForLokiContentLog(stack, range, "tool.error.captured", "grafana-stack-tool-error-marker");
   await waitForPrometheusTokenTotals(stack);
   await waitForPrometheusCommandQueries(stack);
   await waitForDashboardImports(stack);

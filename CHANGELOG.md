@@ -2,9 +2,14 @@
 
 ## Unreleased
 
+- Fixed tool-result size histogram recording at finalized tool completion and clarified that exact Bash exit-code panels cover interactive `!`/`!!` commands rather than assistant Bash tool calls.
 - Reconciled source-review remediation documentation and completed the full release validation matrix, including Docker-backed Collector integration.
 - Deduplicated OTLP trace, metric, and log base-endpoint path handling behind one shared slash-normalization helper.
 - Remediated the Models dashboard with zero-safe provider/model reliability, bounded traffic and latency context, selected-range stop reasons, corrected cost efficiency, and time-preserving drill-down links.
+- Remediated the Tools dashboard with zero-safe per-tool reliability, bounded latency and size trends, selected-range bash counts, opt-in redacted failed-tool output, alert-aligned thresholds, and time-preserving drill-down links.
+- Remediated the Latency dashboard with selected-range p50/p95/p99 estimates, stage volume context, bounded offender views, sparse/no-data guidance, and time-preserving domain and trace links.
+- Remediated the Agents and Subagents dashboard with alert-aligned health ratios, emitted-label-safe PromQL, bounded selected-range offender tables, hierarchy rows, and deterministic Loki/Tempo drill-down context.
+- Fixed live Grafana-stack validation by explicitly using its deterministic trusted-lineage fixture mode and supplying an ephemeral tenant hash salt for redacted LLM content.
 - Split Pi event handling into focused lifecycle, agent/turn, LLM, tool/bash, and session-event modules behind the compatible `registerHandlers()` facade.
 - Added safe tool completion and failure log correlation across session, workflow, agent, turn, tool, trace, and span identities without copying operational content.
 - Correlated user-bash pre-execution and completion telemetry with bounded single-flight state so duration reflects real execution time and ambiguous or incomplete operations fail closed.

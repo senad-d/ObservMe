@@ -108,7 +108,7 @@ IMPORTANT: Execute every task in order. Change only the dashboard named by the c
 
 ### 1. Remediate the Models dashboard
 
-- [ ] Audit and update `observme-models.json` for reliable provider/model comparison and drill-down behavior.
+- [x] Audit and update `observme-models.json` for reliable provider/model comparison and drill-down behavior.
 
 #### Why
 
@@ -141,7 +141,7 @@ Provider/model ratios can disappear when failure series are absent, sparse model
 
 ### 2. Remediate the Tools dashboard
 
-- [ ] Audit and update `observme-tools.json` for failure, latency, bash, size, and top-offender workflows.
+- [x] Audit and update `observme-tools.json` for failure, latency, bash, size, and top-offender workflows.
 
 #### Why
 
@@ -173,7 +173,7 @@ Tool dashboards need denominator-safe failure ratios, bounded offender views, co
 
 ### 3. Remediate the Latency dashboard
 
-- [ ] Audit and update `observme-latency.json` for stage comparison, volume context, and representative drill-downs.
+- [x] Audit and update `observme-latency.json` for stage comparison, volume context, and representative drill-downs.
 
 #### Why
 
@@ -204,7 +204,7 @@ Latency quantiles are easy to misread without operation volume, and histogram qu
 
 ### 4. Remediate the Agents and Subagents dashboard
 
-- [ ] Audit and update `observme-agents.json` for orchestration health, ratios, top offenders, and lineage drill-downs.
+- [x] Audit and update `observme-agents.json` for orchestration health, ratios, top offenders, and lineage drill-downs.
 
 #### Why
 

@@ -110,6 +110,7 @@ const documentedLogEventNames = [
   "tool.call.completed",
   "tool.call.failed",
   "tool.call.started",
+  "tool.error.captured",
   "trace_context.propagation_failed",
   "turn.completed",
   "turn.started",

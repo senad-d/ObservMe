@@ -1471,8 +1471,12 @@ test("tool handlers create pi.tool.call spans, close success/error status, and k
 
   const successLog = telemetry.logger.records.find(record => record.body === LOG_EVENT_NAMES.TOOL_CALL_COMPLETED);
   const failureLog = telemetry.logger.records.find(record => record.body === LOG_EVENT_NAMES.TOOL_CALL_FAILED);
+  const capturedErrorLog = telemetry.logger.records.find(
+    record => record.attributes?.[LOG_ATTRIBUTES.EVENT_NAME] === LOG_EVENT_NAMES.TOOL_ERROR_CAPTURED,
+  );
   assert.ok(successLog);
   assert.ok(failureLog);
+  assert.equal(capturedErrorLog, undefined);
   assert.equal(successLog.attributes[LOG_ATTRIBUTES.EVENT_NAME], LOG_EVENT_NAMES.TOOL_CALL_COMPLETED);
   assert.equal(successLog.attributes[LOG_ATTRIBUTES.EVENT_CATEGORY], "lifecycle");
   assert.equal(successLog.attributes[LOG_ATTRIBUTES.PI_SESSION_ID], "session-tools");
@@ -1519,8 +1523,12 @@ test("tool handlers create pi.tool.call spans, close success/error status, and k
 
   assertMetricValue(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TOOL_CALLS_TOTAL, 1);
   assertMetricValue(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TOOL_FAILURES_TOTAL, 1);
+  assertMetricRecordCount(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.TOOL_RESULT_SIZE_CHARS, 2);
+  assertMetricValue(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.TOOL_RESULT_SIZE_CHARS, "file contents".length);
+  assertMetricValue(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.TOOL_RESULT_SIZE_CHARS, "raw timeout detail".length);
   assertToolMetricLabelsAreLowCardinality(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TOOL_CALLS_TOTAL);
   assertToolMetricLabelsAreLowCardinality(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TOOL_FAILURES_TOTAL);
+  assertToolMetricLabelsAreLowCardinality(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.TOOL_RESULT_SIZE_CHARS);
 });
 
 test("interleaved tool lifecycle events with explicit ids only update their own spans", async () => {
@@ -1676,14 +1684,41 @@ test("tool arguments and results are absent by default and redacted when capture
   await pi.handlers.get("turn_start")({ turnIndex: 1 }, {});
   await pi.handlers.get("tool_execution_start")({ toolCallId: "tool-capture", toolName: "write", arguments: "password=secret123" }, {});
   await pi.handlers.get("tool_execution_end")({ toolCallId: "tool-capture", success: true, result: "api_key=result-secret" }, {});
+  await pi.handlers.get("tool_execution_start")({ toolCallId: "tool-capture-error", toolName: "read", arguments: { path: ".env" } }, {});
+  await pi.handlers.get("tool_execution_end")(
+    {
+      toolCallId: "tool-capture-error",
+      toolName: "read",
+      success: false,
+      errorClass: "GuardMeDenied",
+      result: "Protected by GuardMe: denyPaths **/.env -> Environment files may contain credentials. api_key=error-secret",
+    },
+    {},
+  );
 
-  const toolSpan = telemetry.tracer.spans.find(span => span.name === SPAN_NAMES.PI_TOOL_CALL);
+  const toolSpans = telemetry.tracer.spans.filter(span => span.name === SPAN_NAMES.PI_TOOL_CALL);
+  const toolSpan = toolSpans.find(span => span.attributes["pi.tool.call.id"] === "tool-capture");
+  const failedToolSpan = toolSpans.find(span => span.attributes["pi.tool.call.id"] === "tool-capture-error");
   assert.match(toolSpan.attributes["pi.tool.arguments.redacted"], /\[REDACTED:/u);
   assert.match(toolSpan.attributes["pi.tool.result.redacted"], /\[REDACTED:/u);
   assert.equal(toolSpan.attributes["gen_ai.tool.call.arguments"], toolSpan.attributes["pi.tool.arguments.redacted"]);
   assert.equal(toolSpan.attributes["gen_ai.tool.call.result"], toolSpan.attributes["pi.tool.result.redacted"]);
   assert.doesNotMatch(toolSpan.attributes["pi.tool.arguments.redacted"], /secret123/u);
   assert.doesNotMatch(toolSpan.attributes["pi.tool.result.redacted"], /result-secret/u);
+
+  const capturedErrorLogs = telemetry.logger.records.filter(
+    record => record.attributes?.[LOG_ATTRIBUTES.EVENT_NAME] === LOG_EVENT_NAMES.TOOL_ERROR_CAPTURED,
+  );
+  assert.equal(capturedErrorLogs.length, 1);
+  assert.equal(capturedErrorLogs[0].body, failedToolSpan.attributes["pi.tool.result.redacted"]);
+  assert.match(capturedErrorLogs[0].body, /Protected by GuardMe/u);
+  assert.doesNotMatch(capturedErrorLogs[0].body, /error-secret/u);
+  assert.equal(capturedErrorLogs[0].severityText, "ERROR");
+  assert.equal(capturedErrorLogs[0].attributes[LOG_ATTRIBUTES.EVENT_CATEGORY], "tool_content");
+  assert.equal(capturedErrorLogs[0].attributes[TOOL_ATTRIBUTES.PI_TOOL_NAME], "read");
+  assert.equal(capturedErrorLogs[0].attributes[LOG_ATTRIBUTES.ERROR_TYPE], "GuardMeDenied");
+  assert.equal(capturedErrorLogs[0].attributes[LOG_ATTRIBUTES.TRACE_ID], failedToolSpan.spanContext().traceId);
+  assert.equal(capturedErrorLogs[0].attributes[LOG_ATTRIBUTES.SPAN_ID], failedToolSpan.spanContext().spanId);
 });
 
 test("bash handlers create pi.bash.execution spans with exit/cancel/truncation attributes and counters", async () => {

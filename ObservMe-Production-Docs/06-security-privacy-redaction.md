@@ -20,6 +20,8 @@ capture:
   filePaths: false
 ```
 
+Failed-tool output is content, not default operational metadata. It may appear in the Tools dashboard only after `capture.toolResults` is explicitly enabled. The value must pass the shared capture policy before being emitted as the body of a dedicated `tool.error.captured` log; capture-disabled and fail-closed redaction paths emit no body. Broad session-log queries must exclude `event.category="tool_content"`.
+
 Default allowed metadata:
 
 ```text

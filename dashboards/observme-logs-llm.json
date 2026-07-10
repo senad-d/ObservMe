@@ -342,7 +342,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Non-content ObservMe logs for the selected session/workflow/agent/run filters. This panel excludes event_category=llm_content so redacted prompt, response, and thinking bodies stay in the canonical LLM Conversations dashboard; do not query by raw content.",
+      "description": "Non-content ObservMe logs for the selected session/workflow/agent/run filters. This panel excludes event_category values llm_content and tool_content so captured bodies stay in their canonical LLM Conversations and Tools panels; do not query by raw content.",
       "gridPos": {
         "h": 9,
         "w": 12,
@@ -367,7 +367,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_category!=\"llm_content\"}",
+          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_category!~\"llm_content|tool_content\"}",
           "queryType": "range",
           "refId": "A"
         }
@@ -584,6 +584,6 @@
   "timezone": "browser",
   "title": "ObservMe Logs and LLM I/O",
   "uid": "observme-logs-llm",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

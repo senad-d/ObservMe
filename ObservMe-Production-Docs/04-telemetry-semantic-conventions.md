@@ -508,6 +508,7 @@ observme_active_agents
 
 ### 12.5 Lifecycle recording points
 
+- Record `observme_tool_result_size_chars` once from the finalized `tool_execution_end` result, using the same bounded tool labels as tool-call metrics.
 - Increment `observme_agent_run_errors_total` only when an ended agent run is classified as failed.
 - Record `observme_workflow_duration_ms` once for a root workflow at shutdown from its stored start time, with bounded `status=ok|error`.
 - Record `observme_subagent_spawn_duration_ms` from spawn start through either launcher completion or launcher failure.
@@ -637,7 +638,7 @@ observme.config.rejection.issue_count
 
 Configuration rejection diagnostics use only the bounded effective source, normalized issue codes, and aggregate issue count. They never include rejected values, raw validation messages, paths, headers, environment values, or custom regular expressions.
 
-Operational `tool.call.completed` and `tool.call.failed` logs include every available common session/workflow/agent/run/turn correlation field plus `pi.tool.call.id`, `pi.tool.name`, `pi.tool.category`, matching `trace_id`/`span_id`, success, and bounded `error.type` for failures. These operational logs never copy raw tool arguments, results, prompts, commands, paths, or error messages; opt-in redacted content stays in dedicated capture logs.
+Operational `tool.call.completed` and `tool.call.failed` logs include every available common session/workflow/agent/run/turn correlation field plus `pi.tool.call.id`, `pi.tool.name`, `pi.tool.category`, matching `trace_id`/`span_id`, success, and bounded `error.type` for failures. These operational logs never copy raw tool arguments, results, prompts, commands, paths, or error messages. When `capture.toolResults` is explicitly enabled and the capture policy succeeds, failed-tool output is emitted separately as the `tool.error.captured` log body with `event.category="tool_content"`; redaction remains enabled by default and capture failures emit no content.
 
 Explicit replay logs may also include:
 
@@ -682,6 +683,7 @@ message.replayed
 tool.call.started
 tool.call.completed
 tool.call.failed
+tool.error.captured
 bash.completed
 model.changed
 thinking.changed

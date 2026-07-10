@@ -19,14 +19,14 @@
       "version": "1.0.0"
     },
     {
-      "id": "timeseries",
-      "name": "Time series",
+      "id": "row",
+      "name": "Row",
       "type": "panel",
       "version": ""
     },
     {
-      "id": "stat",
-      "name": "Stat",
+      "id": "timeseries",
+      "name": "Time series",
       "type": "panel",
       "version": ""
     },
@@ -41,6 +41,12 @@
       "name": "Table",
       "type": "panel",
       "version": ""
+    },
+    {
+      "id": "logs",
+      "name": "Logs",
+      "type": "panel",
+      "version": ""
     }
   ],
   "annotations": {
@@ -48,7 +54,7 @@
   },
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "id": null,
   "links": [
     {
@@ -57,7 +63,7 @@
       "keepTime": true,
       "targetBlank": false,
       "title": "Latency",
-      "tooltip": "Open latency tables with tool volume context.",
+      "tooltip": "Open cross-stage latency tables with tool volume context.",
       "type": "link",
       "url": "/d/observme-latency/observme-latency?${__url_time_range}"
     },
@@ -67,30 +73,64 @@
       "keepTime": true,
       "targetBlank": false,
       "title": "Errors",
-      "tooltip": "Open parsed tool failure logs.",
+      "tooltip": "Open aggregate failure pressure and parsed failure details.",
       "type": "link",
       "url": "/d/observme-errors/observme-errors?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Tool failure logs",
+      "tooltip": "Open the parsed tool.call.failed log table.",
+      "type": "link",
+      "url": "/d/observme-errors/observme-errors?${__url_time_range}&viewPanel=7"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Trace Journey",
+      "tooltip": "Open execution logs and Tempo traces for representative tool calls.",
+      "type": "link",
+      "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
     }
   ],
   "liveNow": false,
   "panels": [
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "Traffic and reliability",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Tool-call rate grouped by the low-cardinality tool_name label.",
+      "description": "Top 10 tool-call rates grouped by the bounded tool_name label. A single unlabeled zero means no call series is active; that can be an idle range or missing telemetry, so check Export Health when calls were expected.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
               }
             ]
@@ -101,23 +141,34 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
-        "y": 0
+        "y": 1
       },
       "id": 1,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -125,10 +176,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_tool_calls_total[$__rate_interval])) by (tool_name)",
+          "expr": "topk(10, sum by (tool_name) (rate(observme_tool_calls_total[$__rate_interval]))) or on() vector(0)",
+          "legendFormat": "{{tool_name}}",
           "range": true,
-          "refId": "A",
-          "legendFormat": "{{tool_name}}"
+          "refId": "A"
         }
       ],
       "title": "Tool calls by name",
@@ -139,19 +190,29 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Tool failures divided by tool calls for each tool_name.",
+      "description": "Top 10 tool failure ratios. Matching call series zero-fill missing failure numerators by tool_name, so active tools with no failures remain visible at zero. Yellow is a tunable 5% review level; red matches the default 10% over 10m ObservMeHighToolFailureRate alert. A lone unlabeled zero means no active call denominator, not proven health.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "mappings": [],
+          "max": 1,
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.05
+              },
+              {
+                "color": "red",
+                "value": 0.1
               }
             ]
           },
@@ -161,23 +222,39 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 0
+        "w": 12,
+        "x": 12,
+        "y": 1
       },
       "id": 2,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open parsed tool failure logs",
+          "url": "/d/observme-errors/observme-errors?${__url_time_range}&viewPanel=7"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -185,32 +262,46 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_tool_failures_total[$__rate_interval])) by (tool_name) / clamp_min(sum(rate(observme_tool_calls_total[$__rate_interval])) by (tool_name), 1e-9)",
+          "expr": "topk(10, clamp_max(((sum by (tool_name) (rate(observme_tool_failures_total[$__rate_interval])) or on (tool_name) (0 * sum by (tool_name) (rate(observme_tool_calls_total[$__rate_interval])))) / on (tool_name) clamp_min(sum by (tool_name) (rate(observme_tool_calls_total[$__rate_interval])), 1e-9)), 1)) or on() vector(0)",
+          "legendFormat": "{{tool_name}}",
           "range": true,
-          "refId": "A",
-          "legendFormat": "{{tool_name}}"
+          "refId": "A"
         }
       ],
       "title": "Tool failure rate",
       "type": "timeseries"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 101,
+      "panels": [],
+      "title": "Latency and size",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 tool-call duration grouped by tool_name.",
+      "description": "Top 10 p95 tool-call duration trends grouped by bounded tool_name. The histogram aggregation preserves le. Sparse calls can make p95 jump or disappear; compare selected-range volume in Top offenders before treating a tool as slow.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
               }
             ]
@@ -221,23 +312,39 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 0
+        "w": 12,
+        "x": 0,
+        "y": 10
       },
       "id": 3,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Latency",
+          "url": "/d/observme-latency/observme-latency?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -245,10 +352,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (tool_name, le))",
+          "expr": "topk(10, histogram_quantile(0.95, sum by (tool_name, le) (rate(observme_tool_duration_ms_bucket[$__rate_interval]))))",
+          "legendFormat": "{{tool_name}}",
           "range": true,
-          "refId": "A",
-          "legendFormat": "{{tool_name}}"
+          "refId": "A"
         }
       ],
       "title": "Tool p95 latency",
@@ -256,21 +363,22 @@
     },
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
-      "description": "Bash exit-code distribution from provisioned Loki labels on bash completion logs.",
+      "description": "Top 10 p95 tool-result sizes in characters, grouped by bounded tool_name. observme_tool_result_size_chars is a character count, never bytes. Sparse or unsupported result-size instrumentation can produce no data; compare tool-call volume before interpreting a percentile.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
               }
             ]
@@ -281,11 +389,108 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "id": 5,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Latency",
+          "url": "/d/observme-latency/observme-latency?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "topk(10, histogram_quantile(0.95, sum by (tool_name, le) (rate(observme_tool_result_size_chars_bucket[$__rate_interval]))))",
+          "legendFormat": "{{tool_name}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Tool result size distribution",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
         "x": 0,
-        "y": 8
+        "y": 18
+      },
+      "id": 102,
+      "panels": [],
+      "title": "Bash outcomes",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Selected-range interactive user-bash completion counts from Pi ! and !! commands, grouped by exact process exit code. Assistant bash tool calls appear in the tool panels instead. Each bar label is the exit code and its value is the number of completions. Exit 0 generally means success; non-zero meanings are command-specific.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 19
       },
       "id": 4,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
       "options": {
         "displayMode": "gradient",
         "maxVizHeight": 300,
@@ -304,6 +509,7 @@
         "sizing": "auto",
         "valueMode": "color"
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -311,112 +517,175 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (pi_bash_exit_code) (count_over_time({service_name=\"observme-pi-extension\", event_name=\"bash.completed\", pi_bash_exit_code!=\"\"}[$__interval]))",
-          "range": true,
-          "refId": "A",
-          "legendFormat": "exit {{pi_bash_exit_code}}"
+          "expr": "topk(10, sum by (pi_bash_exit_code) (count_over_time({service_name=\"observme-pi-extension\", event_name=\"bash.completed\", pi_bash_exit_code!=\"\"}[$__range])))",
+          "instant": true,
+          "legendFormat": "exit code {{pi_bash_exit_code}}",
+          "queryType": "instant",
+          "range": false,
+          "refId": "A"
         }
       ],
-      "title": "Bash exit codes",
+      "title": "Bash completions by exact exit code",
       "type": "bargauge"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
       },
-      "description": "p95 captured tool-result size in characters grouped by tool_name. The *_size_chars metric is a character count, not bytes.",
+      "id": 104,
+      "panels": [],
+      "title": "Tool error output (opt-in)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Captured output from failed tool calls, including GuardMe denials, when capture.toolResults is explicitly enabled. Redaction remains enabled by default, so safe text is preserved while detected secrets are replaced. This panel is empty when capture is disabled, redaction fails closed, or no captured tool failure occurred. Expand a row for tool, error, session, and trace labels.",
       "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
+        "defaults": {},
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 8
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 27
       },
-      "id": 5,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
+      "id": 8,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
         }
+      ],
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_tool_result_size_chars_bucket[$__rate_interval])) by (tool_name, le))",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"tool.error.captured\", event_category=\"tool_content\"} | json | line_format \"{{.body}}\"",
+          "legendFormat": "{{pi_tool_name}} / {{error_type}}",
+          "maxLines": 200,
+          "queryType": "range",
           "range": true,
-          "refId": "A",
-          "legendFormat": "{{tool_name}}"
+          "refId": "A"
         }
       ],
-      "title": "Tool result size distribution",
-      "type": "timeseries"
+      "title": "Captured tool error output (opt-in, redacted)",
+      "type": "logs"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "id": 103,
+      "panels": [],
+      "title": "Top offenders",
+      "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Top tool failure counts and failure ratios over the selected range, sorted by failed-call volume first.",
+      "description": "Top 10 selected-range tool failure counts, failure ratios, and call volumes. Active call series zero-fill absent failure series by tool_name. The 5% review level is tunable and 10% matches the default alert. Tool metrics do not emit error_class; open the parsed tool.call.failed table for bounded error context and Tempo links.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
           },
           "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "red",
+                "value": 1e-9
               }
             ]
           },
           "unit": "short"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "max",
+                "value": 1
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 0.05
+                    },
+                    {
+                      "color": "red",
+                      "value": 0.1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 12,
         "x": 0,
-        "y": 16
+        "y": 38
       },
       "id": 6,
       "links": [
         {
           "targetBlank": false,
           "title": "Open parsed tool failure logs",
-          "url": "/d/observme-errors/observme-errors?${__url_time_range}"
+          "url": "/d/observme-errors/observme-errors?${__url_time_range}&viewPanel=7"
         },
         {
           "targetBlank": false,
@@ -436,6 +705,7 @@
         },
         "showHeader": true
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -443,10 +713,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "topk(10, sum(increase(observme_tool_failures_total[$__range])) by (tool_name, error_class))",
-          "legendFormat": "failures {{tool_name}} / {{error_class}}",
+          "expr": "topk(10, (sum by (tool_name) (increase(observme_tool_failures_total[$__range])) or on (tool_name) (0 * sum by (tool_name) (increase(observme_tool_calls_total[$__range])))))",
           "format": "table",
           "instant": true,
+          "legendFormat": "failures {{tool_name}}",
           "range": false,
           "refId": "A"
         },
@@ -456,10 +726,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "topk(10, sum(increase(observme_tool_failures_total[$__range])) by (tool_name) / clamp_min(sum(increase(observme_tool_calls_total[$__range])) by (tool_name), 1))",
-          "legendFormat": "failure ratio {{tool_name}}",
+          "expr": "topk(10, clamp_max(((sum by (tool_name) (increase(observme_tool_failures_total[$__range])) or on (tool_name) (0 * sum by (tool_name) (increase(observme_tool_calls_total[$__range])))) / on (tool_name) clamp_min(sum by (tool_name) (increase(observme_tool_calls_total[$__range])), 1)), 1))",
           "format": "table",
           "instant": true,
+          "legendFormat": "failure ratio {{tool_name}}",
           "range": false,
           "refId": "B"
         },
@@ -469,10 +739,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "topk(10, sum(increase(observme_tool_calls_total[$__range])) by (tool_name))",
-          "legendFormat": "calls {{tool_name}}",
+          "expr": "topk(10, sum by (tool_name) (increase(observme_tool_calls_total[$__range])))",
           "format": "table",
           "instant": true,
+          "legendFormat": "calls {{tool_name}}",
           "range": false,
           "refId": "C"
         }
@@ -485,31 +755,45 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Tool p50/p95/p99 latency and selected-range call volume by tool_name.",
+      "description": "Top 10 selected-range p50/p95/p99 tool latency estimates with call volume. Each histogram query preserves le and tool_name and uses bucket increases over $__range. Low call volume makes percentile ranks sparse; treat the adjacent call totals as required context.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
               }
             ]
           },
           "unit": "ms"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "D"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 12,
         "x": 12,
-        "y": 16
+        "y": 38
       },
       "id": 7,
       "links": [
@@ -536,6 +820,7 @@
         },
         "showHeader": true
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -543,10 +828,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "topk(10, histogram_quantile(0.50, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (tool_name, le)))",
-          "legendFormat": "p50 {{tool_name}}",
+          "expr": "topk(10, histogram_quantile(0.50, sum by (tool_name, le) (increase(observme_tool_duration_ms_bucket[$__range]))))",
           "format": "table",
           "instant": true,
+          "legendFormat": "p50 {{tool_name}}",
           "range": false,
           "refId": "A"
         },
@@ -556,10 +841,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "topk(10, histogram_quantile(0.95, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (tool_name, le)))",
-          "legendFormat": "p95 {{tool_name}}",
+          "expr": "topk(10, histogram_quantile(0.95, sum by (tool_name, le) (increase(observme_tool_duration_ms_bucket[$__range]))))",
           "format": "table",
           "instant": true,
+          "legendFormat": "p95 {{tool_name}}",
           "range": false,
           "refId": "B"
         },
@@ -569,10 +854,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "topk(10, histogram_quantile(0.99, sum(rate(observme_tool_duration_ms_bucket[$__rate_interval])) by (tool_name, le)))",
-          "legendFormat": "p99 {{tool_name}}",
+          "expr": "topk(10, histogram_quantile(0.99, sum by (tool_name, le) (increase(observme_tool_duration_ms_bucket[$__range]))))",
           "format": "table",
           "instant": true,
+          "legendFormat": "p99 {{tool_name}}",
           "range": false,
           "refId": "C"
         },
@@ -582,10 +867,10 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "topk(10, sum(increase(observme_tool_calls_total[$__range])) by (tool_name))",
-          "legendFormat": "calls {{tool_name}}",
+          "expr": "topk(10, sum by (tool_name) (increase(observme_tool_calls_total[$__range])))",
           "format": "table",
           "instant": true,
+          "legendFormat": "calls {{tool_name}}",
           "range": false,
           "refId": "D"
         }
@@ -596,6 +881,7 @@
   ],
   "refresh": "30s",
   "schemaVersion": 39,
+  "style": "dark",
   "tags": [
     "observme",
     "tools"
@@ -611,6 +897,6 @@
   "timezone": "browser",
   "title": "ObservMe Tools",
   "uid": "observme-tools",
-  "version": 1,
+  "version": 4,
   "weekStart": ""
 }

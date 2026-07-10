@@ -32,6 +32,7 @@ import type {
   AttributeMap,
   AttributePrimitive,
   BranchPreparationState,
+  CapturedContent,
   ObservMeHandlerContext,
   ObservMeMetrics,
   ObservMeTelemetrySession,
@@ -45,12 +46,6 @@ const OBSERVME_SEMCONV_VERSION = "0.1.0";
 const REDACTION_FAILURE_REASON_MAX_CHARS = 240;
 
 type LlmContentKind = "prompt" | "response" | "thinking";
-
-interface CapturedLlmContent {
-  readonly value: string;
-  readonly truncated: boolean;
-  readonly originalLength?: number;
-}
 
 export type SelfObservabilitySession = Pick<
   ObservMeTelemetrySession,
@@ -607,13 +602,17 @@ export function recordOptionalToolArguments(session: ObservMeTelemetrySession, s
   );
 }
 
-export function recordOptionalToolResult(session: ObservMeTelemetrySession, span: Span, event: unknown): void {
-  if (!session.config.capture.toolResults) return;
+export function recordOptionalToolResult(
+  session: ObservMeTelemetrySession,
+  span: Span,
+  event: unknown,
+): CapturedContent | undefined {
+  if (!session.config.capture.toolResults) return undefined;
 
   const value = readToolResultText(event);
-  if (value === undefined) return;
+  if (value === undefined) return undefined;
 
-  recordRedactedToolContent(
+  return recordRedactedToolContent(
     session,
     span,
     TOOL_ATTRIBUTES.PI_TOOL_RESULT_REDACTED,
@@ -673,7 +672,7 @@ export function recordRedactedToolContent(
   aliasAttributeKey: string,
   value: string,
   kind: "toolArgument" | "toolResult",
-): void {
+): CapturedContent | undefined {
   const result = applyContentCapturePolicy({
     captureEnabled: true,
     value,
@@ -683,12 +682,18 @@ export function recordRedactedToolContent(
 
   if (!result.captured || result.value === undefined) {
     recordRedactionFailure(session, "tool_content_capture", result.redactionFailures, buildContentCaptureFailureAttributes(result));
-    return;
+    return undefined;
   }
 
   span.setAttribute(attributeKey, result.value);
   span.setAttribute(aliasAttributeKey, result.value);
   if (result.truncated) span.setAttributes(result.attributes);
+
+  return {
+    value: result.value,
+    truncated: result.truncated,
+    originalLength: result.originalLength,
+  };
 }
 
 export function recordRedactedSpanContent(
@@ -697,7 +702,7 @@ export function recordRedactedSpanContent(
   attributeKey: string,
   value: string,
   kind: LlmContentKind,
-): CapturedLlmContent | undefined {
+): CapturedContent | undefined {
   const result = applyContentCapturePolicy({
     captureEnabled: true,
     value,
@@ -736,7 +741,7 @@ export function emitCapturedContentLog(
   span: Span,
   eventName: string,
   kind: LlmContentKind,
-  content: CapturedLlmContent,
+  content: CapturedContent,
 ): void {
   session.logger.emit({
     severityText: "INFO",
@@ -750,7 +755,7 @@ export function buildCapturedContentLogAttributes(
   span: Span,
   eventName: string,
   kind: LlmContentKind,
-  content: CapturedLlmContent,
+  content: CapturedContent,
 ): AttributeMap {
   return withoutUndefinedAttributes({
     [LOG_ATTRIBUTES.EVENT_NAME]: eventName,
@@ -765,6 +770,24 @@ export function buildCapturedContentLogAttributes(
     [LOG_ATTRIBUTES.SPAN_ID]: readSpanId(span),
     [COMMON_SPAN_ATTRIBUTES.OBSERVME_TRUNCATED]: content.truncated ? true : undefined,
     [COMMON_SPAN_ATTRIBUTES.OBSERVME_ORIGINAL_LENGTH]: content.truncated ? content.originalLength : undefined,
+  });
+}
+
+export function emitCapturedToolErrorLog(
+  session: ObservMeTelemetrySession,
+  completionLogAttributes: AttributeMap,
+  content: CapturedContent,
+): void {
+  session.logger.emit({
+    severityText: "ERROR",
+    body: content.value,
+    attributes: withoutUndefinedAttributes({
+      ...completionLogAttributes,
+      [LOG_ATTRIBUTES.EVENT_NAME]: LOG_EVENT_NAMES.TOOL_ERROR_CAPTURED,
+      [LOG_ATTRIBUTES.EVENT_CATEGORY]: "tool_content",
+      [COMMON_SPAN_ATTRIBUTES.OBSERVME_TRUNCATED]: content.truncated ? true : undefined,
+      [COMMON_SPAN_ATTRIBUTES.OBSERVME_ORIGINAL_LENGTH]: content.truncated ? content.originalLength : undefined,
+    }),
   });
 }
 
@@ -1726,7 +1749,16 @@ export function readToolArgumentsText(event: unknown): string | undefined {
 }
 
 export function readToolResultText(event: unknown): string | undefined {
-  const value = readUnknown(event, "result") ?? readUnknown(event, "output") ?? readUnknown(event, "response") ?? readUnknown(event, "content");
+  const error = readUnknown(event, "error");
+  const value =
+    readUnknown(event, "result") ??
+    readUnknown(event, "output") ??
+    readUnknown(event, "response") ??
+    readUnknown(event, "content") ??
+    readUnknown(event, "errorMessage") ??
+    readUnknown(event, "error_message") ??
+    readString(error, "message") ??
+    error;
 
   return serializeToolPayload(value);
 }

@@ -107,6 +107,7 @@ export const LOG_EVENT_NAMES = {
   TOOL_CALL_STARTED: "tool.call.started",
   TOOL_CALL_COMPLETED: "tool.call.completed",
   TOOL_CALL_FAILED: "tool.call.failed",
+  TOOL_ERROR_CAPTURED: "tool.error.captured",
   BASH_COMPLETED: "bash.completed",
   MODEL_CHANGED: "model.changed",
   THINKING_CHANGED: "thinking.changed",

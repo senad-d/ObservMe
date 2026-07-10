@@ -49,8 +49,8 @@ processors:
         action: delete
       - key: pi.session.id
         action: delete
-  # Drops accidental content attributes from logs. Intentional LLM content capture
-  # is emitted as already-redacted log bodies and opt-in span attributes.
+  # Drops accidental content attributes from logs. Intentional LLM and failed-tool
+  # content capture is emitted as policy-processed log bodies and opt-in span attributes.
   attributes/drop_content_attributes:
     actions:
       - key: gen_ai.input.messages
@@ -70,7 +70,7 @@ processors:
   attributes/loki_query_hints:
     actions:
       - key: loki.attribute.labels
-        value: event.name,event.category,pi.session.id,pi.workflow.id,pi.agent.id,pi.agent.parent_id,pi.agent.run.id,gen_ai.provider.name,gen_ai.request.model,pi.llm.stop_reason,pi.llm.content.kind,trace_id,span_id,pi.bash.exit_code
+        value: event.name,event.category,pi.session.id,pi.workflow.id,pi.agent.id,pi.agent.parent_id,pi.agent.run.id,pi.tool.name,pi.tool.category,error.type,gen_ai.provider.name,gen_ai.request.model,pi.llm.stop_reason,pi.llm.content.kind,trace_id,span_id,pi.bash.exit_code
         action: insert
   resource/loki_query_hints:
     attributes:

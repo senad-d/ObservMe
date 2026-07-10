@@ -15,6 +15,7 @@ import {
   buildToolResultAttributes,
   closePendingUserBashOperation,
   deleteCurrentToolCall,
+  emitCapturedToolErrorLog,
   emitLifecycleLog,
   endActiveSpan,
   hasBashCompletionResult,
@@ -46,6 +47,7 @@ import type {
   ObservMeHandlerContext,
   ObservMeTelemetrySession,
   PendingBashOperationState,
+  ToolCallState,
 } from "../handler-types.ts";
 
 export function registerToolBashHandlers(registrar: HandlerRegistrar, state: HandlerSessionState): void {
@@ -145,7 +147,12 @@ function handleToolResult(state: HandlerSessionState, event: unknown, _ctx: Obse
   const attributes = buildToolResultAttributes(event, session.config);
   toolState.span.setAttributes(attributes);
   mergeToolStateLabels(toolState, attributes);
-  recordOptionalToolResult(session, toolState.span, event);
+  captureToolResult(session, toolState, event);
+}
+
+function captureToolResult(session: ObservMeTelemetrySession, toolState: ToolCallState, event: unknown): void {
+  const capturedResult = recordOptionalToolResult(session, toolState.span, event);
+  if (capturedResult) toolState.capturedResult = capturedResult;
 }
 
 function createToolExecutionEndHandler(state: HandlerSessionState): Handler {
@@ -174,7 +181,9 @@ function handleToolExecutionEnd(
 
   toolState.span.setAttributes({ ...resultAttributes, ...finalAttributes });
   mergeToolStateLabels(toolState, resultAttributes);
-  recordOptionalToolResult(session, toolState.span, event);
+  captureToolResult(session, toolState, event);
+  const resultSizeChars = resultAttributes[TOOL_ATTRIBUTES.PI_TOOL_RESULT_SIZE];
+  if (typeof resultSizeChars === "number") session.metrics.toolResultSizeChars.record(resultSizeChars, toolState.labels);
   const completionLogAttributes = buildToolCompletionLogAttributes(toolState, finalAttributes);
 
   if (failed) {
@@ -182,6 +191,7 @@ function handleToolExecutionEnd(
     toolState.span.setStatus({ code: SpanStatusCode.ERROR, message: errorClass });
     session.metrics.toolFailures.add(1, toolState.labels);
     emitLifecycleLog(session.logger, LOG_EVENT_NAMES.TOOL_CALL_FAILED, completionLogAttributes, "ERROR");
+    if (toolState.capturedResult) emitCapturedToolErrorLog(session, completionLogAttributes, toolState.capturedResult);
   } else {
     toolState.span.setStatus({ code: SpanStatusCode.OK });
     emitLifecycleLog(session.logger, LOG_EVENT_NAMES.TOOL_CALL_COMPLETED, completionLogAttributes);

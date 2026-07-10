@@ -31,6 +31,7 @@ const llmConversationsDashboardFile = "dashboards/observme-llm-conversations.jso
 const branchesCompactionsDashboardFile = "dashboards/observme-branches-compactions.json";
 const latencyDashboardFile = "dashboards/observme-latency.json";
 const toolsDashboardFile = "dashboards/observme-tools.json";
+const toolCapturedErrorPanelTitle = "Captured tool error output (opt-in, redacted)";
 const errorsDashboardFile = "dashboards/observme-errors.json";
 const exportHealthDashboardFile = "dashboards/observme-export-health.json";
 const sloHealthDashboardFile = "dashboards/observme-slo-health.json";
@@ -696,7 +697,10 @@ async function lokiDashboardTargetsUseProvisionedLabels() {
     const targets = lokiTargetsForDashboard(dashboard);
 
     for (const { panel, target } of targets) {
-      if (path !== llmConversationsDashboardFile || !llmConversationBodyLogPanelTitles.includes(panel.title)) {
+      const parsesIntentionalContentBody =
+        (path === llmConversationsDashboardFile && llmConversationBodyLogPanelTitles.includes(panel.title)) ||
+        (path === toolsDashboardFile && panel.title === toolCapturedErrorPanelTitle);
+      if (!parsesIntentionalContentBody) {
         assert.doesNotMatch(target.expr, lokiJsonParserPattern, `${path}: ${panel.title} must not parse non-JSON ObservMe log bodies`);
       }
       assert.doesNotMatch(target.expr, incorrectErrorCategoryPattern, `${path}: ${panel.title} must not treat event_category as error severity`);
@@ -979,7 +983,7 @@ async function logsLlmDashboardRoutesContentToCanonicalConversationDashboard() {
     assert.ok(sessionLogExpression.includes(fragment), `${logsLlmDashboardFile}: session logs must include ${fragment}`);
   }
 
-  assert.ok(sessionLogExpression.includes('event_category!="llm_content"'), `${logsLlmDashboardFile}: broad session logs must exclude content bodies`);
+  assert.ok(sessionLogExpression.includes('event_category!~"llm_content|tool_content"'), `${logsLlmDashboardFile}: broad session logs must exclude LLM and tool content bodies`);
   assertPanelLinksToDashboard(requestLogsPanel, "observme-llm-conversations", logsLlmDashboardFile);
   assertPanelLinksToDashboard(requestLogsPanel, "observme-trace-journey", logsLlmDashboardFile);
   assertPanelLinksToDashboard(sessionLogsPanel, "observme-llm-conversations", logsLlmDashboardFile);
@@ -1217,8 +1221,10 @@ async function toolsDashboardShowsFailureSeverityAndCharacterSizes() {
   const failurePanel = assertNamedPanel(toolsDashboardFile, dashboard, "Tool failures by severity");
   const latencyPanel = assertNamedPanel(toolsDashboardFile, dashboard, "Tool latency percentiles with volume");
   const sizePanel = assertNamedPanel(toolsDashboardFile, dashboard, "Tool result size distribution");
+  const capturedErrorPanel = assertNamedPanel(toolsDashboardFile, dashboard, toolCapturedErrorPanelTitle);
   const failureExpressions = expressionsForPanel(failurePanel).join("\n");
   const latencyExpressions = expressionsForPanel(latencyPanel).join("\n");
+  const capturedErrorExpression = expressionsForPanel(capturedErrorPanel).join("\n");
 
   assert.equal(failurePanel.type, "table", `${toolsDashboardFile}: Tool failures by severity must be a table`);
   assert.match(failureExpressions, /topk\(10,/u, `${toolsDashboardFile}: Tool failures by severity must rank failure counts`);
@@ -1242,6 +1248,13 @@ async function toolsDashboardShowsFailureSeverityAndCharacterSizes() {
 
   assert.equal(sizePanel.fieldConfig?.defaults?.unit, "short", `${toolsDashboardFile}: *_size_chars panels must not use byte units`);
   assert.match(sizePanel.description ?? "", /characters/u, `${toolsDashboardFile}: size panel must explain character units`);
+
+  assert.equal(capturedErrorPanel.type, "logs", `${toolsDashboardFile}: captured tool error output must preserve multiline log output`);
+  assert.match(capturedErrorExpression, /event_name="tool[.]error[.]captured"/u, `${toolsDashboardFile}: captured tool errors must use the dedicated event`);
+  assert.match(capturedErrorExpression, /event_category="tool_content"/u, `${toolsDashboardFile}: captured tool errors must use the isolated content category`);
+  assert.ok(capturedErrorExpression.includes('line_format "{{.body}}"'), `${toolsDashboardFile}: captured tool errors must render the policy-processed body`);
+  assert.match(capturedErrorPanel.description ?? "", /capture[.]toolResults/u, `${toolsDashboardFile}: captured tool error output must document the opt-in`);
+  assert.match(capturedErrorPanel.description ?? "", /Redaction/u, `${toolsDashboardFile}: captured tool error output must document redaction`);
 }
 
 async function errorsDashboardUsesParsedLogTablesAndTraceLinks() {

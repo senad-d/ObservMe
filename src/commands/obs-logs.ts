@@ -52,7 +52,7 @@ export interface RegisterObsLogsCommandOptions extends ObsLogsSnapshotOptions {
   readonly getLogs?: ObsLogsProvider;
 }
 
-export const OBS_LOGS_LOGQL_PREFIX = '{service_name="observme-pi-extension", event_category!="llm_content", pi_session_id=';
+export const OBS_LOGS_LOGQL_PREFIX = '{service_name="observme-pi-extension", event_category!~"llm_content|tool_content", pi_session_id=';
 
 const OBS_COMMAND_NAME = "obs";
 const OBS_LOGS_SUBCOMMAND = "logs";

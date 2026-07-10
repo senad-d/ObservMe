@@ -34,6 +34,7 @@ import {
   llmMetricLabels,
   metricLabels,
   readMessage,
+  readToolResultText,
   recordOptionalBashContent,
   recordOptionalLlmContent,
   recordOptionalPromptContent,
@@ -301,6 +302,11 @@ test("tool payload serialization avoids default object stringification fallbacks
   assert.equal(serializeToolPayload({ ok: true }), JSON.stringify({ ok: true }));
   assert.match(serializeToolPayload(circular) ?? "", /^\[Unserializable Object: TypeError\]$/u);
   assert.doesNotMatch(serializeToolPayload(circular) ?? "", /\[object Object\]/u);
+});
+
+test("tool result extraction captures explicit failure output fields", () => {
+  assert.equal(readToolResultText({ errorMessage: "Protected by GuardMe" }), "Protected by GuardMe");
+  assert.equal(readToolResultText({ error: { message: "permission denied" } }), "permission denied");
 });
 
 test("bash payload normalization handles nested messages, streams, status, and partial events", () => {

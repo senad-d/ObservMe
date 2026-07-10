@@ -310,7 +310,7 @@ capture:
   toolResults: true
 ```
 
-To show redacted LLM chat content in Grafana Tempo and Loki, set `OBSERVME_CAPTURE_PROMPTS=true`, `OBSERVME_CAPTURE_RESPONSES=true`, `OBSERVME_CAPTURE_THINKING=true`, keep `OBSERVME_REDACTION_ENABLED=true`, and set `OBSERVME_HASH_SALT` before the conversation occurs. Set `OBSERVME_ALLOW_UNSAFE_CAPTURE=true` only when redaction is disabled for intentionally raw local debugging. The dashboard shows only new LLM events emitted after these settings and the updated Collector are active; older data dropped by the Collector cannot be recovered.
+To show redacted LLM chat content in Grafana Tempo and Loki, set `OBSERVME_CAPTURE_PROMPTS=true`, `OBSERVME_CAPTURE_RESPONSES=true`, `OBSERVME_CAPTURE_THINKING=true`, keep `OBSERVME_REDACTION_ENABLED=true`, and set `OBSERVME_HASH_SALT` before the conversation occurs. To show failed-tool output in the Tools dashboard, set `OBSERVME_CAPTURE_TOOL_RESULTS=true` with the same redaction and hash-salt safeguards; successful tool results remain span-only while failed output is emitted to the dedicated `tool.error.captured` Loki stream. Set `OBSERVME_ALLOW_UNSAFE_CAPTURE=true` only when redaction is disabled for intentionally raw local debugging. Dashboards show only new events emitted after these settings and the updated Collector are active; older data dropped by the Collector cannot be recovered.
 
 ObservMe must display a warning when unsafe capture is active. Redacted capture must pass all configured redactors, and raw unsafe capture is permitted only when redaction is explicitly disabled with a separately validated exception.
 
