@@ -835,7 +835,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Global selected-range token totals by token type. Provider/model detail stays in Models and LLM lifecycle logs so this panel remains readable as model count grows. Missing series render as zero.",
+      "description": "Global selected-range totals for reliably populated token types. Aggregate total and cache-write variants are omitted instead of showing misleading empty bars; provider/model cache detail remains in the adjacent cache panel.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -911,18 +911,6 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_total_tokens_total[$__range])) or vector(0)",
-          "instant": true,
-          "legendFormat": "total",
-          "range": false,
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
           "expr": "sum(increase(observme_llm_reasoning_tokens_total[$__range])) or vector(0)",
           "instant": true,
           "legendFormat": "reasoning",
@@ -940,30 +928,6 @@
           "legendFormat": "cache read",
           "range": false,
           "refId": "E"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "sum(increase(observme_llm_cache_write_tokens_total[$__range])) or vector(0)",
-          "instant": true,
-          "legendFormat": "cache write",
-          "range": false,
-          "refId": "F"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "sum(increase(observme_llm_cache_write_1h_tokens_total[$__range])) or vector(0)",
-          "instant": true,
-          "legendFormat": "cache write 1h",
-          "range": false,
-          "refId": "G"
         }
       ],
       "title": "Token totals by type",
@@ -1248,6 +1212,6 @@
   "timezone": "browser",
   "title": "ObservMe Cost",
   "uid": "observme-cost",
-  "version": 3,
+  "version": 4,
   "weekStart": ""
 }

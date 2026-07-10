@@ -25,6 +25,12 @@
       "version": "1.0.0"
     },
     {
+      "id": "row",
+      "name": "Row",
+      "type": "panel",
+      "version": ""
+    },
+    {
       "id": "timeseries",
       "name": "Time series",
       "type": "panel",
@@ -79,13 +85,36 @@
       "targetBlank": false,
       "title": "Open matching LLM Conversations",
       "url": "/d/observme-llm-conversations/observme-llm-conversations?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}"
+    },
+    {
+      "targetBlank": false,
+      "title": "Agents",
+      "url": "/d/observme-agents/observme-agents?${__url_time_range}"
+    },
+    {
+      "targetBlank": false,
+      "title": "Agent Node Graphs",
+      "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}"
     }
   ],
   "liveNow": false,
   "panels": [
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "Summary",
+      "type": "row"
+    },
+    {
       "datasource": null,
-      "description": "A trace-first journey map for Pi sessions. Use the filters to narrow logs by session, agent, or agent run, then open matching Tempo traces to inspect the waterfall.",
+      "description": "A trace-first journey map for Pi sessions. Prometheus sections show bounded aggregate flow and latency; Loki and Tempo sections use the high-cardinality filters for one execution. Zero summary activity can be healthy idle, while missing telemetry should be checked in Export Health.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -94,7 +123,7 @@
         "h": 5,
         "w": 24,
         "x": 0,
-        "y": 0
+        "y": 1
       },
       "id": 1,
       "options": {
@@ -103,7 +132,7 @@
           "showLineNumbers": false,
           "showMiniMap": false
         },
-        "content": "# ObservMe Trace Journey\n\nFollow how one Pi request travels through the system: `session → agent run → turn → LLM → tool/bash → subagent spawn → wait/join → branch/compaction`. Prometheus panels show aggregate flow and latency, Loki panels show the ordered event trail, and Tempo search opens the full trace waterfall.",
+        "content": "# ObservMe Trace Journey\n\nFollow how one Pi request travels through the system: `session → agent run → turn → LLM → tool/bash → subagent spawn → wait/join → branch/compaction`. Prometheus panels show aggregate flow and latency only; session, workflow, agent, and run filters apply to Loki/Tempo drill-downs. Start with summary and flow, inspect lineage logs for trace IDs, then open the Tempo waterfall. Empty journey rows can mean no matching work in the selected range; verify ingestion in Export Health when an active execution is unexpectedly absent.",
         "mode": "markdown"
       },
       "pluginVersion": "11.1.0",
@@ -115,7 +144,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Currently active ObservMe agent runtimes, counted from the active runtime gauge instead of the started/shutdown counter estimate.",
+      "description": "Current ObservMe agent runtimes from the active-agent gauge. Zero can mean healthy idle or an absent gauge; check Export Health before treating an unexpected zero as healthy.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -139,7 +168,7 @@
         "h": 4,
         "w": 3,
         "x": 0,
-        "y": 5
+        "y": 6
       },
       "id": 2,
       "options": {
@@ -204,7 +233,7 @@
         "h": 4,
         "w": 3,
         "x": 3,
-        "y": 5
+        "y": 6
       },
       "id": 3,
       "options": {
@@ -273,7 +302,7 @@
         "h": 4,
         "w": 3,
         "x": 6,
-        "y": 5
+        "y": 6
       },
       "id": 16,
       "options": {
@@ -314,7 +343,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Completed workflows divided by completed plus failed workflows for the selected range; use beside the failed-workflow stat for terminal workflow health.",
+      "description": "Successful terminal workflows divided by completed plus failed workflows over the selected range. A zero can mean no terminal workflows or that every terminal workflow failed; interpret it beside both workflow count stats rather than as a standalone health signal.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -346,7 +375,7 @@
         "h": 4,
         "w": 3,
         "x": 9,
-        "y": 5
+        "y": 6
       },
       "id": 17,
       "options": {
@@ -373,7 +402,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "((sum(increase(observme_workflows_completed_total[$__range])) or vector(0)) / clamp_min(((sum(increase(observme_workflows_completed_total[$__range])) or vector(0)) + (sum(increase(observme_workflow_errors_total[$__range])) or vector(0)), 1))",
+          "expr": "(sum(increase(observme_workflows_completed_total[$__range])) or vector(0)) / clamp_min((sum(increase(observme_workflows_completed_total[$__range])) or vector(0)) + (sum(increase(observme_workflow_errors_total[$__range])) or vector(0)), 1)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -387,7 +416,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Subagent spawn operations observed during the selected dashboard range.",
+      "description": "Subagent spawn operations in the selected range. Zero means no matching spawns were observed and can be healthy idle.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -411,7 +440,7 @@
         "h": 4,
         "w": 3,
         "x": 12,
-        "y": 5
+        "y": 6
       },
       "id": 4,
       "options": {
@@ -438,7 +467,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_subagents_spawned_total[$__range]))",
+          "expr": "sum(increase(observme_subagents_spawned_total[$__range])) or vector(0)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -452,7 +481,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "LLM requests observed during the selected dashboard range.",
+      "description": "LLM requests in the selected range. Zero means no matching requests were observed and can be healthy idle.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -476,7 +505,7 @@
         "h": 4,
         "w": 3,
         "x": 15,
-        "y": 5
+        "y": 6
       },
       "id": 5,
       "options": {
@@ -503,7 +532,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_requests_total[$__range]))",
+          "expr": "sum(increase(observme_llm_requests_total[$__range])) or vector(0)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -517,7 +546,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Tool calls observed during the selected dashboard range.",
+      "description": "Tool calls in the selected range. Zero means no matching calls were observed and can be healthy idle.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -541,7 +570,7 @@
         "h": 4,
         "w": 3,
         "x": 18,
-        "y": 5
+        "y": 6
       },
       "id": 6,
       "options": {
@@ -568,7 +597,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_tool_calls_total[$__range]))",
+          "expr": "sum(increase(observme_tool_calls_total[$__range])) or vector(0)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -582,7 +611,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Trace-context propagation failures observed during the selected dashboard range.",
+      "description": "Trace-context propagation failures in the selected range. Zero means no matching failures were observed; investigate any non-zero value in the lineage logs and Tempo.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -610,7 +639,7 @@
         "h": 4,
         "w": 3,
         "x": 21,
-        "y": 5
+        "y": 6
       },
       "id": 7,
       "options": {
@@ -637,7 +666,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_trace_context_propagation_failures_total[$__range]))",
+          "expr": "sum(increase(observme_trace_context_propagation_failures_total[$__range])) or vector(0)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -647,11 +676,24 @@
       "type": "stat"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "id": 101,
+      "panels": [],
+      "title": "Flow",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Per-minute view of how work moves through major trace stages.",
+      "description": "Per-minute aggregate work rate through major trace stages. Missing series indicate no matching metric samples; they are not synthesized into per-execution data.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -705,9 +747,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 24,
         "x": 0,
-        "y": 9
+        "y": 11
       },
       "id": 8,
       "options": {
@@ -794,11 +836,24 @@
       "type": "timeseries"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "id": 102,
+      "panels": [],
+      "title": "Latency",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 duration for major trace stages. High values point to the slow part of the journey before opening the full Tempo waterfall.",
+      "description": "Current p95 duration for major trace stages from bounded aggregate histograms. Sparse or idle windows can show no value; use Journey flow rate for volume context before choosing a representative Tempo trace.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -820,9 +875,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 9
+        "w": 24,
+        "x": 0,
+        "y": 20
       },
       "id": 9,
       "options": {
@@ -933,6 +988,19 @@
       "type": "bargauge"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "id": 103,
+      "panels": [],
+      "title": "Agent lineage",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -993,7 +1061,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 17
+        "y": 29
       },
       "id": 10,
       "options": {
@@ -1015,8 +1083,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(observme_active_agents) by (agent_role, subagent_depth)",
-          "legendFormat": "active {{agent_role}} depth={{subagent_depth}}",
+          "expr": "sum(observme_active_agents) by (agent_role)",
+          "legendFormat": "active {{agent_role}}",
           "range": true,
           "refId": "A"
         },
@@ -1096,7 +1164,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Subagent handoff volume by depth and reason across the selected range, with failed spawn volume beside successful handoffs when failure labels are emitted.",
+      "description": "Selected-range spawn attempts by emitted depth/reason labels, with failed spawn volume grouped separately by the failure counter’s emitted spawn_type/error_class labels. The two frames provide context and must not be read as direct label-matched attribution.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1141,7 +1209,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 17
+        "y": 29
       },
       "id": 11,
       "options": {
@@ -1184,9 +1252,9 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_subagent_spawn_failures_total[$__range])) by (subagent_depth, spawn_reason, error_class)",
+          "expr": "sum(increase(observme_subagent_spawn_failures_total[$__range])) by (spawn_type, error_class)",
           "refId": "B",
-          "legendFormat": "failed depth {{subagent_depth}} {{spawn_reason}} {{error_class}}",
+          "legendFormat": "failed {{spawn_type}} / {{error_class}}",
           "instant": true,
           "range": false
         }
@@ -1202,11 +1270,24 @@
       ]
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "id": 104,
+      "panels": [],
+      "title": "Logs",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Chronological ObservMe journey events from Loki. Filter by Session ID, Agent ID, or Agent run ID to follow one request; this uses a logs panel because Loki log streams do not provide state-timeline frames without extra transforms.",
+      "description": "Chronological ObservMe journey events from Loki. Session, workflow, agent, and run filters narrow one execution; this remains a logs panel because Loki log streams do not provide state-timeline frames without extra transforms. Empty means no matching lifecycle logs were observed in the selected range.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1240,7 +1321,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 25
+        "y": 38
       },
       "id": 12,
       "options": {
@@ -1262,7 +1343,9 @@
           "editorMode": "code",
           "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_name=~\"session[.](started|shutdown)|workflow[.](started|completed|failed)|agent[.](run[.](started|completed|failed)|spawn[.](started|completed|failed)|wait[.](started|completed)|join[.](started|completed)|orphaned)|trace_context[.]propagation_failed|turn[.](started|completed)|llm[.]request[.](started|completed|failed)|tool[.]call[.](started|completed|failed)|bash[.]completed|branch[.]created|compaction[.]created\"}",
           "queryType": "range",
-          "refId": "A"
+          "refId": "A",
+          "maxLines": 1000,
+          "range": true
         }
       ],
       "title": "Execution journey events",
@@ -1280,7 +1363,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Parent/child handoff events from Loki. High-cardinality IDs are used only for drill-down, never Prometheus metric labels.",
+      "description": "Chronological parent/child handoff and lineage-failure rows from Loki. Deterministic safe fields expose event, session, workflow, parent, child/agent, run, trace, and span context while hiding the raw line. trace_id opens Tempo and agent_run reopens this dashboard with matching filters. Empty means no matching handoff or lineage-failure logs were observed in the selected range.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1298,13 +1381,50 @@
           },
           "unit": "short"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "agent_run"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open filtered Trace Journey",
+                    "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&var-session_id=${__data.fields[\"session\"]}&var-workflow_id=${__data.fields[\"workflow\"]}&var-agent_id=${__data.fields[\"agent\"]}&var-agent_run_id=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 10,
+        "w": 24,
         "x": 0,
-        "y": 33
+        "y": 46
       },
       "id": 13,
       "options": {
@@ -1317,7 +1437,13 @@
           ],
           "show": false
         },
-        "showHeader": true
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "Time"
+          }
+        ]
       },
       "targets": [
         {
@@ -1326,84 +1452,68 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_category=\"agent-tree\"}",
-          "legendFormat": "{{pi_agent_parent_id}} -> {{pi_agent_id}}",
+          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_category=\"agent-tree\", event_name=~\"agent[.]spawn[.](started|completed|failed)|agent[.](wait|join)[.](started|completed)|agent[.]orphaned|trace_context[.]propagation_failed\"} | line_format `{\"event\":{{ printf \"%q\" .event_name }},\"session\":{{ printf \"%q\" .pi_session_id }},\"workflow\":{{ printf \"%q\" .pi_workflow_id }},\"parent\":{{ printf \"%q\" .pi_agent_parent_id }},\"child\":{{ printf \"%q\" .pi_agent_child_id }},\"agent\":{{ printf \"%q\" .pi_agent_id }},\"agent_run\":{{ printf \"%q\" .pi_agent_run_id }},\"trace_id\":{{ printf \"%q\" .trace_id }},\"span_id\":{{ printf \"%q\" .span_id }}}`",
+          "legendFormat": "{{event_name}}",
+          "maxLines": 500,
           "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
       "title": "Parent → child handoffs",
-      "type": "table"
-    },
-    {
-      "datasource": {
-        "type": "tempo",
-        "uid": "tempo"
-      },
-      "description": "Recent ObservMe traces from Tempo. Open a row in Explore to inspect the complete trace waterfall and use the panel link to keep the current session/agent filters beside the ordered logs.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 33
-      },
-      "id": 14,
-      "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": [
-            "sum"
-          ],
-          "show": false
-        },
-        "showHeader": true
-      },
-      "targets": [
+      "type": "table",
+      "transformations": [
         {
-          "datasource": {
-            "type": "tempo",
-            "uid": "tempo"
-          },
-          "limit": 50,
-          "query": "{ resource.service.name = \"observme-pi-extension\" }",
-          "queryType": "traceql",
-          "refId": "A",
-          "tableType": "traces"
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "extractFields",
+          "options": {
+            "format": "json",
+            "keepTime": true,
+            "replace": false,
+            "source": "Line"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Line": true,
+              "id": true,
+              "labels": true,
+              "tsNs": true,
+              "service_name": true,
+              "telemetry_source": true
+            },
+            "renameByName": {
+              "event_name": "event",
+              "pi_session_id": "session",
+              "pi_workflow_id": "workflow",
+              "pi_agent_parent_id": "parent",
+              "pi_agent_child_id": "child",
+              "pi_agent_id": "agent",
+              "pi_agent_run_id": "agent_run",
+              "trace_id": "trace_id",
+              "span_id": "span_id"
+            }
+          }
         }
       ],
-      "title": "Recent Tempo traces",
-      "type": "table",
+      "pluginVersion": "11.1.0",
       "links": [
         {
-          "title": "Open matching journey logs",
-          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}",
-          "targetBlank": false
+          "targetBlank": false,
+          "title": "Open Agents dashboard",
+          "url": "/d/observme-agents/observme-agents?${__url_time_range}"
         },
         {
-          "title": "Open matching LLM Conversations",
-          "url": "/d/observme-llm-conversations/observme-llm-conversations?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}",
-          "targetBlank": false
+          "targetBlank": false,
+          "title": "Open Agent Node Graphs",
+          "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}"
         }
       ]
     },
@@ -1412,12 +1522,12 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Ordered journey logs with labels visible. Use this beside the Tempo waterfall to connect event logs, trace IDs, span IDs, and the current session/agent filters.",
+      "description": "Full chronological lifecycle log for the selected execution filters. Labels and log details remain available for correlation with Tempo; empty means no matching lifecycle logs were observed in the selected range.",
       "gridPos": {
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 41
+        "y": 56
       },
       "id": 15,
       "options": {
@@ -1439,7 +1549,9 @@
           "editorMode": "code",
           "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_name=~\"session[.](started|shutdown)|workflow[.](started|completed|failed)|agent[.](run[.](started|completed|failed)|spawn[.](started|completed|failed)|wait[.](started|completed)|join[.](started|completed)|orphaned)|trace_context[.]propagation_failed|turn[.](started|completed)|llm[.]request[.](started|completed|failed)|tool[.]call[.](started|completed|failed)|bash[.]completed|branch[.]created|compaction[.]created\"}",
           "queryType": "range",
-          "refId": "A"
+          "refId": "A",
+          "maxLines": 1000,
+          "range": true
         }
       ],
       "title": "Ordered journey log",
@@ -1456,10 +1568,105 @@
           "targetBlank": false
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 66
+      },
+      "id": 105,
+      "panels": [],
+      "title": "Traces",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "description": "Recent ObservMe traces returned by a valid service-scoped TraceQL search. Open a trace row for the waterfall, or use trace_id links in the handoff table for an exact execution. Dashboard links keep the current Loki execution filters beside the trace search.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 67
+      },
+      "id": 14,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "limit": 100,
+          "query": "{ resource.service.name = \"observme-pi-extension\" }",
+          "queryType": "traceql",
+          "refId": "A",
+          "tableType": "traces"
+        }
+      ],
+      "title": "Recent Tempo traces",
+      "type": "table",
+      "links": [
+        {
+          "title": "Open matching journey logs",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}",
+          "targetBlank": false
+        },
+        {
+          "title": "Open matching LLM Conversations",
+          "url": "/d/observme-llm-conversations/observme-llm-conversations?${__url_time_range}&${session_id:queryparam}&${workflow_id:queryparam}&${agent_id:queryparam}&${agent_run_id:queryparam}",
+          "targetBlank": false
+        },
+        {
+          "title": "Open Agents dashboard",
+          "url": "/d/observme-agents/observme-agents?${__url_time_range}",
+          "targetBlank": false
+        },
+        {
+          "title": "Open Agent Node Graphs",
+          "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}",
+          "targetBlank": false
+        }
+      ]
     }
   ],
   "refresh": "10s",
-  "schemaVersion": 38,
+  "schemaVersion": 39,
   "style": "dark",
   "tags": [
     "observme",
@@ -1532,14 +1739,14 @@
           "type": "loki",
           "uid": "loki"
         },
-        "definition": "label_values({service_name=\"observme-pi-extension\"}, pi_agent_id)",
+        "definition": "label_values({service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\"}, pi_agent_id)",
         "hide": 0,
         "includeAll": true,
         "label": "Agent ID",
         "multi": true,
         "name": "agent_id",
         "options": [],
-        "query": "label_values({service_name=\"observme-pi-extension\"}, pi_agent_id)",
+        "query": "label_values({service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\"}, pi_agent_id)",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -1557,14 +1764,14 @@
           "type": "loki",
           "uid": "loki"
         },
-        "definition": "label_values({service_name=\"observme-pi-extension\"}, pi_agent_run_id)",
+        "definition": "label_values({service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\"}, pi_agent_run_id)",
         "hide": 0,
         "includeAll": true,
         "label": "Agent run ID",
         "multi": true,
         "name": "agent_run_id",
         "options": [],
-        "query": "label_values({service_name=\"observme-pi-extension\"}, pi_agent_run_id)",
+        "query": "label_values({service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\"}, pi_agent_run_id)",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -1581,6 +1788,6 @@
   "timezone": "browser",
   "title": "ObservMe Trace Journey",
   "uid": "observme-trace-journey",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

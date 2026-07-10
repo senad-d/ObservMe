@@ -68,6 +68,16 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
+      "title": "Overview",
+      "tooltip": "Open the overview with the current time range.",
+      "type": "link",
+      "url": "/d/observme-overview/observme-overview?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "SLO Health",
       "tooltip": "Open SLO scorecards, burn rates, and alert thresholds with the current time range.",
       "type": "link",
@@ -179,7 +189,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Composite runtime export score: healthy idle is green when no events and no failures exist; active ranges are degraded by telemetry drops, export errors, and redaction failures. The adjacent chips show which input moved the score.",
+      "description": "Composite runtime export state: 1 (green) means active telemetry with no local drops, export errors, or redaction failures; 0.5 (blue) means idle or unobserved telemetry with no failures; values below 1 indicate active failures, and 0 indicates failures without observed-event liveness. Use the adjacent liveness and failure chips to distinguish idle from missing instrumentation.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -194,12 +204,16 @@
                 "value": null
               },
               {
+                "color": "blue",
+                "value": 0.5
+              },
+              {
                 "color": "yellow",
-                "value": 0.99
+                "value": 0.500001
               },
               {
                 "color": "green",
-                "value": 0.999
+                "value": 1
               }
             ]
           },
@@ -244,7 +258,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_max(((((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)) > bool 0) * clamp_min(1 - ((((sum(rate(observme_telemetry_dropped_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_export_errors_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_redaction_failures_total[$__rate_interval])) or vector(0))) / clamp_min((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)), 1e-9)), 0)) + ((((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)) == bool 0) * ((((sum(rate(observme_telemetry_dropped_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_export_errors_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_redaction_failures_total[$__rate_interval])) or vector(0))) == bool 0))), 1)",
+          "expr": "clamp_max(((((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)) > bool 0) * clamp_min(1 - (((sum(rate(observme_telemetry_dropped_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_export_errors_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_redaction_failures_total[$__rate_interval])) or vector(0))) / clamp_min((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)), 1e-9)), 0)) + (((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)) == bool 0) * (((sum(rate(observme_telemetry_dropped_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_export_errors_total[$__rate_interval])) or vector(0)) + (sum(rate(observme_redaction_failures_total[$__rate_interval])) or vector(0))) == bool 0) * 0.5)), 1)",
           "legendFormat": "clean export score",
           "range": true,
           "refId": "A"
@@ -258,7 +272,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Local telemetry drop ratio for the selected window. Zero is healthy; if event liveness is zero, zero means healthy idle rather than a missing dashboard query.",
+      "description": "Local telemetry drop ratio for the selected window, bounded to 100%. Zero means no drops were observed; when event liveness is also zero, treat it as idle/unmeasured rather than proof of active health.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -319,7 +333,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(sum(rate(observme_telemetry_dropped_total[$__rate_interval])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)), 1)",
+          "expr": "clamp_max((sum(rate(observme_telemetry_dropped_total[$__rate_interval])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[$__rate_interval])) or vector(0)), 1e-9), 1)",
           "legendFormat": "drop ratio",
           "range": true,
           "refId": "A"
@@ -333,7 +347,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Exporter/backend error rate. Zero means no export errors were observed in the selected range.",
+      "description": "Exporter/backend error rate. Zero means no export errors were observed; when event liveness is also zero, treat the range as idle/unmeasured rather than proof of active health.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -401,7 +415,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Redaction failure rate. Zero is healthy; any non-zero value is critical when content capture is enabled.",
+      "description": "Redaction failure rate. Any non-zero value is critical when content capture is enabled. Zero means no failures were observed; when event liveness is also zero, treat the range as idle/unmeasured.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -469,7 +483,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Instrumentation overhead chip: p99 handler lifecycle latency should stay under the 10 ms SLO threshold.",
+      "description": "Instrumentation overhead chip: p99 handler lifecycle latency should stay under the 10 ms SLO threshold. No histogram observations render as no data rather than a false healthy zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -523,7 +537,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(observme_handler_duration_ms_bucket[$__rate_interval])) by (le)) or vector(0)",
+          "expr": "histogram_quantile(0.99, sum(rate(observme_handler_duration_ms_bucket[$__rate_interval])) by (le))",
           "legendFormat": "handler p99",
           "range": true,
           "refId": "A"
@@ -550,7 +564,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "30-day Observability Export SLO from observme-slos.yaml. No workload in the window is healthy idle; non-zero drops lower this score.",
+      "description": "30-day Observability Export SLO aligned with observme-slos.yaml: 99% of observed events are not locally dropped. The denominator guard makes no events and no drops evaluate to 1; treat that state as idle/unmeasured and confirm liveness instead of assuming a measured healthy workload.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -566,11 +580,11 @@
               },
               {
                 "color": "yellow",
-                "value": 0.99
+                "value": 0.98
               },
               {
                 "color": "green",
-                "value": 0.999
+                "value": 0.99
               }
             ]
           },
@@ -615,7 +629,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_max(clamp_min(1 - ((sum(increase(observme_telemetry_dropped_total[30d])) or vector(0)) / clamp_min((sum(increase(observme_events_observed_total[30d])) or vector(0)), 1)), 0), 1)",
+          "expr": "clamp_max(clamp_min(1 - ((sum(rate(observme_telemetry_dropped_total[30d])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[30d])) or vector(0)), 1e-9)), 0), 1)",
           "instant": true,
           "legendFormat": "export SLO",
           "range": false,
@@ -630,7 +644,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Instrumentation Overhead SLO scorecard: p99 handler duration over 30 days should stay under 10 ms.",
+      "description": "Instrumentation Overhead SLO scorecard: p99 handler duration over 30 days should stay under 10 ms. No histogram observations render as no data rather than a false healthy zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -691,7 +705,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(observme_handler_duration_ms_bucket[30d])) by (le)) or vector(0)",
+          "expr": "histogram_quantile(0.99, sum(rate(observme_handler_duration_ms_bucket[30d])) by (le))",
           "instant": true,
           "legendFormat": "handler p99",
           "range": false,
@@ -778,7 +792,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[1h])) or vector(0)) / clamp_min((sum(rate(observme_handler_duration_ms_count[1h])) or vector(0)), 1e-9)), 0) / 0.01",
+          "expr": "clamp_max(clamp_min(((sum(rate(observme_handler_duration_ms_count[1h])) or vector(0)) - (sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[1h])) or vector(0))) / clamp_min((sum(rate(observme_handler_duration_ms_count[1h])) or vector(0)), 1e-9), 0), 1) / 0.01",
           "instant": true,
           "legendFormat": "handler >10ms",
           "range": false,
@@ -865,7 +879,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[30d])) or vector(0)) / clamp_min((sum(rate(observme_handler_duration_ms_count[30d])) or vector(0)), 1e-9)), 0) / 0.01",
+          "expr": "clamp_max(clamp_min(((sum(rate(observme_handler_duration_ms_count[30d])) or vector(0)) - (sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[30d])) or vector(0))) / clamp_min((sum(rate(observme_handler_duration_ms_count[30d])) or vector(0)), 1e-9), 0), 1) / 0.01",
           "instant": true,
           "legendFormat": "handler >10ms",
           "range": false,
@@ -963,8 +977,9 @@
           },
           "editorMode": "code",
           "expr": "(sum(increase(observme_sessions_started_total[$__range])) or vector(0))",
+          "instant": true,
           "legendFormat": "sessions started",
-          "range": true,
+          "range": false,
           "refId": "A"
         },
         {
@@ -974,8 +989,9 @@
           },
           "editorMode": "code",
           "expr": "(sum(increase(observme_sessions_shutdown_total[$__range])) or vector(0))",
+          "instant": true,
           "legendFormat": "sessions shutdown",
-          "range": true,
+          "range": false,
           "refId": "B"
         }
       ],
@@ -1167,7 +1183,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Active spans by bounded operation as an SDK pressure signal. Zero means no active spans are currently exposed for the selected range.",
+      "description": "Active spans by bounded operation as an SDK pressure signal. Zero means no active spans are exposed or the gauge series is absent; consult observed-event liveness before interpreting it as healthy idle.",
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -1223,7 +1239,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Handler error rate grouped by operation and error class. The zero fallback means no handler errors were observed in the selected range.",
+      "description": "Handler error rate grouped by operation and error class. The zero fallback means no handler errors were observed; if event liveness is also zero, the range is idle/unmeasured rather than confirmed healthy.",
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -1296,33 +1312,117 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Redaction failure logs using normalized event_name. Empty means no matching failure logs in the selected time range.",
+      "description": "Latest redaction.failed events first. Safe deterministic fields expose event, category, execution context, error type, trace, and span while raw lines are hidden. trace_id opens Tempo. Empty means no matching failure logs in the selected time range; this is healthy when no redaction failures occurred.",
       "fieldConfig": {
         "defaults": {},
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
+        "h": 9,
+        "w": 12,
         "x": 0,
         "y": 35
       },
       "id": 7,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Errors",
+          "url": "/d/observme-errors/observme-errors?${__url_time_range}"
+        }
+      ],
       "options": {
-        "showHeader": true
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Time"
+          }
+        ]
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\", event_name=\"redaction.failed\"}",
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"redaction.failed\"} | line_format `{\"event\":{{ printf \"%q\" .event_name }},\"category\":{{ printf \"%q\" .event_category }},\"session\":{{ printf \"%q\" .pi_session_id }},\"workflow\":{{ printf \"%q\" .pi_workflow_id }},\"agent\":{{ printf \"%q\" .pi_agent_id }},\"parent_agent\":{{ printf \"%q\" .pi_agent_parent_id }},\"agent_run\":{{ printf \"%q\" .pi_agent_run_id }},\"error_type\":{{ printf \"%q\" .error_type }},\"trace_id\":{{ printf \"%q\" .trace_id }},\"span_id\":{{ printf \"%q\" .span_id }}}`",
+          "maxLines": 500,
           "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
       "title": "Redaction failure logs",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "extractFields",
+          "options": {
+            "format": "json",
+            "keepTime": true,
+            "replace": false,
+            "source": "Line"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Line": true,
+              "id": true,
+              "labels": true,
+              "service_name": true,
+              "telemetry_source": true,
+              "tsNs": true
+            },
+            "renameByName": {
+              "event_category": "category",
+              "event_name": "event",
+              "pi_agent_id": "agent",
+              "pi_agent_parent_id": "parent_agent",
+              "pi_agent_run_id": "agent_run",
+              "pi_session_id": "session",
+              "pi_workflow_id": "workflow"
+            }
+          }
+        }
+      ],
       "type": "table"
     },
     {
@@ -1330,33 +1430,117 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Telemetry drop logs using normalized event_name. Empty means no matching failure logs in the selected time range.",
+      "description": "Latest telemetry.dropped events first. Safe deterministic fields expose event, category, execution context, error type, trace, and span while raw lines are hidden. trace_id opens Tempo. Empty means no matching failure logs in the selected time range; this is healthy when no local telemetry drops occurred.",
       "fieldConfig": {
         "defaults": {},
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
+        "h": 9,
+        "w": 12,
+        "x": 12,
         "y": 35
       },
       "id": 8,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Errors",
+          "url": "/d/observme-errors/observme-errors?${__url_time_range}"
+        }
+      ],
       "options": {
-        "showHeader": true
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Time"
+          }
+        ]
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\", event_name=\"telemetry.dropped\"}",
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"telemetry.dropped\"} | line_format `{\"event\":{{ printf \"%q\" .event_name }},\"category\":{{ printf \"%q\" .event_category }},\"session\":{{ printf \"%q\" .pi_session_id }},\"workflow\":{{ printf \"%q\" .pi_workflow_id }},\"agent\":{{ printf \"%q\" .pi_agent_id }},\"parent_agent\":{{ printf \"%q\" .pi_agent_parent_id }},\"agent_run\":{{ printf \"%q\" .pi_agent_run_id }},\"error_type\":{{ printf \"%q\" .error_type }},\"trace_id\":{{ printf \"%q\" .trace_id }},\"span_id\":{{ printf \"%q\" .span_id }}}`",
+          "maxLines": 500,
           "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
       "title": "Telemetry drop logs",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "extractFields",
+          "options": {
+            "format": "json",
+            "keepTime": true,
+            "replace": false,
+            "source": "Line"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Line": true,
+              "id": true,
+              "labels": true,
+              "service_name": true,
+              "telemetry_source": true,
+              "tsNs": true
+            },
+            "renameByName": {
+              "event_category": "category",
+              "event_name": "event",
+              "pi_agent_id": "agent",
+              "pi_agent_parent_id": "parent_agent",
+              "pi_agent_run_id": "agent_run",
+              "pi_session_id": "session",
+              "pi_workflow_id": "workflow"
+            }
+          }
+        }
+      ],
       "type": "table"
     },
     {
@@ -1364,33 +1548,235 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Trace-context propagation failures from the documented Loki query examples. Empty means no matching failure logs in the selected time range.",
+      "description": "Latest export.failed events first. Safe deterministic fields expose event, category, execution context, error type, trace, and span while raw lines are hidden. trace_id opens Tempo. Empty means no matching failure logs in the selected time range; this is healthy when no exporter/backend failures occurred.",
       "fieldConfig": {
         "defaults": {},
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 35
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 44
       },
-      "id": 9,
+      "id": 21,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Errors",
+          "url": "/d/observme-errors/observme-errors?${__url_time_range}"
+        }
+      ],
       "options": {
-        "showHeader": true
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Time"
+          }
+        ]
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\", event_name=\"trace_context.propagation_failed\"}",
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"export.failed\"} | line_format `{\"event\":{{ printf \"%q\" .event_name }},\"category\":{{ printf \"%q\" .event_category }},\"session\":{{ printf \"%q\" .pi_session_id }},\"workflow\":{{ printf \"%q\" .pi_workflow_id }},\"agent\":{{ printf \"%q\" .pi_agent_id }},\"parent_agent\":{{ printf \"%q\" .pi_agent_parent_id }},\"agent_run\":{{ printf \"%q\" .pi_agent_run_id }},\"error_type\":{{ printf \"%q\" .error_type }},\"trace_id\":{{ printf \"%q\" .trace_id }},\"span_id\":{{ printf \"%q\" .span_id }}}`",
+          "maxLines": 500,
           "queryType": "range",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Export failure logs",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "extractFields",
+          "options": {
+            "format": "json",
+            "keepTime": true,
+            "replace": false,
+            "source": "Line"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Line": true,
+              "id": true,
+              "labels": true,
+              "service_name": true,
+              "telemetry_source": true,
+              "tsNs": true
+            },
+            "renameByName": {
+              "event_category": "category",
+              "event_name": "event",
+              "pi_agent_id": "agent",
+              "pi_agent_parent_id": "parent_agent",
+              "pi_agent_run_id": "agent_run",
+              "pi_session_id": "session",
+              "pi_workflow_id": "workflow"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Latest trace_context.propagation_failed events first. Safe deterministic fields expose event, category, execution context, error type, trace, and span while raw lines are hidden. trace_id opens Tempo and the panel links to Trace Journey. Empty means no matching failure logs in the selected time range; this is healthy when trace context propagated successfully.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 44
+      },
+      "id": 9,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Time"
+          }
+        ]
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"trace_context.propagation_failed\"} | line_format `{\"event\":{{ printf \"%q\" .event_name }},\"category\":{{ printf \"%q\" .event_category }},\"session\":{{ printf \"%q\" .pi_session_id }},\"workflow\":{{ printf \"%q\" .pi_workflow_id }},\"agent\":{{ printf \"%q\" .pi_agent_id }},\"parent_agent\":{{ printf \"%q\" .pi_agent_parent_id }},\"agent_run\":{{ printf \"%q\" .pi_agent_run_id }},\"error_type\":{{ printf \"%q\" .error_type }},\"trace_id\":{{ printf \"%q\" .trace_id }},\"span_id\":{{ printf \"%q\" .span_id }}}`",
+          "maxLines": 500,
+          "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
       "title": "Trace-context propagation failure logs",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "extractFields",
+          "options": {
+            "format": "json",
+            "keepTime": true,
+            "replace": false,
+            "source": "Line"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Line": true,
+              "id": true,
+              "labels": true,
+              "service_name": true,
+              "telemetry_source": true,
+              "tsNs": true
+            },
+            "renameByName": {
+              "event_category": "category",
+              "event_name": "event",
+              "pi_agent_id": "agent",
+              "pi_agent_parent_id": "parent_agent",
+              "pi_agent_run_id": "agent_run",
+              "pi_session_id": "session",
+              "pi_workflow_id": "workflow"
+            }
+          }
+        }
+      ],
       "type": "table"
     }
   ],
@@ -1411,6 +1797,6 @@
   "timezone": "browser",
   "title": "ObservMe Export Health",
   "uid": "observme-export-health",
-  "version": 3,
+  "version": 4,
   "weekStart": ""
 }

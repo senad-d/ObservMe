@@ -19,14 +19,20 @@
       "version": "1.0.0"
     },
     {
-      "id": "timeseries",
-      "name": "Time series",
+      "id": "row",
+      "name": "Row",
       "type": "panel",
       "version": ""
     },
     {
       "id": "stat",
       "name": "Stat",
+      "type": "panel",
+      "version": ""
+    },
+    {
+      "id": "timeseries",
+      "name": "Time series",
       "type": "panel",
       "version": ""
     },
@@ -42,20 +48,98 @@
   },
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Overview",
+      "tooltip": "Open the overview with the current time range.",
+      "type": "link",
+      "url": "/d/observme-overview/observme-overview?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Cost",
+      "tooltip": "Compare branch, compaction, model, and thinking changes with cost trends.",
+      "type": "link",
+      "url": "/d/observme-cost/observme-cost?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Models",
+      "tooltip": "Compare model changes with provider and model behavior.",
+      "type": "link",
+      "url": "/d/observme-models/observme-models?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Latency",
+      "tooltip": "Compare branch and compaction pressure with latency trends.",
+      "type": "link",
+      "url": "/d/observme-latency/observme-latency?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Logs and LLM I/O",
+      "tooltip": "Open privacy-safe LLM lifecycle logs and size trends.",
+      "type": "link",
+      "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Trace Journey",
+      "tooltip": "Open per-execution logs and Tempo traces with the current time range.",
+      "type": "link",
+      "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+    }
+  ],
   "liveNow": false,
   "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "Selected-range summary",
+      "type": "row"
+    },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Branch events divided by session starts to estimate branching per session.",
+      "description": "Branch events observed in the selected range. Missing series render as zero, which means no branch events were observed; it does not prove telemetry liveness.",
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -70,23 +154,36 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
+        "h": 5,
+        "w": 6,
         "x": 0,
-        "y": 0
+        "y": 1
       },
       "id": 1,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
         }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -94,24 +191,270 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(sum(rate(observme_branches_total[1h])) or vector(0)) / clamp_min((sum(rate(observme_sessions_started_total[1h])) or vector(0)), 1e-9)",
-          "legendFormat": "branches/session",
-          "range": true,
+          "expr": "sum(increase(observme_branches_total[$__range])) or vector(0)",
+          "instant": true,
+          "legendFormat": "branches",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Branch events",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Compaction events observed in the selected range. Missing series render as zero, which means no compactions were observed; it does not prove telemetry liveness.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "id": 2,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Latency",
+          "url": "/d/observme-latency/observme-latency?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(observme_compactions_total[$__range])) or vector(0)",
+          "instant": true,
+          "legendFormat": "compactions",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Compaction events",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Aggregate branch events divided by session starts in the selected range. This is a suite-level estimate because per-session IDs are intentionally excluded from Prometheus labels; sparse ranges and sessions crossing the range boundary can skew it. Zero can mean no branches, no session starts, or absent telemetry.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "id": 3,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(increase(observme_branches_total[$__range])) or vector(0)) / clamp_min((sum(increase(observme_sessions_started_total[$__range])) or vector(0)), 1)",
+          "instant": true,
+          "legendFormat": "branches/session estimate",
+          "range": false,
           "refId": "A"
         }
       ],
       "title": "Branches per session estimate",
-      "type": "timeseries"
+      "type": "stat"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Compaction rate by deployment environment.",
+      "description": "Selected-range p95 of tokens present immediately before compaction. The histogram records token counts, not bytes or characters. No data means no compaction histogram samples were observed and is not converted to a false zero.",
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "id": 4,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Cost",
+          "url": "/d/observme-cost/observme-cost?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Latency",
+          "url": "/d/observme-latency/observme-latency?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(increase(observme_compaction_tokens_before_bucket[$__range])) by (le))",
+          "instant": true,
+          "legendFormat": "p95 tokens",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "p95 tokens before compaction",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "id": 101,
+      "panels": [],
+      "title": "Branch and compaction trends",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Branch and compaction events per second by bounded environment label. Missing series render as an aggregate zero so a quiet range remains visible; use Export Health to distinguish idle activity from absent telemetry.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -127,22 +470,27 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 0
+        "w": 12,
+        "x": 0,
+        "y": 7
       },
-      "id": 2,
+      "id": 5,
       "options": {
         "legend": {
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -150,13 +498,24 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(observme_compactions_total[1h])) by (environment)",
-          "legendFormat": "{{environment}}",
+          "expr": "sum by (environment) (rate(observme_branches_total[$__rate_interval])) or on() vector(0)",
+          "legendFormat": "branches {{environment}}",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (environment) (rate(observme_compactions_total[$__rate_interval])) or on() vector(0)",
+          "legendFormat": "compactions {{environment}}",
+          "range": true,
+          "refId": "B"
         }
       ],
-      "title": "Compactions over time",
+      "title": "Branch and compaction event rates",
       "type": "timeseries"
     },
     {
@@ -164,10 +523,14 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 tokens before compaction from the documented histogram.",
+      "description": "p50, p95, and p99 token-count quantiles before compaction. The query preserves the required le bucket label. Interpret sparse quantiles with the selected-range Compaction events volume; no data means no histogram observations rather than zero tokens.",
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
           "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -183,22 +546,39 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 0
+        "w": 12,
+        "x": 12,
+        "y": 7
       },
-      "id": 3,
+      "id": 6,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Cost",
+          "url": "/d/observme-cost/observme-cost?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Latency",
+          "url": "/d/observme-latency/observme-latency?${__url_time_range}"
+        }
+      ],
       "options": {
         "legend": {
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -206,58 +586,63 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_compaction_tokens_before_bucket[1h])) by (le))",
-          "legendFormat": "p95 tokens",
+          "expr": "histogram_quantile(0.50, sum(rate(observme_compaction_tokens_before_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "p50 tokens",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_compaction_tokens_before_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "p95 tokens",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum(rate(observme_compaction_tokens_before_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "p99 tokens",
+          "range": true,
+          "refId": "C"
         }
       ],
-      "title": "Tokens before compaction histogram",
+      "title": "Tokens before compaction quantiles",
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "description": "Branch creation logs; Loki query uses normalized event_name.",
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
+      "collapsed": false,
       "gridPos": {
-        "h": 8,
-        "w": 8,
+        "h": 1,
+        "w": 24,
         "x": 0,
-        "y": 8
+        "y": 15
       },
-      "id": 4,
-      "options": {
-        "showHeader": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "{service_name=\"observme-pi-extension\", event_name=\"branch.created\"}",
-          "queryType": "range",
-          "refId": "A"
-        }
-      ],
-      "title": "Branch summaries created",
-      "type": "table"
+      "id": 102,
+      "panels": [],
+      "title": "Model and thinking changes",
+      "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Model and thinking-level changes that explain later cost, latency, or behavior shifts. The Cost, Models, and Latency dashboards also render these signals as annotations.",
+      "description": "Model and thinking-level changes per second that can explain later cost, latency, or behavior shifts. Model series use bounded provider/model labels; thinking changes use the bounded environment label. Missing series render as an aggregate zero. Cost, Models, and Latency also show these signals as annotations.",
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
           "mappings": [],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -273,48 +658,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 8
+        "w": 24,
+        "x": 0,
+        "y": 16
       },
-      "id": 5,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(observme_model_changes_total[1h])) by (provider, model)",
-          "legendFormat": "model {{provider}} / {{model}}",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(observme_thinking_level_changes_total[1h])) by (environment)",
-          "legendFormat": "thinking {{environment}}",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "Model changes and thinking level changes",
-      "type": "timeseries",
+      "id": 7,
       "links": [
         {
           "targetBlank": false,
@@ -330,41 +678,343 @@
           "targetBlank": false,
           "title": "Open Latency annotations",
           "url": "/d/observme-latency/observme-latency?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Logs and LLM I/O",
+          "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}"
         }
-      ]
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (provider, model) (rate(observme_model_changes_total[$__rate_interval])) or on() vector(0)",
+          "legendFormat": "model {{provider}} / {{model}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (environment) (rate(observme_thinking_level_changes_total[$__rate_interval])) or on() vector(0)",
+          "legendFormat": "thinking {{environment}}",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Model changes and thinking level changes",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 103,
+      "panels": [],
+      "title": "Branch and compaction context",
+      "type": "row"
     },
     {
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Compaction structured logs from the documented Loki query examples.",
+      "description": "Latest branch.created events first. A deterministic safe JSON line exposes event, session, workflow, agent, run, trace, and span context while the raw line and metadata fields are hidden. trace_id opens Tempo for branch-specific span attributes; agent_run opens a filtered Trace Journey. Empty means no branch events matched the selected range, which can be healthy when no branching occurred but does not prove log ingestion health.",
       "fieldConfig": {
         "defaults": {},
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "agent_run"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open filtered Trace Journey",
+                    "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&var-session_id=${__data.fields[\"session\"]}&var-workflow_id=${__data.fields[\"workflow\"]}&var-agent_id=${__data.fields[\"agent\"]}&var-agent_run_id=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 8
+        "h": 11,
+        "w": 12,
+        "x": 0,
+        "y": 25
       },
-      "id": 6,
+      "id": 8,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
       "options": {
-        "showHeader": true
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Time"
+          }
+        ]
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service_name=\"observme-pi-extension\", event_name=\"compaction.created\"}",
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"branch.created\"} | line_format `{\"event\":{{ printf \"%q\" .event_name }},\"category\":{{ printf \"%q\" .event_category }},\"session\":{{ printf \"%q\" .pi_session_id }},\"workflow\":{{ printf \"%q\" .pi_workflow_id }},\"agent\":{{ printf \"%q\" .pi_agent_id }},\"agent_run\":{{ printf \"%q\" .pi_agent_run_id }},\"trace_id\":{{ printf \"%q\" .trace_id }},\"span_id\":{{ printf \"%q\" .span_id }}}`",
+          "legendFormat": "{{event_name}}",
+          "maxLines": 500,
           "queryType": "range",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Branch summaries created",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "extractFields",
+          "options": {
+            "format": "json",
+            "keepTime": true,
+            "replace": false,
+            "source": "Line"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Line": true,
+              "id": true,
+              "labels": true,
+              "service_name": true,
+              "telemetry_source": true,
+              "tsNs": true
+            },
+            "renameByName": {
+              "event_category": "category",
+              "event_name": "event",
+              "pi_agent_id": "agent",
+              "pi_agent_run_id": "agent_run",
+              "pi_session_id": "session",
+              "pi_workflow_id": "workflow",
+              "span_id": "span_id",
+              "trace_id": "trace_id"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Latest compaction.created events first. A deterministic safe JSON line exposes event, session, workflow, agent, run, trace, and span context while the raw line and metadata fields are hidden. trace_id opens Tempo for tokens-before, reason, retry, and summary metadata; agent_run opens a filtered Trace Journey. Empty means no compaction events matched the selected range, which is healthy when no compaction occurred but does not prove log ingestion health.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "agent_run"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open filtered Trace Journey",
+                    "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&var-session_id=${__data.fields[\"session\"]}&var-workflow_id=${__data.fields[\"workflow\"]}&var-agent_id=${__data.fields[\"agent\"]}&var-agent_run_id=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "id": 9,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Time"
+          }
+        ]
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", event_name=\"compaction.created\"} | line_format `{\"event\":{{ printf \"%q\" .event_name }},\"category\":{{ printf \"%q\" .event_category }},\"session\":{{ printf \"%q\" .pi_session_id }},\"workflow\":{{ printf \"%q\" .pi_workflow_id }},\"agent\":{{ printf \"%q\" .pi_agent_id }},\"agent_run\":{{ printf \"%q\" .pi_agent_run_id }},\"trace_id\":{{ printf \"%q\" .trace_id }},\"span_id\":{{ printf \"%q\" .span_id }}}`",
+          "legendFormat": "{{event_name}}",
+          "maxLines": 500,
+          "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
       "title": "Compaction logs",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "extractFields",
+          "options": {
+            "format": "json",
+            "keepTime": true,
+            "replace": false,
+            "source": "Line"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Line": true,
+              "id": true,
+              "labels": true,
+              "service_name": true,
+              "telemetry_source": true,
+              "tsNs": true
+            },
+            "renameByName": {
+              "event_category": "category",
+              "event_name": "event",
+              "pi_agent_id": "agent",
+              "pi_agent_run_id": "agent_run",
+              "pi_session_id": "session",
+              "pi_workflow_id": "workflow",
+              "span_id": "span_id",
+              "trace_id": "trace_id"
+            }
+          }
+        }
+      ],
       "type": "table"
     }
   ],
@@ -383,9 +1033,10 @@
     "from": "now-24h",
     "to": "now"
   },
+  "timepicker": {},
   "timezone": "browser",
   "title": "ObservMe Branches and Compactions",
   "uid": "observme-branches-compactions",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

@@ -106,6 +106,16 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
+      "title": "Agent Node Graphs",
+      "tooltip": "Open the aggregate Agent Node Graphs dashboard with the current time range.",
+      "type": "link",
+      "url": "/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "Trace Journey",
       "tooltip": "Open the Trace Journey dashboard with the current time range.",
       "type": "link",
@@ -130,6 +140,26 @@
       "tooltip": "Open the Export Health dashboard with the current time range.",
       "type": "link",
       "url": "/d/observme-export-health/observme-export-health?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "SLO Health",
+      "tooltip": "Open the SLO Health dashboard with the current time range.",
+      "type": "link",
+      "url": "/d/observme-slo-health/observme-slo-health?${__url_time_range}"
+    },
+    {
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Logs and LLM I/O",
+      "tooltip": "Open the privacy-safe Logs and LLM I/O dashboard with the current time range.",
+      "type": "link",
+      "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}"
     },
     {
       "icon": "external link",
@@ -162,7 +192,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Observability Export SLO chip for the selected range: one means no local telemetry drops were observed. If no workload was observed, this zero-safe query still renders healthy idle rather than no data.",
+      "description": "Selected-range Observability Export health against the canonical 99% objective. This compact landing-page chip intentionally renders no observed workload as healthy idle; open SLO Health to distinguish no-workload scorecard state from measured attainment.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -178,11 +208,11 @@
               },
               {
                 "color": "yellow",
-                "value": 0.99
+                "value": 0.95
               },
               {
                 "color": "green",
-                "value": 0.999
+                "value": 0.99
               }
             ]
           },
@@ -202,6 +232,11 @@
           "targetBlank": false,
           "title": "Open Export Health",
           "url": "/d/observme-export-health/observme-export-health?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open SLO Health",
+          "url": "/d/observme-slo-health/observme-slo-health?${__url_time_range}"
         }
       ],
       "options": {
@@ -228,7 +263,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "1 - ((sum(rate(observme_telemetry_dropped_total[$__range])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[$__range])) or vector(0)), 1e-9))",
+          "expr": "clamp_max(clamp_min(1 - ((sum(rate(observme_telemetry_dropped_total[$__range])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[$__range])) or vector(0)), 1e-9)), 0), 1)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -242,7 +277,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Agent Lineage SLO chip for the selected range. A healthy value means subagent spawns are not accompanied by spawn failures, orphan agents, or trace-context propagation failures.",
+      "description": "Selected-range Agent Lineage health against the canonical 99% objective. The failure numerator uses lineage-missing spawn failures, orphan agents, and trace-context propagation failures; no spawns intentionally render as healthy idle on this landing page.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -258,11 +293,11 @@
               },
               {
                 "color": "yellow",
-                "value": 0.99
+                "value": 0.95
               },
               {
                 "color": "green",
-                "value": 0.999
+                "value": 0.99
               }
             ]
           },
@@ -287,6 +322,11 @@
           "targetBlank": false,
           "title": "Open Trace Journey",
           "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open SLO Health",
+          "url": "/d/observme-slo-health/observme-slo-health?${__url_time_range}"
         }
       ],
       "options": {
@@ -313,7 +353,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_min(1 - (((sum(rate(observme_subagent_spawn_failures_total[$__range])) or vector(0)) + (sum(rate(observme_orphan_agents_total[$__range])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[$__range])) or vector(0))) / clamp_min((sum(rate(observme_subagents_spawned_total[$__range])) or vector(0)), 1e-9)), 0)",
+          "expr": "clamp_min(1 - (((sum(rate(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[$__range])) or vector(0)) + (sum(rate(observme_orphan_agents_total[$__range])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[$__range])) or vector(0))) / clamp_min((sum(rate(observme_subagents_spawned_total[$__range])) or vector(0)), 1e-9)), 0)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -327,7 +367,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Workflow Completion SLO chip for terminal telemetry. A healthy idle range with no started workflows renders as 100%; non-idle ranges compare completed plus explicitly failed workflows against started workflows.",
+      "description": "Selected-range Workflow Completion health against the canonical 99% objective. Completed plus explicitly failed terminal workflows are compared with starts; no starts intentionally render as healthy idle on this landing page.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -367,6 +407,16 @@
           "targetBlank": false,
           "title": "Open Trace Journey",
           "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Errors",
+          "url": "/d/observme-errors/observme-errors?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open SLO Health",
+          "url": "/d/observme-slo-health/observme-slo-health?${__url_time_range}"
         }
       ],
       "options": {
@@ -393,7 +443,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_max(((((sum(increase(observme_workflows_completed_total[$__range])) or vector(0)) + (sum(increase(observme_workflow_errors_total[$__range])) or vector(0))) / clamp_min((sum(increase(observme_workflows_started_total[$__range])) or vector(0)), 1)) + (((sum(increase(observme_workflows_started_total[$__range])) or vector(0)) == bool 0)), 1)",
+          "expr": "clamp_max((((sum(increase(observme_workflows_completed_total[$__range])) or vector(0)) + (sum(increase(observme_workflow_errors_total[$__range])) or vector(0))) / clamp_min((sum(increase(observme_workflows_started_total[$__range])) or vector(0)), 1)) + ((sum(increase(observme_workflows_started_total[$__range])) or vector(0)) == bool 0), 1)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -407,7 +457,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Current error pressure across workflow, agent, LLM, tool, and handler failures divided by the main workload counters. Zero can mean healthy idle or no failures in the selected interval.",
+      "description": "Current cross-domain failure pressure divided by the main workload counters. This is a landing-page index, not a canonical SLO because the failure families have different denominators; 2%/5% are tunable triage assumptions. Zero can mean healthy idle or no failures.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -487,7 +537,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Estimated LLM cost burn per hour for the selected dashboard range. Yellow/red thresholds mirror the default cost-spike alert scale and should be tuned to deployment budget.",
+      "description": "Estimated LLM cost burn per hour over the selected range. The red 50 USD/h reference matches ObservMeCostSpike; the yellow 10 USD/h early warning is a tunable budget assumption. Grafana's positive $__range_s scalar is used directly in arithmetic.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -553,7 +603,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(sum(increase(observme_llm_cost_usd_total[$__range])) or vector(0)) / clamp_min($__range_s / 3600, 1e-9)",
+          "expr": "(sum(increase(observme_llm_cost_usd_total[$__range])) or vector(0)) / ($__range_s / 3600)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -567,7 +617,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 turn latency as the first user-facing latency health check. Zero can be healthy idle when no turn-duration buckets were observed.",
+      "description": "p95 turn latency as the first user-facing latency check. The 30s/60s thresholds are tunable operational assumptions, not alert defaults. A zero fallback keeps the chip compact during idle ranges but can also indicate absent duration instrumentation; verify Latency volume and Export Health when unexpected.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -736,7 +786,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Completed turns per minute, shown as a compact KPI with sparkline instead of a full detail chart.",
+      "description": "Completed turns per minute, shown as a compact KPI with sparkline. Zero means no completed turns were observed in the interval and can be healthy idle.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -807,7 +857,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "LLM requests per minute. Use Models or Cost for provider/model breakdowns.",
+      "description": "LLM requests per minute. Zero means no requests were observed in the interval and can be healthy idle; use Models or Cost for provider/model breakdowns.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -878,7 +928,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Tool calls per minute. Open Tools for reliability and slow-tool breakdowns.",
+      "description": "Tool calls per minute. Zero means no calls were observed in the interval and can be healthy idle; open Tools for reliability and slow-tool breakdowns.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -949,7 +999,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Subagent spawns per minute across all roles and depths. Open Agents or Trace Journey for fan-out and lineage details.",
+      "description": "Subagent spawns per minute across all roles and depths. Zero means no spawns were observed in the interval and can be healthy idle; open Agents or Trace Journey for lineage details.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1025,7 +1075,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Currently active ObservMe agent runtimes. Zero can mean healthy idle; high values should be compared with fan-out/depth in the Agent lineage row.",
+      "description": "Currently active ObservMe agent runtimes. Zero can mean healthy idle. Red at 100 references the tunable ObservMeActiveAgentsStuckHigh default; yellow at 50 is an early-warning assumption. Compare sustained values with fan-out and depth.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1234,6 +1284,11 @@
           "targetBlank": false,
           "title": "Open Models",
           "url": "/d/observme-models/observme-models?${__url_time_range}"
+        },
+        {
+          "targetBlank": false,
+          "title": "Open Logs and LLM I/O",
+          "url": "/d/observme-logs-llm/observme-logs-llm?${__url_time_range}"
         }
       ],
       "options": {
@@ -1437,7 +1492,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 turn latency trend with a compact sparkline. Open Trace Journey to find the slow stage for one request.",
+      "description": "p95 turn latency trend with a compact sparkline. Zero can mean idle or missing duration buckets, so confirm volume in Latency and export liveness when unexpected. The 30s/60s thresholds are tunable assumptions.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1521,7 +1576,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 LLM request latency trend. Open Models for provider/model comparison.",
+      "description": "p95 LLM request latency trend. Zero can mean idle or missing duration buckets; open Latency for volume context and Models for provider/model comparison. The 30s/60s thresholds are tunable assumptions.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1605,7 +1660,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 tool-call latency trend. Open Tools to find slow or failing tools.",
+      "description": "p95 tool-call latency trend. Zero can mean idle or missing duration buckets; open Latency for volume context and Tools for slow or failing tools. The 10s/30s thresholds are tunable assumptions.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1783,7 +1838,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 agent-tree depth. Yellow/red thresholds match the default excessive-depth alert guidance and should be tuned per deployment.",
+      "description": "p95 agent-tree depth. The red reference at 5 matches the tunable ObservMeExcessiveAgentTreeDepth default. Zero can mean idle or missing tree-depth buckets; use Agents for workload context.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1798,12 +1853,8 @@
                 "value": null
               },
               {
-                "color": "yellow",
-                "value": 5
-              },
-              {
                 "color": "red",
-                "value": 8
+                "value": 5
               }
             ]
           },
@@ -1867,7 +1918,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 fan-out per parent operation. The warning threshold starts at the documented runaway fan-out alert threshold of 20.",
+      "description": "p95 fan-out per parent operation. The red reference at 20 matches the tunable ObservMeRunawayAgentFanOut default. Zero can mean idle or missing fan-out buckets; use Agents for workload context.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1882,12 +1933,8 @@
                 "value": null
               },
               {
-                "color": "yellow",
-                "value": 20
-              },
-              {
                 "color": "red",
-                "value": 40
+                "value": 20
               }
             ]
           },
@@ -1951,7 +1998,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Current active agents by low-cardinality role and depth. Use this as a snapshot before opening the Agents dashboard for deeper breakdowns.",
+      "description": "Current active agents by bounded role and depth. No rows can mean healthy idle or an absent active-agent gauge; compare with the ungrouped Active agents chip and Export Health before treating it as healthy.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2042,7 +2089,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 7,
+        "h": 9,
         "w": 24,
         "x": 0,
         "y": 33
@@ -2054,7 +2101,7 @@
           "showLineNumbers": false,
           "showMiniMap": false
         },
-        "content": "# Drill-down dashboards\n\nUse this overview to decide where to go next, then open the focused dashboard with the same time range:\n\n- [Cost](/d/observme-cost/observme-cost?${__url_time_range}) for spend, burn rate, token mix, and cache context.\n- [Models](/d/observme-models/observme-models?${__url_time_range}) for provider/model request, error, latency, and stop-reason context.\n- [Latency](/d/observme-latency/observme-latency?${__url_time_range}) for p95 trends and slow-stage investigation.\n- [Tools](/d/observme-tools/observme-tools?${__url_time_range}) for tool volume, failures, and slow calls.\n- [Agents](/d/observme-agents/observme-agents?${__url_time_range}) for subagent spawns, fan-out, depth, orphan, wait, and join behavior.\n- [Trace Journey](/d/observme-trace-journey/observme-trace-journey?${__url_time_range}) for metric-to-log-to-trace workflow inspection.\n- [Errors](/d/observme-errors/observme-errors?${__url_time_range}) for current error-family pressure and logs.\n- [Export Health](/d/observme-export-health/observme-export-health?${__url_time_range}) for telemetry drops, redaction failures, export failures, and handler health.\n- [LLM Conversations](/d/observme-llm-conversations/observme-llm-conversations?${__url_time_range}) for redacted opt-in prompt, response, and thinking timelines.",
+        "content": "# Drill-down dashboards\n\nUse this overview to decide where to go next, then open the focused dashboard with the same time range:\n\n- [Cost](/d/observme-cost/observme-cost?${__url_time_range}) for spend, burn rate, token mix, and cache context.\n- [Models](/d/observme-models/observme-models?${__url_time_range}) for provider/model request, error, latency, and stop-reason context.\n- [Latency](/d/observme-latency/observme-latency?${__url_time_range}) for percentile trends, volume context, and slow-stage investigation.\n- [Tools](/d/observme-tools/observme-tools?${__url_time_range}) for tool volume, failures, latency, sizes, and offenders.\n- [Agents](/d/observme-agents/observme-agents?${__url_time_range}) for subagent reliability, fan-out, depth, orphan, wait, and join behavior.\n- [Agent Node Graphs](/d/observme-agent-node-graphs/observme-agent-node-graphs?${__url_time_range}) for bounded aggregate topology and health.\n- [Trace Journey](/d/observme-trace-journey/observme-trace-journey?${__url_time_range}) for per-execution metric-to-log-to-trace inspection.\n- [Errors](/d/observme-errors/observme-errors?${__url_time_range}) for error-family pressure and parsed failure context.\n- [Export Health](/d/observme-export-health/observme-export-health?${__url_time_range}) for telemetry liveness, drops, redaction, export failures, and handler health.\n- [SLO Health](/d/observme-slo-health/observme-slo-health?${__url_time_range}) for canonical scorecards, burn rates, and no-workload states.\n- [Logs and LLM I/O](/d/observme-logs-llm/observme-logs-llm?${__url_time_range}) for privacy-safe lifecycle logs and token/size trends.\n- [LLM Conversations](/d/observme-llm-conversations/observme-llm-conversations?${__url_time_range}) for redacted opt-in prompt, response, and thinking timelines.",
         "mode": "markdown"
       },
       "pluginVersion": "11.1.0",
@@ -2077,6 +2124,6 @@
   "timezone": "browser",
   "title": "ObservMe Overview",
   "uid": "observme-overview",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

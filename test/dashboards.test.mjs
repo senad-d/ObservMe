@@ -245,6 +245,12 @@ const llmTokenMetricNames = [
   "observme_llm_cache_write_tokens_total",
   "observme_llm_cache_write_1h_tokens_total",
 ];
+const costTokenMetricNames = [
+  "observme_llm_input_tokens_total",
+  "observme_llm_output_tokens_total",
+  "observme_llm_reasoning_tokens_total",
+  "observme_llm_cache_read_tokens_total",
+];
 const modelThinkingAnnotationDashboardFiles = [costDashboardFile, modelsDashboardFile, latencyDashboardFile];
 const latencyStageHistogramMetrics = [
   "observme_turn_duration_ms_bucket",
@@ -1136,7 +1142,12 @@ async function llmCostModelDashboardsExposeCostAndTokenInsights() {
   assertPanelExpressionsContainMetrics(costDashboardFile, budgetPanel, ["observme_llm_cost_usd_total"]);
   assertPanelExpressionsContainMetrics(costDashboardFile, forecastPanel, ["observme_llm_cost_usd_total"]);
   assert.match(expressionsForPanel(forecastPanel).join("\n"), /\$__range_s/u, `${costDashboardFile}: forecast must normalize by selected range length`);
-  assertPanelExpressionsContainMetrics(costDashboardFile, tokenTotalsPanel, llmTokenMetricNames);
+  assertPanelExpressionsContainMetrics(costDashboardFile, tokenTotalsPanel, costTokenMetricNames);
+  assert.deepEqual(
+    tokenTotalsPanel.targets.map(target => target.legendFormat),
+    ["input", "output", "reasoning", "cache read"],
+    `${costDashboardFile}: token totals must omit unsupported aggregate and cache-write bars`,
+  );
   assertPanelExpressionsContainMetrics(costDashboardFile, cacheRatioPanel, [
     "observme_llm_cache_read_tokens_total",
     "observme_llm_input_tokens_total",

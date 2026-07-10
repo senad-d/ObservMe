@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed the Cost dashboard token-total gauge by removing nonfunctional aggregate-total and cache-write bars while retaining reliable token types.
+- Simplified lineage environment-name validation with the concise equivalent word-character regex class.
 - Fixed tool-result size histogram recording at finalized tool completion and clarified that exact Bash exit-code panels cover interactive `!`/`!!` commands rather than assistant Bash tool calls.
 - Reconciled source-review remediation documentation and completed the full release validation matrix, including Docker-backed Collector integration.
 - Deduplicated OTLP trace, metric, and log base-endpoint path handling behind one shared slash-normalization helper.
@@ -9,6 +11,14 @@
 - Remediated the Tools dashboard with zero-safe per-tool reliability, bounded latency and size trends, selected-range bash counts, opt-in redacted failed-tool output, alert-aligned thresholds, and time-preserving drill-down links.
 - Remediated the Latency dashboard with selected-range p50/p95/p99 estimates, stage volume context, bounded offender views, sparse/no-data guidance, and time-preserving domain and trace links.
 - Remediated the Agents and Subagents dashboard with alert-aligned health ratios, emitted-label-safe PromQL, bounded selected-range offender tables, hierarchy rows, and deterministic Loki/Tempo drill-down context.
+- Remediated the Agent Node Graphs dashboard with Grafana-compatible node/edge field transformations, numeric aggregate stats, emitted-label-safe failure topology, stable node references, and healthy-idle guidance.
+- Remediated the Branches and Compactions dashboard with selected-range summaries, explicit estimate semantics, token-count quantiles, bounded change trends, deterministic Loki context tables, and Tempo/Trace Journey drill-downs.
+- Remediated the Export Health dashboard with distinct active/idle composite states, canonical SLO and burn-rate formulas, no-data-safe latency scorecards, selected-range lifecycle totals, and deterministic failure tables with Tempo links.
+- Remediated the SLO Health dashboard with canonical 30-day scorecards, denominator-gated 1h/30d burn rates, explicit no-workload states, and exact tunable alert-threshold guidance.
+- Remediated the Logs and LLM I/O dashboard with current Grafana schema, character-size and interval-token trends, fully cascading execution filters, bounded content-free lifecycle logs, and privacy-safe conversation routing.
+- Remediated the Trace Journey dashboard with selected-range zero-safe summaries, emitted-label-safe lineage queries, deterministic Loki handoff fields and Tempo links, cascading execution filters, and active/idle backend validation.
+- Remediated the Overview dashboard with backend-valid zero-safe health chips, canonical threshold references, explicit idle/missing-instrumentation guidance, scalar-safe cost burn, and complete time-preserving navigation.
+- Validated all Grafana dashboards for JSON formatting, panel geometry, navigation contracts, datasource provisioning, and active/idle Prometheus, Loki, and Tempo query execution.
 - Fixed live Grafana-stack validation by explicitly using its deterministic trusted-lineage fixture mode and supplying an ephemeral tenant hash salt for redacted LLM content.
 - Split Pi event handling into focused lifecycle, agent/turn, LLM, tool/bash, and session-event modules behind the compatible `registerHandlers()` facade.
 - Added safe tool completion and failure log correlation across session, workflow, agent, turn, tool, trace, and span identities without copying operational content.

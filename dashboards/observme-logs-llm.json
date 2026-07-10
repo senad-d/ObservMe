@@ -25,8 +25,8 @@
       "version": ""
     },
     {
-      "id": "stat",
-      "name": "Stat",
+      "id": "row",
+      "name": "Row",
       "type": "panel",
       "version": ""
     },
@@ -65,11 +65,24 @@
   "liveNow": false,
   "panels": [
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "Aggregate LLM telemetry",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "LLM prompt/response size histograms measured in characters and filterable by provider/model. These *_size_chars metrics work even when content capture is disabled and must not be interpreted as bytes.",
+      "description": "LLM prompt/response p95 size trends measured in characters and filterable by provider/model. These *_size_chars histograms work even when content capture is disabled and must not be interpreted as bytes. No data means matching histogram samples are absent, not that size is zero.",
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -88,22 +101,27 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
-        "y": 0
+        "y": 1
       },
       "id": 1,
       "options": {
         "legend": {
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -111,7 +129,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_prompt_size_chars_bucket{provider=~\"${provider:regex}\", model=~\"${model:regex}\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(observme_prompt_size_chars_bucket{provider=~\"${provider:regex}\", model=~\"${model:regex}\"}[$__rate_interval])))",
           "legendFormat": "prompt p95",
           "range": true,
           "refId": "A"
@@ -122,7 +140,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_response_size_chars_bucket{provider=~\"${provider:regex}\", model=~\"${model:regex}\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(observme_response_size_chars_bucket{provider=~\"${provider:regex}\", model=~\"${model:regex}\"}[$__rate_interval])))",
           "legendFormat": "response p95",
           "range": true,
           "refId": "B"
@@ -136,7 +154,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Interval token deltas by selected provider/model for input, output, total, reasoning, and cache token families.",
+      "description": "Interval token deltas by selected provider/model for input, output, total, reasoning, and cache token families. Each point uses increase(...[$__interval]); optional reasoning/cache families may show no data when a provider does not report them.",
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -155,22 +173,27 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 0
+        "w": 12,
+        "x": 12,
+        "y": 1
       },
       "id": 2,
       "options": {
         "legend": {
-          "displayMode": "list",
+          "calcs": [
+            "lastNotNull",
+            "sum"
+          ],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
+      "pluginVersion": "11.1.0",
       "targets": [
         {
           "datasource": {
@@ -254,17 +277,30 @@
       "type": "timeseries"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 101,
+      "panels": [],
+      "title": "Privacy-safe content routing",
+      "type": "row"
+    },
+    {
       "datasource": null,
-      "description": "Navigation panel for optional redacted LLM content. This dashboard keeps lifecycle metrics/logs here and sends prompt, response, and thinking bodies to the canonical conversation view.",
+      "description": "Visible privacy and empty-state guidance for optional redacted LLM content. This dashboard keeps aggregate telemetry and content-free lifecycle logs here, while prompt, response, and thinking bodies remain in the canonical conversation view.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 0
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 10
       },
       "id": 3,
       "links": [
@@ -280,7 +316,7 @@
           "showLineNumbers": false,
           "showMiniMap": false
         },
-        "content": "## Canonical LLM conversation drill-down\n\nPrompts, responses, and thinking are redacted, opt-in content. Open **ObservMe LLM Conversations** with the current session/workflow/agent/run/provider/model/content-kind filters for the canonical timeline. Empty content can mean capture is disabled or no matching events exist. Do not query by raw prompt, response, or thinking text.",
+        "content": "## Canonical LLM conversation drill-down\n\nPrompts, responses, and thinking are redacted, opt-in content. Open **ObservMe LLM Conversations** with the current session/workflow/agent/run/provider/model/content-kind filters for the canonical timeline. Empty content can mean capture is disabled or no matching events exist. Explicit unsafe capture can expose sensitive text when redaction is disabled. Do not query by raw prompt, response, or thinking text.",
         "mode": "markdown"
       },
       "pluginVersion": "11.1.0",
@@ -288,16 +324,29 @@
       "type": "text"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 102,
+      "panels": [],
+      "title": "Content-free lifecycle logs",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Recent LLM request lifecycle logs filtered by session, workflow, agent, run, provider, and model labels. Use the canonical LLM Conversations link for redacted prompt/response/thinking bodies and Tempo/Trace Journey for waterfalls.",
+      "description": "Newest-first LLM request lifecycle logs filtered by session, workflow, agent, run, provider, and model labels, capped at 500 lines. Structured labels remain available in log details. Use canonical LLM Conversations for redacted prompt/response/thinking bodies and Trace Journey for waterfalls.",
       "gridPos": {
-        "h": 9,
+        "h": 10,
         "w": 12,
         "x": 0,
-        "y": 8
+        "y": 17
       },
       "id": 4,
       "options": {
@@ -317,11 +366,14 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", event_name=~\"llm[.]request[.](started|completed|failed)\"}",
+          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", event_name=~\"llm[.]request[.](started|completed|failed)\", event_category!=\"llm_content\"}",
+          "maxLines": 500,
           "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
+      "pluginVersion": "11.1.0",
       "title": "LLM request logs",
       "type": "logs",
       "links": [
@@ -342,12 +394,12 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Non-content ObservMe logs for the selected session/workflow/agent/run filters. This panel excludes event_category values llm_content and tool_content so captured bodies stay in their canonical LLM Conversations and Tools panels; do not query by raw content.",
+      "description": "Newest-first non-content ObservMe logs for the selected session/workflow/agent/run filters, capped at 500 lines. Structured labels remain available in log details. Provider/model filters intentionally apply only to the LLM request panel because general lifecycle records may not carry those labels. This panel excludes llm_content and tool_content so captured bodies remain in canonical content views; do not query by raw content.",
       "gridPos": {
-        "h": 9,
+        "h": 10,
         "w": 12,
         "x": 12,
-        "y": 8
+        "y": 17
       },
       "id": 5,
       "options": {
@@ -368,10 +420,13 @@
           },
           "editorMode": "code",
           "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_category!~\"llm_content|tool_content\"}",
+          "maxLines": 500,
           "queryType": "range",
+          "range": true,
           "refId": "A"
         }
       ],
+      "pluginVersion": "11.1.0",
       "title": "Session logs",
       "type": "logs",
       "links": [
@@ -389,7 +444,7 @@
     }
   ],
   "refresh": "30s",
-  "schemaVersion": 38,
+  "schemaVersion": 39,
   "style": "dark",
   "tags": [
     "observme",
@@ -510,14 +565,14 @@
           "type": "loki",
           "uid": "loki"
         },
-        "definition": "label_values({service_name=\"observme-pi-extension\", event_name=~\"llm[.]request[.](started|completed|failed)|llm[.](prompt|response|thinking)[.]captured\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\"}, gen_ai_provider_name)",
+        "definition": "label_values({service_name=\"observme-pi-extension\", event_name=~\"llm[.]request[.](started|completed|failed)|llm[.](prompt|response|thinking)[.]captured\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\"}, gen_ai_provider_name)",
         "hide": 0,
         "includeAll": true,
         "label": "Provider",
         "multi": true,
         "name": "provider",
         "options": [],
-        "query": "label_values({service_name=\"observme-pi-extension\", event_name=~\"llm[.]request[.](started|completed|failed)|llm[.](prompt|response|thinking)[.]captured\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\"}, gen_ai_provider_name)",
+        "query": "label_values({service_name=\"observme-pi-extension\", event_name=~\"llm[.]request[.](started|completed|failed)|llm[.](prompt|response|thinking)[.]captured\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\"}, gen_ai_provider_name)",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -535,14 +590,14 @@
           "type": "loki",
           "uid": "loki"
         },
-        "definition": "label_values({service_name=\"observme-pi-extension\", event_name=~\"llm[.]request[.](started|completed|failed)|llm[.](prompt|response|thinking)[.]captured\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\"}, gen_ai_request_model)",
+        "definition": "label_values({service_name=\"observme-pi-extension\", event_name=~\"llm[.]request[.](started|completed|failed)|llm[.](prompt|response|thinking)[.]captured\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\"}, gen_ai_request_model)",
         "hide": 0,
         "includeAll": true,
         "label": "Model",
         "multi": true,
         "name": "model",
         "options": [],
-        "query": "label_values({service_name=\"observme-pi-extension\", event_name=~\"llm[.]request[.](started|completed|failed)|llm[.](prompt|response|thinking)[.]captured\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\"}, gen_ai_request_model)",
+        "query": "label_values({service_name=\"observme-pi-extension\", event_name=~\"llm[.]request[.](started|completed|failed)|llm[.](prompt|response|thinking)[.]captured\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\"}, gen_ai_request_model)",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -560,14 +615,14 @@
           "type": "loki",
           "uid": "loki"
         },
-        "definition": "label_values({service_name=\"observme-pi-extension\", event_name=~\"llm[.]request[.](started|completed|failed)|llm[.](prompt|response|thinking)[.]captured\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\"}, pi_llm_content_kind)",
+        "definition": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\"}, pi_llm_content_kind)",
         "hide": 0,
         "includeAll": true,
         "label": "Content kind",
         "multi": true,
         "name": "content_kind",
         "options": [],
-        "query": "label_values({service_name=\"observme-pi-extension\", event_name=~\"llm[.]request[.](started|completed|failed)|llm[.](prompt|response|thinking)[.]captured\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\"}, pi_llm_content_kind)",
+        "query": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\"}, pi_llm_content_kind)",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -584,6 +639,6 @@
   "timezone": "browser",
   "title": "ObservMe Logs and LLM I/O",
   "uid": "observme-logs-llm",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

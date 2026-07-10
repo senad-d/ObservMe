@@ -116,13 +116,14 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "30-day Observability Export SLO from observme-slos.yaml. A value of 1 means no local telemetry drops were observed; no workload in the window is treated as healthy idle.",
+      "description": "30-day Observability Export SLO from observme-slos.yaml (objective: >=99%). The scorecard is shown only when observed-event workload is positive; No data means no workload or missing telemetry and must be checked in Export Health rather than treated as healthy.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
           "mappings": [],
+          "noValue": "No workload / verify telemetry",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -131,12 +132,8 @@
                 "value": null
               },
               {
-                "color": "yellow",
-                "value": 0.99
-              },
-              {
                 "color": "green",
-                "value": 0.999
+                "value": 0.99
               }
             ]
           },
@@ -181,7 +178,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_max(clamp_min(1 - ((sum(increase(observme_telemetry_dropped_total[30d])) or vector(0)) / clamp_min((sum(increase(observme_events_observed_total[30d])) or vector(0)), 1)), 0), 1)",
+          "expr": "(clamp_max(clamp_min(1 - ((sum(rate(observme_telemetry_dropped_total[30d])) or vector(0)) / clamp_min(sum(rate(observme_events_observed_total[30d])), 1e-9)), 0), 1)) and on() (sum(rate(observme_events_observed_total[30d])) > 0)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -195,13 +192,14 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "30-day Agent Lineage SLO from observme-slos.yaml. Failures include missing-lineage spawn failures, orphan agents, and trace-context propagation failures over known subagent spawns.",
+      "description": "30-day Agent Lineage SLO from observme-slos.yaml (objective: >=99%). Failures include missing-lineage spawn failures, orphan agents, and trace-context propagation failures over known subagent spawns. No data means no known spawn workload or missing telemetry, not a healthy score.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
           "mappings": [],
+          "noValue": "No workload / verify telemetry",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -210,12 +208,8 @@
                 "value": null
               },
               {
-                "color": "yellow",
-                "value": 0.99
-              },
-              {
                 "color": "green",
-                "value": 0.999
+                "value": 0.99
               }
             ]
           },
@@ -265,7 +259,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_max(clamp_min(1 - (((sum(increase(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[30d])) or vector(0)) + (sum(increase(observme_orphan_agents_total[30d])) or vector(0)) + (sum(increase(observme_trace_context_propagation_failures_total[30d])) or vector(0))) / clamp_min((sum(increase(observme_subagents_spawned_total[30d])) or vector(0)), 1)), 0), 1)",
+          "expr": "(clamp_max(clamp_min(1 - (((sum(rate(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[30d])) or vector(0)) + (sum(rate(observme_orphan_agents_total[30d])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_subagents_spawned_total[30d])), 1e-9)), 0), 1)) and on() (sum(rate(observme_subagents_spawned_total[30d])) > 0)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -279,13 +273,14 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "30-day Workflow Completion SLO from observme-slos.yaml. Workflows satisfy the SLO when started workflows produce terminal completed or failed telemetry; no started workflows in the window is healthy idle.",
+      "description": "30-day Workflow Completion SLO from observme-slos.yaml (objective: >=99%). Started workflows satisfy the SLO when they produce terminal completed or failed telemetry. No data means no started-workflow workload or missing telemetry, not a healthy score.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
           "mappings": [],
+          "noValue": "No workload / verify telemetry",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -294,12 +289,8 @@
                 "value": null
               },
               {
-                "color": "yellow",
-                "value": 0.99
-              },
-              {
                 "color": "green",
-                "value": 0.999
+                "value": 0.99
               }
             ]
           },
@@ -344,7 +335,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_max(((((sum(increase(observme_workflows_completed_total[30d])) or vector(0)) + (sum(increase(observme_workflow_errors_total[30d])) or vector(0))) / clamp_min((sum(increase(observme_workflows_started_total[30d])) or vector(0)), 1)) + (((sum(increase(observme_workflows_started_total[30d])) or vector(0)) == bool 0)), 1)",
+          "expr": "(clamp_max(clamp_min(((sum(rate(observme_workflows_completed_total[30d])) or vector(0)) + (sum(rate(observme_workflow_errors_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_workflows_started_total[30d])), 1e-9), 0), 1)) and on() (sum(rate(observme_workflows_started_total[30d])) > 0)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -358,13 +349,14 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Instrumentation Overhead SLO scorecard: p99 handler duration over 30 days should stay under 10 ms.",
+      "description": "Instrumentation Overhead SLO from observme-slos.yaml: p99 handler duration over 30 days should stay under 10 ms. No data means no handler observations or missing telemetry and must not be interpreted as a zero-millisecond healthy score.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
           "mappings": [],
+          "noValue": "No workload / verify telemetry",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -419,7 +411,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(observme_handler_duration_ms_bucket[30d])) by (le)) or vector(0)",
+          "expr": "histogram_quantile(0.99, sum(rate(observme_handler_duration_ms_bucket[30d])) by (le))",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -429,7 +421,7 @@
       "type": "stat"
     },
     {
-      "description": "The Redaction SLO is a CI/test-time objective, not a runtime metric. Use the repository redaction tests for the 100% configured secret-pattern target; runtime redaction failures are still surfaced on Export Health and the Errors dashboard.",
+      "description": "The Redaction SLO is a CI/test-time objective, not a runtime metric. Use the repository redaction tests for the 100% configured secret-pattern target; runtime redaction failures are still surfaced on Export Health and Errors. Runtime scorecards intentionally show No data when their workload denominator is absent.",
       "gridPos": {
         "h": 5,
         "w": 4,
@@ -443,7 +435,7 @@
           "showLineNumbers": false,
           "showMiniMap": false
         },
-        "content": "### Redaction SLO (CI/test)\n\nTarget: **100%** of configured secret test patterns are redacted in CI.\n\nRuntime companion: open **Export Health** for `observme_redaction_failures_total` and failure logs.",
+        "content": "### Redaction SLO (CI/test)\n\nTarget: **100%** of configured secret test patterns are redacted in CI. This objective is not derived from production telemetry.\n\nRuntime companion: open **Export Health** for `observme_redaction_failures_total` and failure logs. Runtime **No data** means no denominator workload or missing telemetry; verify liveness before interpreting it.",
         "mode": "markdown"
       },
       "pluginVersion": "11.1.0",
@@ -468,13 +460,14 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Short-window SLO burn rates normalized by a 1% error budget. Values above 1 consume error budget faster than target; empty/idle runtime signals render as zero burn.",
+      "description": "Short-window SLO burn rates normalized by the canonical 1% error budget. Values above 1 consume budget faster than the 99% objectives. A missing workload denominator returns No data, not zero burn; verify telemetry in Export Health. Yellow 1x and red 2x are tunable dashboard guidance, not alert rules.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
           "mappings": [],
+          "noValue": "No workload / verify telemetry",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -528,7 +521,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "((sum(rate(observme_telemetry_dropped_total[1h])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[1h])) or vector(0)), 1e-9)) / 0.01",
+          "expr": "(((sum(rate(observme_telemetry_dropped_total[1h])) or vector(0)) / clamp_min(sum(rate(observme_events_observed_total[1h])), 1e-9)) / 0.01) and on() (sum(rate(observme_events_observed_total[1h])) > 0)",
           "instant": true,
           "legendFormat": "export drops",
           "range": false,
@@ -540,7 +533,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "((((sum(rate(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[1h])) or vector(0)) + (sum(rate(observme_orphan_agents_total[1h])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[1h])) or vector(0))) / clamp_min((sum(rate(observme_subagents_spawned_total[1h])) or vector(0)), 1e-9))) / 0.01",
+          "expr": "(((((sum(rate(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[1h])) or vector(0)) + (sum(rate(observme_orphan_agents_total[1h])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[1h])) or vector(0))) / clamp_min(sum(rate(observme_subagents_spawned_total[1h])), 1e-9)) / 0.01) and on() (sum(rate(observme_subagents_spawned_total[1h])) > 0))",
           "instant": true,
           "legendFormat": "agent lineage",
           "range": false,
@@ -552,7 +545,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_min(1 - ((((sum(rate(observme_workflows_completed_total[1h])) or vector(0)) + (sum(rate(observme_workflow_errors_total[1h])) or vector(0))) / clamp_min((sum(rate(observme_workflows_started_total[1h])) or vector(0)), 1e-9)), 0) / 0.01",
+          "expr": "((clamp_min(1 - clamp_max(((sum(rate(observme_workflows_completed_total[1h])) or vector(0)) + (sum(rate(observme_workflow_errors_total[1h])) or vector(0))) / clamp_min(sum(rate(observme_workflows_started_total[1h])), 1e-9), 1), 0) / 0.01) and on() (sum(rate(observme_workflows_started_total[1h])) > 0))",
           "instant": true,
           "legendFormat": "workflow terminal telemetry",
           "range": false,
@@ -564,7 +557,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[1h])) or vector(0)) / clamp_min((sum(rate(observme_handler_duration_ms_count[1h])) or vector(0)), 1e-9)), 0) / 0.01",
+          "expr": "((clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[1h])) or vector(0)) / clamp_min(sum(rate(observme_handler_duration_ms_count[1h])), 1e-9)), 0) / 0.01) and on() (sum(rate(observme_handler_duration_ms_count[1h])) > 0))",
           "instant": true,
           "legendFormat": "handler >10ms",
           "range": false,
@@ -579,13 +572,14 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Long-window SLO burn rates normalized by a 1% error budget. This pairs with the 1h view to distinguish brief spikes from sustained SLO risk.",
+      "description": "Long-window SLO burn rates normalized by the canonical 1% error budget. This pairs with the 1h view to distinguish brief spikes from sustained SLO risk. A missing workload denominator returns No data, not zero burn; yellow 1x and red 2x remain tunable dashboard guidance.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
           "mappings": [],
+          "noValue": "No workload / verify telemetry",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -639,7 +633,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "((sum(rate(observme_telemetry_dropped_total[30d])) or vector(0)) / clamp_min((sum(rate(observme_events_observed_total[30d])) or vector(0)), 1e-9)) / 0.01",
+          "expr": "(((sum(rate(observme_telemetry_dropped_total[30d])) or vector(0)) / clamp_min(sum(rate(observme_events_observed_total[30d])), 1e-9)) / 0.01) and on() (sum(rate(observme_events_observed_total[30d])) > 0)",
           "instant": true,
           "legendFormat": "export drops",
           "range": false,
@@ -651,7 +645,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "((((sum(rate(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[30d])) or vector(0)) + (sum(rate(observme_orphan_agents_total[30d])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[30d])) or vector(0))) / clamp_min((sum(rate(observme_subagents_spawned_total[30d])) or vector(0)), 1e-9))) / 0.01",
+          "expr": "(((((sum(rate(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[30d])) or vector(0)) + (sum(rate(observme_orphan_agents_total[30d])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_subagents_spawned_total[30d])), 1e-9)) / 0.01) and on() (sum(rate(observme_subagents_spawned_total[30d])) > 0))",
           "instant": true,
           "legendFormat": "agent lineage",
           "range": false,
@@ -663,7 +657,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_min(1 - ((((sum(rate(observme_workflows_completed_total[30d])) or vector(0)) + (sum(rate(observme_workflow_errors_total[30d])) or vector(0))) / clamp_min((sum(rate(observme_workflows_started_total[30d])) or vector(0)), 1e-9)), 0) / 0.01",
+          "expr": "((clamp_min(1 - clamp_max(((sum(rate(observme_workflows_completed_total[30d])) or vector(0)) + (sum(rate(observme_workflow_errors_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_workflows_started_total[30d])), 1e-9), 1), 0) / 0.01) and on() (sum(rate(observme_workflows_started_total[30d])) > 0))",
           "instant": true,
           "legendFormat": "workflow terminal telemetry",
           "range": false,
@@ -675,7 +669,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[30d])) or vector(0)) / clamp_min((sum(rate(observme_handler_duration_ms_count[30d])) or vector(0)), 1e-9)), 0) / 0.01",
+          "expr": "((clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[30d])) or vector(0)) / clamp_min(sum(rate(observme_handler_duration_ms_count[30d])), 1e-9)), 0) / 0.01) and on() (sum(rate(observme_handler_duration_ms_count[30d])) > 0))",
           "instant": true,
           "legendFormat": "handler >10ms",
           "range": false,
@@ -699,7 +693,7 @@
       "type": "row"
     },
     {
-      "description": "Alert thresholds mirrored from dashboards/observme-alerts.yaml so operators can discover when dashboard values become pages or warnings.",
+      "description": "Default alert expressions, windows, pending durations, and thresholds mirrored from dashboards/observme-alerts.yaml. Cost, fan-out, tree-depth, and active-agent values are tunable deployment guidance; edit the YAML rule rather than treating this panel as configuration.",
       "gridPos": {
         "h": 9,
         "w": 24,
@@ -713,7 +707,7 @@
           "showLineNumbers": false,
           "showMiniMap": false
         },
-        "content": "### Runtime alert threshold reference\n\n- **ObservMeHighLlmErrorRate:** LLM error ratio > **5%** for 10m.\n- **ObservMeHighToolFailureRate:** per-tool failure ratio > **10%** for 10m.\n- **ObservMeSubagentSpawnFailures:** any subagent spawn failures for 10m.\n- **ObservMeExportDropsDetected:** `sum(rate(observme_telemetry_dropped_total[5m])) > 0` for 5m.\n- **ObservMeCostSpike:** LLM spend increase > **$50** in 1h for 15m; tune per budget.\n- **ObservMeRedactionFailures:** `sum(rate(observme_redaction_failures_total[5m])) > 0` for 5m.\n- **ObservMeRunawayAgentFanOut:** p95 fan-out > **20** over 10m.\n- **ObservMeExcessiveAgentTreeDepth:** p95 tree depth > **5** over 10m.\n- **ObservMeOrphanAgentsDetected:** orphan-agent rate over 10m is warning.\n- **ObservMeTraceContextPropagationFailures:** propagation failures over 10m are warning.\n- **ObservMeActiveAgentsStuckHigh:** active agents > **100** for 30m; tune per deployment.",
+        "content": "### Runtime alert threshold reference (YAML defaults)\n\n- **ObservMeHighLlmErrorRate:** 10m LLM error ratio > **5%** for 10m.\n- **ObservMeHighToolFailureRate:** 10m per-tool failure ratio > **10%** for 10m.\n- **ObservMeSubagentSpawnFailures:** 10m spawn-failure rate > **0** for 10m.\n- **ObservMeExportDropsDetected:** 5m telemetry-drop rate > **0** for 5m.\n- **ObservMeCostSpike:** 1h LLM spend increase > **$50** for 15m; **tune per budget**.\n- **ObservMeRedactionFailures:** 5m redaction-failure rate > **0** for 5m; critical when capture is enabled.\n- **ObservMeRunawayAgentFanOut:** 10m p95 fan-out > **20** for 10m; **tune to normal orchestration load**.\n- **ObservMeExcessiveAgentTreeDepth:** 10m p95 tree depth > **5** for 10m; **tune to expected delegation depth**.\n- **ObservMeOrphanAgentsDetected:** 10m orphan-agent rate > **0** for 10m.\n- **ObservMeTraceContextPropagationFailures:** 10m propagation-failure rate > **0** for 10m.\n- **ObservMeActiveAgentsStuckHigh:** active agents > **100** for 30m; **tune per deployment**.",
         "mode": "markdown"
       },
       "pluginVersion": "11.1.0",
@@ -738,6 +732,6 @@
   "timezone": "browser",
   "title": "ObservMe SLO Health",
   "uid": "observme-slo-health",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }
