@@ -2,215 +2,51 @@
 
 ## Unreleased
 
-- Fixed the Cost dashboard trend to sum interval spend across every provider and model using a Prometheus-safe rate window, while displaying sub-cent values precisely.
-- Fixed the Cost dashboard token bars by summing each exporter series' selected-range maximum, preserving total and cache-write values from short-lived Pi sessions that counter increases can miss.
-- Simplified lineage environment-name validation with the concise equivalent word-character regex class.
-- Fixed tool-result size histogram recording at finalized tool completion and clarified that exact Bash exit-code panels cover interactive `!`/`!!` commands rather than assistant Bash tool calls.
-- Reconciled source-review remediation documentation and completed the full release validation matrix, including Docker-backed Collector integration.
-- Deduplicated OTLP trace, metric, and log base-endpoint path handling behind one shared slash-normalization helper.
-- Remediated the Models dashboard with zero-safe provider/model reliability, bounded traffic and latency context, selected-range stop reasons, corrected cost efficiency, and time-preserving drill-down links.
-- Remediated the Tools dashboard with zero-safe per-tool reliability, bounded latency and size trends, selected-range bash counts, opt-in redacted failed-tool output, alert-aligned thresholds, and time-preserving drill-down links.
-- Remediated the Latency dashboard with selected-range p50/p95/p99 estimates, stage volume context, bounded offender views, sparse/no-data guidance, and time-preserving domain and trace links.
-- Remediated the Agents and Subagents dashboard with alert-aligned health ratios, emitted-label-safe PromQL, bounded selected-range offender tables, hierarchy rows, and deterministic Loki/Tempo drill-down context.
-- Remediated the Agent Node Graphs dashboard with Grafana-compatible node/edge field transformations, numeric aggregate stats, emitted-label-safe failure topology, stable node references, and healthy-idle guidance.
-- Remediated the Branches and Compactions dashboard with selected-range summaries, explicit estimate semantics, token-count quantiles, bounded change trends, deterministic Loki context tables, and Tempo/Trace Journey drill-downs.
-- Remediated the Export Health dashboard with distinct active/idle composite states, canonical SLO and burn-rate formulas, no-data-safe latency scorecards, selected-range lifecycle totals, and deterministic failure tables with Tempo links.
-- Remediated the SLO Health dashboard with canonical 30-day scorecards, denominator-gated 1h/30d burn rates, explicit no-workload states, and exact tunable alert-threshold guidance.
-- Remediated the Logs and LLM I/O dashboard with current Grafana schema, character-size and interval-token trends, fully cascading execution filters, bounded content-free lifecycle logs, and privacy-safe conversation routing.
-- Remediated the Trace Journey dashboard with selected-range zero-safe summaries, emitted-label-safe lineage queries, deterministic Loki handoff fields and Tempo links, cascading execution filters, and active/idle backend validation.
-- Remediated the Overview dashboard with backend-valid zero-safe health chips, canonical threshold references, explicit idle/missing-instrumentation guidance, scalar-safe cost burn, and complete time-preserving navigation.
-- Validated all Grafana dashboards for JSON formatting, panel geometry, navigation contracts, datasource provisioning, and active/idle Prometheus, Loki, and Tempo query execution.
-- Fixed live Grafana-stack validation by explicitly using its deterministic trusted-lineage fixture mode and supplying an ephemeral tenant hash salt for redacted LLM content.
-- Split Pi event handling into focused lifecycle, agent/turn, LLM, tool/bash, and session-event modules behind the compatible `registerHandlers()` facade.
-- Added safe tool completion and failure log correlation across session, workflow, agent, turn, tool, trace, and span identities without copying operational content.
-- Correlated user-bash pre-execution and completion telemetry with bounded single-flight state so duration reflects real execution time and ambiguous or incomplete operations fail closed.
-- Activated agent-run error, root workflow duration, subagent spawn duration, and deduplicated child failure/recovery metrics with bounded labels and state.
-- Added bounded, secret-safe config rejection diagnostics across structured telemetry, Pi UI fallback, and `/obs status` without blocking session startup.
-- Continued validated launcher-propagated W3C parent traces in child `pi.session` spans, with sanitized fail-open lineage rejection and validated span-link/log fallbacks.
-- Constrained subagent spawn and wait/join reasons to documented bounded enums across spans, logs, runtime hints, and metric labels.
-- Replaced config environment and privacy path-mode literal unions with Pi's Google-compatible `StringEnum` schemas and covered accepted and rejected values.
-- Centralized remaining telemetry attributes and log events in semantic-convention modules and added a source contract guard against inline telemetry names.
-- Bounded per-run turn sequence state and cleaned evicted agent-tree child references while preserving historical fan-out totals.
-- Made trusted project config bootstrap use Pi's distribution config-directory constant and per-file mutation queue, including concurrent creation coverage.
-- Hardened path redaction across POSIX, Windows drive, and UNC absolute paths while preserving normal URLs and slash-separated prose.
-- Added a source-review remediation spec covering privacy, bounded state and labels, cross-process trace continuation, missing telemetry, correlated logs, and maintainability fixes.
-- Cleaned up the README quick start, installation guidance, configuration references, and documentation index.
-- Fixed the CI checkout action reference to use the major-version tag expected by the validation contract.
-- Hid time and unique-label columns in the LLM Conversations log panels so message bodies are the default focus.
-- Updated the LLM Conversations dashboard log panels to render only captured message bodies by default while preserving expanded log details for the full structured payload.
-- Updated dashboard documentation, README guidance, and multi-agent navigation notes for the improved dashboard map, drill-down workflows, variables, and zero-state semantics.
-- Improved LLM conversation and log drill-down dashboards with session/workflow/agent/run/provider/model/content-kind filters, canonical redacted content navigation, and Tempo trace links.
-- Added an ObservMe SLO Health dashboard and improved Export Health with SLO scorecards, 1h/30d burn rates, composite export health inputs, handler p99 latency, and alert-threshold references.
-- Improved latency, tool, error, and LLM log dashboards with percentile/volume tables, tool failure severity rankings, parsed failure log tables with trace links, and character-size units.
-- Improved LLM cost/model dashboards with burn-rate and budget forecast chips, corrected cost-efficiency denominators, expanded token/cache panels, stop-reason totals, and model/thinking-change annotations.
-- Improved Agents, Trace Journey, and Agent Node Graph dashboards with lineage ratios, fan-out/depth alert references, top offender tables, handoff trace links, and red health-count nodes for spawn/lineage issues.
-- Reworked the Overview dashboard into an operator landing page with health/SLO chips, compact workload/cost/latency/agent-lineage rows, and time-preserving drill-down links.
-- Improved the Trace Journey dashboard with failed-workflow stats, a workflow completion ratio, logs-backed journey events, and session/agent-preserving trace/log links.
-- Documented shared Grafana dashboard UX conventions for standard variables, row names, drill-down links, thresholds, and healthy empty states.
-- Added dashboard structural validation for all provisioned JSON dashboards and fixed the Trace Journey active-agents stat target/title.
-- Added a dashboard insight-improvement spec covering panel-by-panel Grafana review, multi-agent/subagent drill-downs, SLO visibility, and metric/log/trace correlation improvements.
-- Remediated the latest SonarQube findings by replacing Unicode-insensitive character helpers, removing backtracking-prone regexes, simplifying default assignment, and preserving diagnostic URL credential redaction without regex backtracking.
-- Restored LLM conversation capture by letting trusted project `.env` hash salts drive redaction, surfacing content-capture failure reasons, and extending the LLM Conversations dashboard default range.
-- Completed SonarQube batch 4 remediation by handling ignored fallbacks, simplifying bounded regex and default-assignment findings, using precise type-check errors, and reducing query parsing complexity.
-- Completed SonarQube batch 3 remediation by handling timestamp/stringification fallbacks, replacing literal replacements and default ternaries, simplifying backtracking-prone formatters, and tightening config/query helpers.
-- Completed SonarQube batch 2 remediation by handling Grafana parser failures, simplifying handler/status/config/Grafana/agent/backfill code paths, replacing backtracking-prone regexes, and removing redundant ternaries and array operations.
-- Remediated the first twenty SonarQube maintainability findings by handling fallback failures explicitly, reducing parser/redaction complexity, simplifying regexes and default assignments, and removing duplicated/stringification-prone handler code.
-- Generated SonarQube-readable LCOV output during coverage runs so scans can import test coverage from `coverage/lcov.info`.
-- Fixed bounded OTEL flush/shutdown timeouts so awaited lifecycle operations resolve under Node's test runner instead of using unref'ed timers that let GitHub Actions cancel pending tests.
-- Kept Docker-backed integration tests out of default coverage generation unless `OBSERVME_INCLUDE_INTEGRATION_COVERAGE=1` is set, making GitHub Actions coverage deterministic and offline by default.
-- Fixed npm dependency installation by pinning TypeScript to a version supported by the current `typescript-eslint` peer range.
-- Added focused coverage for missing or partial Pi runtime capabilities across lifecycle bootstrap, status/root commands, and backfill fallbacks.
-- Recorded final-pass package, Pi runtime, Collector, Grafana-stack, and operator Grafana validation outcomes, including the current live-stack Tempo LLM content blocker and cleanup evidence.
-- Documented and tested trusted-project config bootstrap behavior across Pi startup, reload, new-session, resume, and fork lifecycles, including untrusted and missing-project-context skips.
-- Documented deferred integration and Pi lifecycle verification prerequisites, CI safety, side effects, and cleanup paths for smoke, Docker, packaged-install, and Grafana validation commands.
-- Centralized shared `/obs` command config loading, notification dispatch, timeout normalization, and trace/link diagnostic formatting.
-- Added config contract drift tests that keep ObservMe defaults aligned with the exported runtime schema and documented defaultless optional fields.
-- Constrained trusted-project ObservMe config and `.env` path resolution to the active project root, rejecting traversal or absolute config-directory inputs with sanitized diagnostics.
-- Enforced runtime ObservMe config schema validation after layered merges so malformed global or trusted-project config falls back to sanitized safe defaults before semantic validators run.
-- Added a post-remediation review-closure validation matrix that maps every review task to focused checks, smoke commands, integration categories, or documented blockers.
-- Extended the Pi RPC runtime smoke with credential-free sanitized event-shape coverage for model/thinking changes, agent turns, built-in tool lifecycle events, `message_end`, and documented `user_bash` interactive-only validation.
-- Bounded `/obs agents` recent-child rendering for large agent trees while preserving latest-child, wait/join, aggregate, and drill-down summaries.
-- Made `/obs backfill` export operations use a per-run abort signal with timeout cleanup, bounded OTEL flush/shutdown helpers, and partial failure summaries.
-- Serialized ObservMe session start, shutdown, reload, and replacement lifecycle transitions through one queue with delayed-start regression coverage.
-- Added fallback-path coverage for partial/out-of-order Pi turn and tool events, including drops for missing turn/tool state instead of silent synthetic success telemetry.
-- Aligned npm package contents with README-promised dashboards, examples, images, and production docs while keeping local-stack secrets/state and planning specs repository-only.
-- Made lifecycle smoke validation offline by disabling telemetry exporters through an explicit test config and documenting ignored coverage artifacts.
-- Repaired README validation-command drift by adding the documented `lint:fix` script, removing the stale TUI artifact script, and testing README/package script consistency.
-- Consolidated sensitive query/session-id rejection and diagnostic redaction through a shared corpus used by Grafana, Prometheus, Loki, Tempo, and `/obs` commands.
-- Centralized content-capture policy so live telemetry and `/obs backfill` consistently omit disabled content, redact enabled content, drop redaction failures, or export raw truncated content only under explicit unsafe capture.
-- Sanitized health, Grafana transport, trusted-project bootstrap, and OTEL shutdown diagnostics before rendering or logging failure details.
-- Cleared stale ObservMe and W3C propagation variables before building subagent environments so child runs never inherit unrelated agent or trace context.
-- Stopped treating Pi `user_bash` pre-execution events as completed bash runs; completed bash spans now require a real result event.
-- Rejected production HTTP transport for OTLP signal-specific endpoints and Grafana query URLs unless insecure transport is explicitly allowed.
-- Salted telemetry, redaction, and subagent command hashes with the configured tenant salt and made missing hash salt fail closed without exporting raw values.
-- Refreshed the review-validation checklist to reference the current review spec files and final-pass validation/audit commands.
-- Extended the Pi RPC runtime smoke to verify extension reload and `new_session` replacement keep ObservMe `/obs status` and `/obs session` usable with fresh runtime state.
-- Hardened parallel Pi tool lifecycle handling so ambiguous missing tool IDs are dropped with diagnostics instead of mutating sibling spans.
-- Consolidated trusted-project ObservMe config bootstrap handling behind one shared startup helper used by Pi handlers and bootstrap registration.
-- Added root `/obs` dispatch regression coverage for whitespace, mixed-case subcommands, and quoted-like argument tokenization.
-- Tightened test TypeScript compilation to inherit strict source checks and added explicit shared fake/fixture types.
-- Bounded `/obs backfill --since` duration parsing to a maximum 30-day window before scanning current-session entries.
-- Hardened CI dependency installation by switching pull-request validation to `npm ci --ignore-scripts` before `npm run validate`.
-- Changed the auto-created trusted-project `.pi/observme.yaml` starter to keep content capture disabled with redaction enabled by default, documenting explicit local-debug opt-in edits.
-- Added an ObservMe Agent Node Graphs dashboard for visualizing aggregate Pi root, agent-role, spawn-reason, and subagent-depth connections with Grafana-compatible Node Graph nodes/edges frames.
-- Fixed prompt capture for OpenAI Responses-style `before_provider_request` payloads that use `input`, restoring data for the LLM Conversations dashboard Prompts panel.
-- Added final duplicate `session_start` lifecycle regression coverage for previous-session cleanup and runtime state replacement.
-- Added backend schema validation for Prometheus and Loki query success payloads so malformed responses produce sanitized diagnostics instead of no-data hints.
-- Added an actionable partial-initialization diagnostic when `/obs` command registration fails after Pi handler registration.
-- Updated unsafe-capture warnings to distinguish redacted export from explicitly unredacted sensitive-content export.
-- Added ObservMe/Pi event API compatibility validation before lifecycle handler registration, with focused invalid/valid registration tests.
-- Refactored the root `/obs` command to use a typed subcommand registry that derives usage, completions, option selection, and dispatch from one source of truth.
-- Fixed session-count dashboard PromQL and Prometheus metric stream identity so fresh and concurrent running sessions are counted instead of rendering as zero/no data; the Trace Journey session stat now uses the active runtime gauge.
-- Updated the ObservMe Export Health dashboard with liveness/session panels, zero-state PromQL fallbacks, clearer active-span naming, and dashboard tests for healthy quiet ranges.
-- Added deterministic Export Health signal tests covering session liveness, handler observation/duration, active spans, telemetry drops, redaction failures, export failures, and zero-state dashboard queries.
-- Documented the Export Health manual validation flow for healthy zero-state panels, induced failure panels, failure log rows, and `/obs status`/`/obs health` checks.
-- Added telemetry-drop and redaction-failure helpers so drop/failure counters emit matching `telemetry.dropped` and `redaction.failed` structured logs without raw content.
-- Added active span accounting for `observme_active_spans` across session, handler child, subagent, eviction, and shutdown lifecycles.
-- Added handler self-observability instrumentation so registered Pi handlers emit `observme_events_observed_total` and `observme_handler_duration_ms` with bounded labels.
-- Documented the Export Health telemetry contract, including healthy zero-state behavior, dashboard-driving signals, low-cardinality labels, and induced-failure expectations.
-- Added a task spec for fixing the ObservMe Export Health dashboard by emitting missing self-observability metrics/logs and improving healthy zero-state panels.
-- Updated the README Quick Start flow with an end-to-end local observability checklist (stack start, extension install, env setup, connectivity checks, task run, dashboard validation).
+### Added
+
+- Expanded the Grafana suite with SLO Health, Trace Journey, Agent Node Graphs, and LLM Conversations dashboards, plus richer multi-agent, cost, latency, tool, model, log, and export-health views.
+- Added correlated, content-safe telemetry for tool results, agent runs, workflows, subagent lifecycle events, interactive Bash executions, and configuration failures.
+- Added W3C trace continuation for launcher-propagated parent contexts, with sanitized lineage validation and fail-safe span-link/log fallbacks.
+- Added deterministic Pi runtime, Collector, Grafana-stack, dashboard, lifecycle, packaging, and configuration validation coverage.
+- Added SonarQube-compatible LCOV output and focused tests for partial Pi runtimes, lifecycle races, fallback paths, privacy controls, and telemetry contracts.
+
+### Changed
+
+- Split Pi event handling into focused lifecycle, agent/turn, LLM, tool/Bash, and session modules while preserving the `registerHandlers()` facade.
+- Centralized telemetry conventions, content-capture policy, sensitive-value rejection, diagnostic sanitization, Grafana transport, `/obs` command plumbing, and trusted-project configuration bootstrap.
+- Improved all dashboards with emitted-label-safe queries, selected-range calculations, zero/no-data states, bounded tables, canonical SLO formulas, and time-preserving Loki/Tempo drill-downs.
+- Updated the Cost dashboard to aggregate spend across providers and models, preserve token totals from short-lived sessions, and display sub-cent values accurately.
+- Updated README, dashboard, integration, and operator documentation to match the current command surface, package contents, privacy defaults, and validation workflows.
+- Made strict TypeScript checks, offline coverage, deterministic fixtures, and Docker-backed integration validation more reliable in CI.
+
+### Fixed
+
+- Fixed session, workflow, agent, turn, LLM, tool, Bash, histogram, active-span, failure/recovery, and session-count telemetry accuracy.
+- Fixed lifecycle serialization, duplicate session replacement, bounded shutdown/flush behavior, backfill cancellation, parallel tool correlation, and bounded agent-tree state cleanup.
+- Hardened configuration validation, project-root path confinement, endpoint security, custom redaction patterns, tenant-salted hashing, and environment propagation.
+- Restored trusted-project redacted LLM capture and OpenAI Responses-style prompt capture while keeping capture disabled and redaction enabled by default.
+- Remediated SonarQube maintainability and security findings across parsing, regexes, fallback handling, diagnostics, and default assignment.
+- Fixed npm/CI dependency installation, package contents, README command drift, Grafana/Loki schema handling, and dashboard provisioning/query validation.
 
 ## 0.1.0 - 2026-07-07
 
-- Added a documentation-only agent/subagent orchestration observability requirements guide covering tmux-managed child Pi processes, child ObservMe loading, lineage propagation, dashboard metric contracts, management commands, and current implementation gaps.
-- Added automatic trusted-project `.pi/observme.yaml` creation on extension startup, using the local starter config and documenting where to edit custom setup values.
-- Added an ObservMe Trace Journey dashboard that combines Prometheus journey rates/stage latencies, Loki execution timelines and handoff logs, and Tempo TraceQL drill-downs for visualizing how requests travel through agents, LLM calls, tools, bash executions, and subagents.
-- Changed the Pi TUI ObservMe status text from `ObservMe loaded` to the compact `🧿` indicator.
-- Capped custom Node Grafana transport response bodies and return sanitized actionable diagnostics when a backend response is oversized.
-- Hardened custom redaction regex handling with count/length bounds, unsafe-pattern rejection, fail-closed redaction behavior, and validation coverage.
-- Fixed duplicate Pi `session_start` handling so an active telemetry session is flushed and shut down before replacement, with lifecycle regression coverage.
-- Added a dedicated ObservMe LLM Conversations dashboard with a redacted opt-in chat timeline, separate prompt/response/thinking log panels, and Agent ID / Agent run ID filters.
-- Added opt-in Grafana visibility for redacted LLM prompt, response, and thinking content in Tempo spans and Loki log bodies when the existing capture/redaction/unsafe-capture flags are enabled.
-- Isolated Grafana-stack integration test Docker networks so live local stacks do not steal Tempo/Loki/Collector service discovery from test stacks.
-- Standardized `/obs` command tokenization, completions, usage rendering, and invalid-option handling with shared argument helpers plus regression coverage for unknown subcommands, missing values, repeated options, and extra arguments.
-- Added structure-level tests for extracted Pi handler internals, covering LLM parsing, tool and bash normalization, branch/compaction attributes, redaction capture, and low-cardinality metric labels.
-- Split Pi handler parsing, attribute building, span bookkeeping, and redaction helpers out of `src/pi/handlers.ts` into a focused internal handler module while preserving lifecycle behavior and telemetry contracts.
-- Added explicit secret-hygiene coverage for trusted project `.env` handling, including stricter package-content checks and sanitized `/obs status` and `/obs health` diagnostics.
-- Added abort-aware, timeout-bounded `/obs backfill` export execution with cancellation-safe partial summaries, exporter shutdown attempts, and secret-safe exporter error reporting.
-- Added explicit TypeScript validation for `test/**/*.ts` with `tsconfig.test.json`, the `typecheck:test` script, and lint-pipeline coverage; tightened shared test fakes so test fixtures type-check against source APIs.
-- Documented final review validation with explicit source/test TypeScript checks, current test-count recording, production audit, package check, and active `*-2.md` review-spec ordering.
-- Fixed ObservMe latency/size histogram emission for turn, LLM request, tool, bash, agent-run, prompt-size, and response-size metrics; improved Grafana dashboard reliability by switching short fixed PromQL rate windows to `$__rate_interval`; added an ObservMe Logs and LLM I/O dashboard for session logs, LLM request logs, content-capture audit events, token totals, and prompt/response size panels; and wired local-stack Prometheus alert-rule loading plus Loki ruler API support.
-- Added a root `.env.example` and trusted-project `.env` loading for extension `OBSERVME_*` settings, with system environment variables taking precedence and Grafana datasource UID env overrides documented/tested.
-- Added a deterministic, secret-safe Grafana + `/obs` validation flow with a documented checklist and `npm run validate:grafana-obs` script that classifies ingestion, label, Grafana auth/query, TLS/DNS, Pi command, and session-state failures.
-- Added secret-safe `/obs status` config diagnostics for trusted, untrusted, and missing project config contexts, including effective config source, Grafana URL, and query-readiness reporting.
-- Documented and tested active-session trace visibility: `/obs trace` now explains that ended child spans can appear before the long-lived root `pi.session` span, which is exported after `session_shutdown`.
-- Added a deterministic active-session to post-shutdown lifecycle flow covering `/obs session`, `/obs trace`, exporter status, LLM/tool/bash/subagent telemetry, root-span flush behavior, and secret-safe output.
-- Added a real Pi RPC runtime smoke test that loads the local extension, discovers `/obs`, runs `/obs status`, `/obs session`, and `/obs health`, and verifies trusted project config plus authenticated Grafana health probes against a local deterministic backend.
-- Extended the Pi RPC runtime smoke test with a bounded `/obs cost` timeout path against a delayed local Grafana backend, proving query-backed commands return clear timeout diagnostics without external credentials.
-- Added live Grafana-stack `/obs` command integration coverage for authenticated datasource queries and status, health, cost, tools, errors, logs, agents, trace, and link smoke paths.
-- Added concise, secret-safe `/obs` query-command diagnostics with subsystem-specific recovery hints for Grafana auth, Prometheus, Loki, Tempo, session, timeout, empty-result, and health failures.
-- Documented and tested the supported local-stack `/obs` query profile for nginx HTTPS Grafana at `https://observability.local`, including token/Basic auth setup, datasource UIDs, TLS/IPv4 settings, and Loki label expectations.
-- Consolidated Grafana URL construction, datasource proxy paths, auth headers, timeout handling, local transport selection, and secret-safe HTTP/fetch error normalization behind one shared query transport used by `/obs health`, Prometheus, Loki, Tempo, and Grafana health clients.
-- Added Grafana query readiness preflight so query-backed `/obs` commands and `/obs health` fail fast on unresolved tokens, missing auth, invalid Grafana URLs, or missing datasource UIDs without exposing credential values.
-- Added resilient Grafana query transport/auth handling for `/obs` commands: bearer tokens, local Basic auth fallback, local self-signed TLS and IPv4 transport options, and secret-safe 401/403/TLS/DNS/timeout diagnostics.
-- Aligned Loki label provisioning, `/obs errors` and `/obs logs` LogQL, and Loki-backed dashboard selectors with the local Collector output, including `service.name`, `event_name`, `event_category`, and session labels.
-- Completed the ObservMe MVP scope from `ObservMe-Production-Docs/00-README.md`: extension load and health checks, session/workflow/agent/turn/LLM/tool/bash/subagent/compaction/branch/model telemetry, OTLP trace/metric/log exporters, privacy-preserving redaction and capture controls, bounded queues/timeouts, Grafana dashboards, Collector configs, tests, and the required `/obs` commands.
-- Bootstrapped the ObservMe Pi extension repository from the pi-extension-template.
-- Applied ObservMe project identity: package `@senad-d/observme`, repository `senad-d/ObservMe`, MIT license.
-- Added preparation specs under `specs/`: project definition brief, architecture spec, guidelines spec, and task spec.
-- Audited `specs/spec-tasks.md` against every file in `ObservMe-Production-Docs/` and closed gaps: added tasks for the missing `npm run validate` scripts, alert rules/SLO definitions, compatibility matrix, Collector/Grafana-stack integration and chaos/performance tests, and startup-recovery/replay semantics; added the missing `observme.tenant.id` resource attribute and the unsafe-capture warning requirement; flagged an unresolved doc conflict between the template's source-shipping convention and the production blueprint's `dist/observme.js` build-artifact expectation for the implementation session to resolve.
-- Restructured `specs/spec-tasks.md` from 18 coarse tasks into 58 session-sized tasks (one file, or one tightly coupled file pair, per task), so each task fits a single focused implementation session instead of bundling multiple unrelated files or Pi event families into one checkbox.
-- Normalized `specs/spec-tasks.md` to the project task format: each task now has a `### <number>. <task_name>` heading, an unchecked checkbox, and explicit `Why`, `How`, `Where`, and `Acceptance criteria` sections.
-- Reconciled spec/docs drift found during review: aligned branch/compaction summary attribute names, added missing branch lineage attributes, added `observme.tenant.id` and replay/eviction/truncation operational attributes to semantic conventions, completed query config defaults, and corrected the model/thinking-change task references.
-- Added multi-agent workflow/agent-tree observability to the production docs and specs: `pi.workflow.*` correlation, `pi.agent.wait`/`pi.agent.join` spans, fan-out/depth/width/active-agent/orphan/trace-propagation metrics, workflow alerts/SLOs, `/obs agents` enhancements, config/env propagation, and implementation-task acceptance criteria.
-- Retained `ObservMe-Production-Docs/` (production design/reference doc set) and `observability-stack/` (reference Grafana/Tempo/Loki/Prometheus/Collector Docker Compose stack) as companion assets.
-- Added the missing validation-pipeline scripts for coverage, ObservMe discoverability, packaged install, handler execution, and Pi lifecycle smoke checks so `npm run validate` can run end to end from the bootstrapped template.
-- Added the initial ObservMe configuration schema and documented safe defaults, including capture-disabled privacy defaults and workflow/agent propagation settings.
-- Added layered ObservMe config loading with defaults/global/trusted-project/environment/runtime precedence and factory-safe vs session-scoped loading boundaries.
-- Added ObservMe config validation with safe-default fallback, rejection logging, and session-start unsafe-capture warnings.
-- Added semantic-convention attribute constants for documented resource, span, and log attribute keys.
-- Added semantic-convention span name constants for the canonical ObservMe trace shape.
-- Added semantic-convention metric and log-event constants for ObservMe-owned metrics, optional official GenAI metrics, and canonical log events.
-- Added built-in privacy secret-detection patterns with structured match metadata for redaction replacements.
-- Added the privacy redaction pipeline with ordered safety stages, path scrubbing modes, custom redactors, truncation, hashing, and safe failure drops.
-- Added salted hashing and content truncation utilities with documented truncation metadata.
-- Added a pure generic bounded-map utility for bounded registries with oldest-entry eviction callbacks.
-- Added workflow and agent-lineage context helpers plus bounded agent-tree tracking for generated/trusted lineage, child status, fan-out, depth, width, and orphan state.
-- Added session-scoped OTEL SDK lifecycle controllers and bounded flush/shutdown helpers that do not start exporters, timers, or sockets on import.
-- Added session-scoped OTLP trace exporter wiring with documented endpoint derivation, batch defaults, tracer-provider startup, and disabled-trace no-op behavior.
-- Added session-scoped OTLP metric exporter wiring with documented endpoint derivation, periodic reader defaults, meter-provider startup, and pre-start no-op instruments.
-- Added session-scoped OTLP log exporter wiring with documented endpoint derivation, batch defaults, logger-provider startup, and disabled-log no-op emission.
-- Wired ObservMe session lifecycle handlers for session-scoped OTEL startup/shutdown, the root `pi.session` span, lifecycle logs, active workflow/agent metrics, safe handler error capture, and bounded flush/shutdown.
-- Added agent-run and turn event handlers with bounded span registries, canonical `pi.agent.run` → `pi.turn` parenting, derived turn IDs, and low-cardinality counters.
-- Added startup recovery semantics for resumed sessions: header-only session reads, trusted minimal correlation recovery, default-disabled replay, and explicit `observme.replayed=true` startup replay markers.
-- Added LLM request/response/message-end handlers with `pi.llm.request` spans, finalized usage/cost counters, low-cardinality metric labels, and optional redacted content capture.
-- Added tool-call handlers for `pi.tool.call` spans, success/error status, low-cardinality tool counters, and optional redacted argument/result capture.
-- Added bash execution handlers for `pi.bash.execution` spans, exit/cancel/truncation attributes, bash counters, and optional redacted command/output capture.
-- Added subagent spawn propagation helpers with W3C trace context and ObservMe lineage environment injection, fallback/orphan telemetry, wait/join spans, and agent-tree metrics.
-- Wired model and thinking-level change handlers with structured change logs, current-state session attributes, and low-cardinality change counters.
-- Wired compaction telemetry for `session_compact` with `pi.compaction` spans, structured logs, compaction counters, and tokens-before histogram recording.
-- Wired branch telemetry for `session_tree` with `pi.branch` spans, structured logs, branch counters, hashed path attributes, and `summaryEntry` lineage fields.
-- Added the read-only `/obs status` command with local enablement, OTLP endpoint, signal, capture, queue-drop, and last-export-error reporting.
-- Added the `/obs health` command with bounded Collector, Grafana, and Grafana datasource reachability checks plus concise failure reporting.
-- Added the read-only `/obs session` command with in-memory current-session turn, LLM-call, tool-call, cost, and trace-link reporting.
-- Added a Grafana query client with bounded Grafana/datasource health checks, safe trace-link construction, and telemetry-to-query dependency-direction tests.
-- Added a Tempo query client with safe generated-ID/hash attribute search, Grafana datasource-proxy requests, timeout handling, and result capping.
-- Added a Loki query client with Grafana datasource-proxy LogQL execution, dotted-attribute normalization for Loki, timeout handling, and result capping.
-- Added a Prometheus query client with Grafana datasource-proxy PromQL execution, timeout handling, result capping, and high-cardinality metric-label rejection.
-- Added the `/obs cost` command with safe model/provider aggregate PromQL, configured timeout/result-limit handling through the Prometheus client, and default rejection of session-scoped metric cost queries.
-- Added `/obs trace` and `/obs link` commands that build Grafana Tempo trace links from the configured URL template for current, last-turn, or safe session-id scopes.
-- Added the `/obs tools` command with safe tool-name/error-class PromQL aggregates plus configured timeout/result-limit handling through the Prometheus client.
-- Added `/obs errors` and `/obs logs` commands with documented Loki LogQL filters, current-session `pi_session_id` scoping, configured log-result caps, and concise structured summaries.
-- Added the `/obs agents` command with in-memory workflow/agent lineage summaries, safe low-cardinality Prometheus aggregate queries, Tempo attribute drill-downs, and wait/join hints.
-- Added the optional `/obs backfill --current-session --since <duration>` command with explicit confirmation, replay markers, capture-gated redaction, and bounded export volume.
-- Removed the remaining template command/tool scaffolding, renamed the extension factory to `observme`, and removed package `_template` metadata now that real ObservMe registration is in place.
-- Added the initial Grafana dashboard pack for ObservMe overview, cost, and latency views with PromQL validation against documented semantic-convention metric names.
-- Added Grafana dashboards for tool reliability, agent/subagent lineage health, and model usage with documented PromQL/LogQL plus safe agent metric labels.
-- Added Grafana dashboards for errors, branch/compaction behavior, and export health with documented PromQL/LogQL and normalized Loki attribute names.
-- Fixed provisioned Grafana dashboards to use the reference stack datasource UIDs (`prometheus` and `loki`) instead of unresolved import-time `${DS_*}` placeholders, removed stale datasource inputs, and added validation coverage for those UIDs.
-- Added Prometheus-compatible ObservMe alert rules for the documented LLM, tool, subagent, export, cost, redaction, agent-tree, orphan, trace-context, and active-agent failure modes.
-- Added ObservMe SLO definitions for export health, agent lineage, workflow completion, instrumentation overhead, and CI/test-time redaction coverage.
-- Added example ObservMe and production Collector YAML configs, including high-cardinality metric-attribute drops and content-attribute drops for the Grafana stack.
-- Added the ObservMe compatibility matrix documenting tested Pi, Node.js, and OpenTelemetry package versions plus the pinned Grafana-stack component versions awaiting integration validation.
-- Added Collector debug-exporter integration tests with a local Docker Collector config, asserting ObservMe traces, metrics, logs, required attributes, and default-disabled content capture behavior.
-- Added Grafana-stack integration tests using `observability-stack/`, including Tempo trace/lineage queries, Loki session-log queries, Prometheus token-total queries, and Grafana dashboard provisioning validation.
-- Added chaos/failure coverage for Collector down/slow exports, missing subagent trace context, orphan agents, runaway fan-out/depth, queue-full eviction, and redaction exceptions.
-- Added a synthetic ObservMe performance test for 100 sessions, 100,000 turns, 500,000 tool calls, 200,000 LLM calls, and 5,000 subagent spawns, reporting handler latency percentiles, memory growth, CPU overhead, dropped telemetry, and export batch sizes against the documented p95/p99 targets.
-- Added dedicated redaction unit tests for documented secret categories, environment variable dumps, filesystem paths, explicit PII detection, and oversized content truncation, and included `.test.ts` files in local test and coverage discovery.
-- Added fixture-driven event-mapping contract tests for session, agent, turn, LLM, tool, bash, model/thinking, compaction, branch, subagent spawn, wait/join, orphan, and propagation-failure telemetry.
-- Added metrics unit coverage that exercises every documented ObservMe and optional official GenAI metric constant through the metric helper, including all counters, histograms, and active-state gauges.
-- Added fast exporter-failure unit coverage for mocked Collector-down, Collector-slow, and queue-full scenarios, asserting safe Pi continuation plus export-error/drop counters.
-- Added workflow and agent-lineage unit coverage for generated private IDs, propagation fallback, root/orphan classification, fan-out/depth, wait/join status, and low-cardinality metrics.
-- Added cardinality unit coverage for every metric label set and aligned emitted labels to the documented low-cardinality allowlist.
-- Finalized README and security documentation for the implemented ObservMe MVP behavior, command surface, validation flow, and privacy posture.
+### Added
+
+- Bootstrapped the `@senad-d/observme` Pi extension with layered configuration, semantic conventions, session-scoped OpenTelemetry exporters, and bounded lifecycle management.
+- Instrumented sessions, workflows, agents, turns, LLM requests, tools, interactive Bash, subagents, model/thinking changes, compaction, and branches with traces, metrics, and structured logs.
+- Added privacy-first redaction, salted hashing, truncation, path scrubbing, secret detection, opt-in content capture, and trusted-project `.env`/`.pi/observme.yaml` support.
+- Added `/obs` commands for status, health, session details, cost, traces, links, tools, errors, logs, agents, and bounded current-session backfill.
+- Added Grafana clients for Prometheus, Loki, and Tempo with authenticated, timeout-bounded, secret-safe transport and query validation.
+- Added dashboards for overview, cost, latency, tools, models, errors, branches/compactions, agents/subagents, export health, logs/LLM I/O, conversations, trace journeys, and agent node graphs.
+- Added Prometheus alerts, SLO definitions, Collector/Grafana-stack examples, compatibility documentation, and production/operator guidance.
+- Added unit, contract, cardinality, privacy, exporter-failure, Pi RPC, Collector, Grafana-stack, chaos, lifecycle, packaging, and synthetic performance tests.
+
+### Changed
+
+- Reworked the original project specifications into session-sized tasks and reconciled production documentation with telemetry, privacy, lineage, validation, and packaging contracts.
+- Replaced template scaffolding and metadata with the ObservMe extension factory, package identity, documentation, and shipped companion assets.
+
+### Fixed
+
+- Hardened duplicate session startup, exporter timeout behavior, command parsing, query readiness, dashboard datasource UIDs, Loki labels, active-session trace guidance, and integration-test isolation.
+- Corrected latency/size histogram emission, short-window PromQL, content-capture visibility, configuration diagnostics, and local Grafana authentication/TLS handling.
