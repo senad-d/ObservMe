@@ -244,9 +244,8 @@ function hasLokiContentLog(payload, marker) {
   return text.includes(marker) && text.includes("[REDACTED:") && !text.includes("grafana-stack-secret");
 }
 
-function hasPrometheusTokenTotal(payload) {
-  const values = extractPrometheusValues(payload);
-  return values.some(value => value >= 19);
+function hasPrometheusValueAtLeast(payload, minimum) {
+  return extractPrometheusValues(payload).some(value => value >= minimum);
 }
 
 function hasPrometheusSeries(payload) {
@@ -536,7 +535,10 @@ async function emitRepresentativeObservMeTelemetry(project, ids) {
         usage: {
           input: 12,
           output: 7,
-          totalTokens: 19,
+          cacheRead: 3,
+          cacheWrite: 4,
+          cacheWrite1h: 2,
+          totalTokens: 26,
           cost: {
             input: 0.001,
             output: 0.002,
@@ -670,14 +672,20 @@ async function waitForLokiContentLog(stack, range, eventName, marker) {
 }
 
 async function waitForPrometheusTokenTotals(stack) {
-  const tokenTotalQuery = "sum(observme_llm_total_tokens_total) or sum(observme_llm_tokens_total)";
+  const tokenMetrics = [
+    ["total", "observme_llm_total_tokens_total", 26],
+    ["cache-write", "observme_llm_cache_write_tokens_total", 4],
+    ["one-hour cache-write", "observme_llm_cache_write_1h_tokens_total", 2],
+  ];
 
-  return waitForResult(
-    "Prometheus token total query",
-    () => fetchGrafanaJson(stack, prometheusQueryUrl(stack, tokenTotalQuery)),
-    hasPrometheusTokenTotal,
-    { timeoutMs: 120000, intervalMs: 2000 },
-  );
+  for (const [label, metric, minimum] of tokenMetrics) {
+    await waitForResult(
+      `Prometheus ${label} token query`,
+      () => fetchGrafanaJson(stack, prometheusQueryUrl(stack, `sum(${metric})`)),
+      payload => hasPrometheusValueAtLeast(payload, minimum),
+      { timeoutMs: 120000, intervalMs: 2000 },
+    );
+  }
 }
 
 async function waitForPrometheusCommandQueries(stack) {

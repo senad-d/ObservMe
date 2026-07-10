@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Fixed the Cost dashboard token-total gauge by removing nonfunctional aggregate-total and cache-write bars while retaining reliable token types.
+- Fixed the Cost dashboard trend to sum interval spend across every provider and model using a Prometheus-safe rate window, while displaying sub-cent values precisely.
+- Fixed the Cost dashboard token bars by summing each exporter series' selected-range maximum, preserving total and cache-write values from short-lived Pi sessions that counter increases can miss.
 - Simplified lineage environment-name validation with the concise equivalent word-character regex class.
 - Fixed tool-result size histogram recording at finalized tool completion and clarified that exact Bash exit-code panels cover interactive `!`/`!!` commands rather than assistant Bash tool calls.
 - Reconciled source-review remediation documentation and completed the full release validation matrix, including Docker-backed Collector integration.

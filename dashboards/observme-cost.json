@@ -745,12 +745,13 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Provider/model LLM cost deltas for each Grafana interval. Missing series render as a zero baseline; model and thinking-level annotations help explain step changes.",
+      "description": "LLM cost added across all providers and models for each Prometheus-safe rolling interval. $__rate_interval keeps the window large enough for counter samples; small costs display with six decimal places.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
+          "decimals": 6,
           "mappings": [],
           "min": 0,
           "thresholds": {
@@ -808,8 +809,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(sum by (provider, model) (increase(observme_llm_cost_usd_total[$__interval])) or on() vector(0))",
-          "legendFormat": "{{provider}} / {{model}}",
+          "expr": "sum(increase(observme_llm_cost_usd_total[$__rate_interval])) or vector(0)",
+          "legendFormat": "all providers / models",
           "range": true,
           "refId": "A"
         }
@@ -835,7 +836,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Global selected-range totals for reliably populated token types. Aggregate total and cache-write variants are omitted instead of showing misleading empty bars; provider/model cache detail remains in the adjacent cache panel.",
+      "description": "Highest cumulative token value observed per exporter series in the selected range, summed globally by type. This preserves short-lived Pi session exports that counter increases can miss. Provider/model detail stays in Models and LLM lifecycle logs.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -887,7 +888,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_input_tokens_total[$__range])) or vector(0)",
+          "expr": "sum(max_over_time(observme_llm_input_tokens_total[$__range])) or vector(0)",
           "instant": true,
           "legendFormat": "input",
           "range": false,
@@ -899,7 +900,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_output_tokens_total[$__range])) or vector(0)",
+          "expr": "sum(max_over_time(observme_llm_output_tokens_total[$__range])) or vector(0)",
           "instant": true,
           "legendFormat": "output",
           "range": false,
@@ -911,7 +912,19 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_reasoning_tokens_total[$__range])) or vector(0)",
+          "expr": "sum(max_over_time(observme_llm_total_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "legendFormat": "total",
+          "range": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(max_over_time(observme_llm_reasoning_tokens_total[$__range])) or vector(0)",
           "instant": true,
           "legendFormat": "reasoning",
           "range": false,
@@ -923,11 +936,35 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(observme_llm_cache_read_tokens_total[$__range])) or vector(0)",
+          "expr": "sum(max_over_time(observme_llm_cache_read_tokens_total[$__range])) or vector(0)",
           "instant": true,
           "legendFormat": "cache read",
           "range": false,
           "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(max_over_time(observme_llm_cache_write_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "legendFormat": "cache write",
+          "range": false,
+          "refId": "F"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(max_over_time(observme_llm_cache_write_1h_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "legendFormat": "cache write 1h",
+          "range": false,
+          "refId": "G"
         }
       ],
       "title": "Token totals by type",
@@ -1212,6 +1249,6 @@
   "timezone": "browser",
   "title": "ObservMe Cost",
   "uid": "observme-cost",
-  "version": 4,
+  "version": 8,
   "weekStart": ""
 }
