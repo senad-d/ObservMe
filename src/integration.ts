@@ -10,6 +10,10 @@ export type ObservMeChildStatus = "starting" | "active" | "completed" | "failed"
 export type ObservMeJoinStatus = "completed" | "failed" | "cancelled" | "timeout" | "unknown" | "waiting";
 export type ObservMeIntegrationFailureReason =
   | "session_unavailable"
+  | "invalid_request"
+  | "spawn_already_exists"
+  | "wait_already_exists"
+  | "join_already_exists"
   | "spawn_not_found"
   | "wait_not_found"
   | "join_not_found"
@@ -118,17 +122,55 @@ interface IntegrationResponseHolder {
 }
 
 export function requestObservMeIntegration(host: ObservMeIntegrationHost): ObservMeIntegrationApi | undefined {
+  const events = resolveIntegrationEventBus(host);
+  if (!events) return undefined;
+
   const holder: IntegrationResponseHolder = {};
   const request: ObservMeIntegrationRequest = {
     supportedVersions: [OBSERVME_INTEGRATION_VERSION],
     respond: receiveObservMeIntegration.bind(undefined, holder),
   };
 
-  host.events.emit(OBSERVME_INTEGRATION_CHANNEL, request);
+  try {
+    events.emit(OBSERVME_INTEGRATION_CHANNEL, request);
+  } catch {
+    return undefined;
+  }
   return holder.api;
 }
 
-function receiveObservMeIntegration(holder: IntegrationResponseHolder, api: ObservMeIntegrationApi): void {
-  if (api.version !== OBSERVME_INTEGRATION_VERSION || holder.api) return;
-  holder.api = api;
+function resolveIntegrationEventBus(host: unknown): ObservMeIntegrationEventBus | undefined {
+  if (!host || typeof host !== "object") return undefined;
+  try {
+    const events = (host as Partial<ObservMeIntegrationHost>).events;
+    return events && typeof events.emit === "function" ? events : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function receiveObservMeIntegration(holder: IntegrationResponseHolder, value: unknown): void {
+  if (holder.api || !isObservMeIntegrationApi(value)) return;
+  holder.api = value;
+}
+
+function isObservMeIntegrationApi(value: unknown): value is ObservMeIntegrationApi {
+  if (!value || typeof value !== "object") return false;
+
+  try {
+    const api = value as Partial<ObservMeIntegrationApi>;
+    return (
+      api.version === OBSERVME_INTEGRATION_VERSION &&
+      typeof api.getContext === "function" &&
+      typeof api.startSubagent === "function" &&
+      typeof api.completeSubagent === "function" &&
+      typeof api.failSubagent === "function" &&
+      typeof api.startWait === "function" &&
+      typeof api.endWait === "function" &&
+      typeof api.startJoin === "function" &&
+      typeof api.endJoin === "function"
+    );
+  } catch {
+    return false;
+  }
 }

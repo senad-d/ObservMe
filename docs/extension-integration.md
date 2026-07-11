@@ -35,7 +35,7 @@ const observme: ObservMeIntegrationApi | undefined = requestObservMeIntegration(
 
 ObservMe registers no global object and does not require another extension to import its internal telemetry session. The event bus is the runtime boundary; the package subpath provides the stable constants, types, and request helper.
 
-The API can be absent when ObservMe is not installed, disabled by package configuration, not loaded yet, or incompatible. A method returns `{ ok: false, reason: "session_unavailable" }` when ObservMe is loaded but no telemetry session is active. Orchestration must remain functional in both cases and may run the child without ObservMe correlation after reporting a bounded local warning.
+The API can be absent when ObservMe is not installed, disabled by package configuration, not loaded yet, incompatible, or connected through a failing/malformed event-bus provider. A method returns `{ ok: false, reason: "session_unavailable" }` when ObservMe is loaded but no telemetry session is active. Orchestration must remain functional in both cases and may run the child without ObservMe correlation after reporting a bounded local warning.
 
 A package that cannot take a runtime dependency can implement the same synchronous request directly. Keep this channel and version stable:
 
@@ -118,9 +118,21 @@ Do not put raw tasks, prompts, command lines, environment values, child output, 
 | `toolCallId` | Optional high-cardinality trace/log correlation when a tool initiated the spawn. |
 | `env` | Base child environment. ObservMe removes stale lineage/W3C keys and returns the replacement environment. |
 
+Runtime callers are validated even when JavaScript bypasses the TypeScript types. Caller-provided lifecycle identifiers must match `[A-Za-z0-9._:-]{1,128}`. Commands and individual arguments are capped at 4096 characters, argument lists at 256 items, and environment objects at 4096 entries. Durations must be finite, non-negative milliseconds. Invalid or duplicate active operations return a failure without replacing an existing span.
+
 Completion and wait/join methods use bounded child states (`starting`, `active`, `completed`, `failed`, `cancelled`, `orphaned`), join states (`waiting`, `completed`, `failed`, `cancelled`, `timeout`, `unknown`), and wait reasons (`dependency`, `rate_limit`, `child_running`, `unknown`). `failurePropagated=false` on a completed join confirms that the parent recovered from a failed child.
 
-All mutation methods return a discriminated result. Handle `session_unavailable`, `spawn_not_found`, `wait_not_found`, `join_not_found`, and `operation_failed` without crashing Pi. Do not retry a completed lifecycle handle blindly; repeated completion can otherwise hide an orchestration-state bug.
+All mutation methods return a discriminated result. Handle these reasons without crashing Pi:
+
+| Reason | Meaning |
+| --- | --- |
+| `session_unavailable` | ObservMe is loaded but no telemetry session is active. |
+| `invalid_request` | An identifier, enum, duration, command/argument field, or environment shape is invalid or oversized. |
+| `spawn_already_exists` / `wait_already_exists` / `join_already_exists` | The requested lifecycle identifier is already active. Generate a unique identifier or finish the active operation; do not overwrite it. |
+| `spawn_not_found` / `wait_not_found` / `join_not_found` | The lifecycle handle is absent or has already ended. |
+| `operation_failed` | ObservMe could not safely complete the operation. |
+
+Do not retry a completed lifecycle handle blindly; repeated completion can otherwise hide an orchestration-state bug.
 
 ## Propagation environment
 

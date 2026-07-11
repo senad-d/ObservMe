@@ -33,12 +33,22 @@ interface IntegrationPiApi {
   readonly events?: IntegrationEventBus;
 }
 
+const integrationIdentifierPattern = /^[A-Za-z0-9._:-]{1,128}$/u;
+const maximumIntegrationCommandLength = 4096;
+const maximumIntegrationArgumentCount = 256;
+const maximumIntegrationArgumentLength = 4096;
+const maximumIntegrationEnvironmentEntries = 4096;
+
 export function registerObservMeIntegration(pi: unknown, state: HandlerSessionState): (() => void) | undefined {
   const events = resolveIntegrationEventBus(pi);
   if (!events) return undefined;
 
   const api = new SessionBackedObservMeIntegrationApi(state);
-  return events.on(OBSERVME_INTEGRATION_CHANNEL, api.handleRequest.bind(api));
+  try {
+    return events.on(OBSERVME_INTEGRATION_CHANNEL, api.handleRequest.bind(api));
+  } catch {
+    return undefined;
+  }
 }
 
 export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationApi {
@@ -50,8 +60,8 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
   }
 
   handleRequest(value: unknown): void {
-    if (!isCompatibleIntegrationRequest(value)) return;
     try {
+      if (!isCompatibleIntegrationRequest(value)) return;
       value.respond(this);
     } catch {
       return;
@@ -82,8 +92,12 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
   startSubagent(options: ObservMeStartSubagentOptions = {}): ObservMeStartedSubagent | ObservMeIntegrationFailure {
     const session = this.#state.session;
     if (!session) return integrationFailure("session_unavailable");
-
     try {
+      if (!isValidStartSubagentOptions(options)) return integrationFailure("invalid_request");
+      if (options.spawnId && session.spans.activeSubagentSpawns.has(options.spawnId)) {
+        return integrationFailure("spawn_already_exists");
+      }
+
       const started = startSubagentSpawn(session, options);
       return {
         ok: true,
@@ -103,9 +117,12 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
   ): ObservMeIntegrationSuccess | ObservMeIntegrationFailure {
     const session = this.#state.session;
     if (!session) return integrationFailure("session_unavailable");
-    if (!session.spans.activeSubagentSpawns.get(spawnId)) return integrationFailure("spawn_not_found");
-
     try {
+      if (!isValidIntegrationIdentifier(spawnId) || !isValidCompleteSubagentOptions(options)) {
+        return integrationFailure("invalid_request");
+      }
+      if (!session.spans.activeSubagentSpawns.has(spawnId)) return integrationFailure("spawn_not_found");
+
       completeSubagentSpawn(session, spawnId, options);
       return integrationSuccess();
     } catch {
@@ -119,9 +136,12 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
   ): ObservMeIntegrationSuccess | ObservMeIntegrationFailure {
     const session = this.#state.session;
     if (!session) return integrationFailure("session_unavailable");
-    if (!session.spans.activeSubagentSpawns.get(spawnId)) return integrationFailure("spawn_not_found");
-
     try {
+      if (!isValidIntegrationIdentifier(spawnId) || !isValidFailSubagentOptions(options)) {
+        return integrationFailure("invalid_request");
+      }
+      if (!session.spans.activeSubagentSpawns.has(spawnId)) return integrationFailure("spawn_not_found");
+
       failSubagentSpawn(session, spawnId, options);
       return integrationSuccess();
     } catch {
@@ -157,8 +177,15 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
   ): ObservMeStartedWaitJoin | ObservMeIntegrationFailure {
     const session = this.#state.session;
     if (!session) return integrationFailure("session_unavailable");
-
     try {
+      if (!isValidWaitJoinOptions(options)) return integrationFailure("invalid_request");
+
+      const requestedId = resolveRequestedWaitJoinId(options, kind);
+      const registry = kind === "wait" ? session.spans.activeAgentWaits : session.spans.activeAgentJoins;
+      if (requestedId && registry.has(requestedId)) {
+        return integrationFailure(kind === "wait" ? "wait_already_exists" : "join_already_exists");
+      }
+
       const started = kind === "wait" ? startAgentWait(session, options) : startAgentJoin(session, options);
       return { ok: true, id: started.id };
     } catch {
@@ -173,10 +200,13 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
   ): ObservMeIntegrationSuccess | ObservMeIntegrationFailure {
     const session = this.#state.session;
     if (!session) return integrationFailure("session_unavailable");
-    const registry = kind === "wait" ? session.spans.activeAgentWaits : session.spans.activeAgentJoins;
-    if (!registry.get(id)) return integrationFailure(kind === "wait" ? "wait_not_found" : "join_not_found");
-
     try {
+      if (!isValidIntegrationIdentifier(id) || !isValidWaitJoinOptions(options)) {
+        return integrationFailure("invalid_request");
+      }
+      const registry = kind === "wait" ? session.spans.activeAgentWaits : session.spans.activeAgentJoins;
+      if (!registry.has(id)) return integrationFailure(kind === "wait" ? "wait_not_found" : "join_not_found");
+
       if (kind === "wait") endAgentWait(session, id, options);
       else endAgentJoin(session, id, options);
       return integrationSuccess();
@@ -188,8 +218,12 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
 
 function resolveIntegrationEventBus(pi: unknown): IntegrationEventBus | undefined {
   if (!pi || typeof pi !== "object") return undefined;
-  const events = (pi as IntegrationPiApi).events;
-  return events && typeof events.on === "function" ? events : undefined;
+  try {
+    const events = (pi as IntegrationPiApi).events;
+    return events && typeof events.on === "function" ? events : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isCompatibleIntegrationRequest(value: unknown): value is ObservMeIntegrationRequest {
@@ -200,6 +234,143 @@ function isCompatibleIntegrationRequest(value: unknown): value is ObservMeIntegr
     request.supportedVersions.includes(OBSERVME_INTEGRATION_VERSION) &&
     typeof request.respond === "function"
   );
+}
+
+function isValidStartSubagentOptions(value: unknown): value is ObservMeStartSubagentOptions {
+  if (!isIntegrationRecord(value)) return false;
+  const options = value as Partial<ObservMeStartSubagentOptions>;
+  return (
+    isOptionalIntegrationIdentifier(options.spawnId) &&
+    isOptionalIntegrationIdentifier(options.childAgentId) &&
+    isOptionalBoundedString(options.command, maximumIntegrationCommandLength) &&
+    isValidIntegrationArguments(options.args) &&
+    isOptionalSpawnType(options.spawnType) &&
+    isOptionalSpawnReason(options.spawnReason) &&
+    isOptionalIntegrationIdentifier(options.toolCallId) &&
+    isValidIntegrationEnvironment(options.env)
+  );
+}
+
+function isValidCompleteSubagentOptions(value: unknown): value is ObservMeCompleteSubagentOptions {
+  if (!isIntegrationRecord(value)) return false;
+  const options = value as Partial<ObservMeCompleteSubagentOptions>;
+  return (
+    isOptionalIntegrationIdentifier(options.childAgentId) &&
+    isOptionalChildStatus(options.childStatus) &&
+    (options.outcome === undefined || options.outcome === "completed" || options.outcome === "failed" || options.outcome === "cancelled")
+  );
+}
+
+function isValidFailSubagentOptions(value: unknown): value is ObservMeFailSubagentOptions {
+  if (!isIntegrationRecord(value)) return false;
+  const options = value as Partial<ObservMeFailSubagentOptions>;
+  return isOptionalIntegrationIdentifier(options.childAgentId) && isOptionalBoundedString(options.errorClass, 256);
+}
+
+function isValidWaitJoinOptions(value: unknown): value is ObservMeWaitJoinOptions {
+  if (!isIntegrationRecord(value)) return false;
+  const options = value as Partial<ObservMeWaitJoinOptions>;
+  return (
+    isOptionalIntegrationIdentifier(options.id) &&
+    isOptionalIntegrationIdentifier(options.spawnId) &&
+    isOptionalIntegrationIdentifier(options.childAgentId) &&
+    isOptionalChildStatus(options.childStatus) &&
+    isOptionalJoinStatus(options.joinStatus) &&
+    isOptionalWaitReason(options.reason) &&
+    (options.failurePropagated === undefined || typeof options.failurePropagated === "boolean") &&
+    (options.durationMs === undefined || isValidDuration(options.durationMs))
+  );
+}
+
+function isIntegrationRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isValidIntegrationIdentifier(value: unknown): value is string {
+  return typeof value === "string" && integrationIdentifierPattern.test(value);
+}
+
+function isOptionalIntegrationIdentifier(value: unknown): value is string | undefined {
+  return value === undefined || isValidIntegrationIdentifier(value);
+}
+
+function isOptionalBoundedString(value: unknown, maximumLength: number): value is string | undefined {
+  return value === undefined || (typeof value === "string" && value.length <= maximumLength);
+}
+
+function isValidIntegrationArguments(value: unknown): value is readonly string[] | undefined {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length <= maximumIntegrationArgumentCount &&
+      value.every(isValidIntegrationArgument))
+  );
+}
+
+function isValidIntegrationArgument(value: unknown): value is string {
+  return typeof value === "string" && value.length <= maximumIntegrationArgumentLength;
+}
+
+function isValidIntegrationEnvironment(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isIntegrationRecord(value)) return false;
+  const entries = Object.entries(value);
+  return entries.length <= maximumIntegrationEnvironmentEntries && entries.every(isValidIntegrationEnvironmentEntry);
+}
+
+function isValidIntegrationEnvironmentEntry(entry: [string, unknown]): boolean {
+  return entry[0].length > 0 && (typeof entry[1] === "string" || entry[1] === undefined);
+}
+
+function isOptionalSpawnType(value: unknown): boolean {
+  return value === undefined || value === "command" || value === "tool" || value === "extension" || value === "unknown";
+}
+
+function isOptionalSpawnReason(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === "delegated_task" ||
+    value === "parallel_search" ||
+    value === "review" ||
+    value === "tool_wrapper" ||
+    value === "unknown"
+  );
+}
+
+function isOptionalChildStatus(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === "starting" ||
+    value === "active" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "cancelled" ||
+    value === "orphaned"
+  );
+}
+
+function isOptionalJoinStatus(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "cancelled" ||
+    value === "timeout" ||
+    value === "unknown" ||
+    value === "waiting"
+  );
+}
+
+function isOptionalWaitReason(value: unknown): boolean {
+  return value === undefined || value === "dependency" || value === "rate_limit" || value === "child_running" || value === "unknown";
+}
+
+function isValidDuration(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
+}
+
+function resolveRequestedWaitJoinId(options: ObservMeWaitJoinOptions, kind: "wait" | "join"): string | undefined {
+  return options.id ?? (options.spawnId ? `${kind}-${options.spawnId}` : undefined);
 }
 
 function readSessionId(session: ObservMeTelemetrySession): string | undefined {

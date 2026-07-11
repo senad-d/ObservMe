@@ -30,6 +30,7 @@
 - Fixed session, workflow, agent, turn, LLM, tool, Bash, histogram, active-span, failure/recovery, and session-count telemetry accuracy.
 - Fixed lifecycle serialization, duplicate session replacement, bounded shutdown/flush behavior, backfill cancellation, parallel tool correlation, and bounded agent-tree state cleanup.
 - Hardened configuration validation, project-root path confinement, endpoint security, custom redaction patterns, tenant-salted hashing, and environment propagation.
+- Hardened integration discovery and lifecycle mutations against malformed providers, unsafe or oversized runtime inputs, and duplicate active spawn/wait/join identifiers.
 - Restored trusted-project redacted LLM capture and OpenAI Responses-style prompt capture while keeping capture disabled and redaction enabled by default.
 - Remediated SonarQube maintainability and security findings across parsing, regexes, fallback handling, diagnostics, and default assignment.
 - Fixed npm/CI dependency installation, package contents, README command drift, Grafana/Loki schema handling, and dashboard provisioning/query validation.

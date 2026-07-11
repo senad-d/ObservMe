@@ -103,6 +103,85 @@ test("integration API is discovered through Pi events and reports inactive sessi
   assert.equal(requestObservMeIntegration({ events }), undefined);
 });
 
+test("integration discovery ignores malformed providers and event-bus failures", () => {
+  const events = createEventBus();
+  events.on("observme:integration:request", request => request.respond({ version: 1 }));
+
+  assert.equal(requestObservMeIntegration({ events }), undefined);
+  const unsubscribe = registerObservMeIntegration({ events }, {});
+  assert.ok(requestObservMeIntegration({ events }));
+  unsubscribe();
+
+  assert.equal(requestObservMeIntegration({}), undefined);
+  assert.equal(
+    requestObservMeIntegration(Object.defineProperty({}, "events", { get() { throw new Error("events unavailable"); } })),
+    undefined,
+  );
+  assert.equal(
+    registerObservMeIntegration({ events: { on() { throw new Error("registration unavailable"); } } }, {}),
+    undefined,
+  );
+  assert.equal(
+    requestObservMeIntegration({
+      events: {
+        emit() {
+          throw new Error("event bus unavailable");
+        },
+      },
+    }),
+    undefined,
+  );
+});
+
+test("integration API rejects unsafe requests and duplicate active lifecycle identifiers", () => {
+  const events = createEventBus();
+  const session = createFakeTelemetry();
+  registerObservMeIntegration({ events }, { session });
+  const api = requestObservMeIntegration({ events });
+
+  assert.ok(api);
+  assert.deepEqual(api.startSubagent(null), { ok: false, reason: "invalid_request" });
+  assert.deepEqual(api.startSubagent({ spawnId: "unsafe spawn id" }), { ok: false, reason: "invalid_request" });
+
+  const started = api.startSubagent({ spawnId: "spawn-duplicate", env: {} });
+  assert.equal(started.ok, true);
+  const activeSpawn = session.spans.activeSubagentSpawns.get("spawn-duplicate");
+  assert.deepEqual(api.startSubagent({ spawnId: "spawn-duplicate", env: {} }), {
+    ok: false,
+    reason: "spawn_already_exists",
+  });
+  assert.equal(session.spans.activeSubagentSpawns.size, 1);
+  assert.equal(session.spans.activeSubagentSpawns.get("spawn-duplicate"), activeSpawn);
+  assert.deepEqual(api.completeSubagent("", {}), { ok: false, reason: "invalid_request" });
+  assert.deepEqual(api.completeSubagent(started.spawnId, { childStatus: "active" }), { ok: true });
+
+  assert.deepEqual(api.startWait({ durationMs: Number.POSITIVE_INFINITY }), {
+    ok: false,
+    reason: "invalid_request",
+  });
+  const wait = api.startWait({ id: "wait-duplicate", childStatus: "active" });
+  assert.equal(wait.ok, true);
+  const activeWait = session.spans.activeAgentWaits.get("wait-duplicate");
+  assert.deepEqual(api.startWait({ id: "wait-duplicate", childStatus: "active" }), {
+    ok: false,
+    reason: "wait_already_exists",
+  });
+  assert.equal(session.spans.activeAgentWaits.size, 1);
+  assert.equal(session.spans.activeAgentWaits.get("wait-duplicate"), activeWait);
+  assert.deepEqual(api.endWait(wait.id, { childStatus: "completed" }), { ok: true });
+
+  const join = api.startJoin({ spawnId: "spawn-duplicate", joinStatus: "waiting" });
+  assert.equal(join.ok, true);
+  const activeJoin = session.spans.activeAgentJoins.get(join.id);
+  assert.deepEqual(api.startJoin({ spawnId: "spawn-duplicate", joinStatus: "waiting" }), {
+    ok: false,
+    reason: "join_already_exists",
+  });
+  assert.equal(session.spans.activeAgentJoins.size, 1);
+  assert.equal(session.spans.activeAgentJoins.get(join.id), activeJoin);
+  assert.deepEqual(api.endJoin(join.id, { joinStatus: "completed" }), { ok: true });
+});
+
 test("integration API propagates child context and records spawn, wait, and join lifecycle", () => {
   const events = createEventBus();
   const state = { session: createFakeTelemetry() };

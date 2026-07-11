@@ -167,7 +167,9 @@ if (started?.ok) {
 }
 ```
 
-Use [`docs/extension-integration.md`](docs/extension-integration.md) for the complete lifecycle and API contract. The shipped [`examples/integrations/subagent-runner.ts`](examples/integrations/subagent-runner.ts) wraps a generic child transport, while [`docs/agent-subagent-observability-requirements.md`](docs/agent-subagent-observability-requirements.md) covers the larger orchestration design.
+The discovery helper fails open when the event bus or a provider is malformed. API methods also reject unsafe/oversized requests and duplicate active lifecycle IDs without replacing existing telemetry state. Handle every discriminated failure result locally and keep orchestration functional.
+
+Use [`docs/extension-integration.md`](docs/extension-integration.md) for the complete lifecycle, validation limits, and failure contract. The shipped [`examples/integrations/subagent-runner.ts`](examples/integrations/subagent-runner.ts) wraps a generic child transport, while [`docs/agent-subagent-observability-requirements.md`](docs/agent-subagent-observability-requirements.md) covers the larger orchestration design.
 
 ## Commands
 
