@@ -1,6 +1,6 @@
 # Security Policy
 
-ObservMe is a Pi extension that instruments Pi agent sessions and exports OpenTelemetry traces, metrics, and logs to an external observability stack such as an OpenTelemetry Collector, Grafana Tempo, Loki, Prometheus, Mimir, or Grafana Cloud. This policy summarizes the implemented trust model; see `ObservMe-Production-Docs/06-security-privacy-redaction.md` for the full security, privacy, and redaction specification.
+ObservMe is a Pi extension that instruments Pi agent sessions and exports OpenTelemetry traces, metrics, and logs to an external observability stack such as an OpenTelemetry Collector, Grafana Tempo, Loki, Prometheus, Mimir, or Grafana Cloud. This policy summarizes the implemented trust model; see `docs/reference/06-security-privacy-redaction.md` for the full security, privacy, and redaction specification.
 
 ## Trust model
 

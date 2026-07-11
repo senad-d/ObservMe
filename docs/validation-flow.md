@@ -1,6 +1,6 @@
 # ObservMe Grafana + `/obs` validation flow
 
-Use this secret-safe flow when Grafana shows ObservMe data but `/obs` commands appear broken. It classifies the failure as ingestion, labels, Grafana auth/query access, local TLS/DNS, Pi command registration, or session state.
+Use this secret-safe flow when Grafana shows ObservMe data but `/obs` commands appear broken. It classifies the failure as ingestion, labels, Grafana auth/query access, local TLS/DNS, Pi command registration, or session state. For first-time setup, read the [configuration guide](configuration.md) and [example guide](../examples/README.md) first.
 
 ## Preconditions
 
@@ -115,3 +115,10 @@ node --test test/dashboards.test.mjs test/exporter-failure.test.ts test/chaos-fa
 | `/obs command path` | Pi command state, session state, or command query mismatch | Re-run the Pi commands in step 1; then run `npm run smoke:pi-runtime` to isolate real Pi command registration. |
 
 Release validation should not be considered complete while any step fails.
+
+## Related documentation
+
+- [Documentation index](README.md)
+- [Query and Grafana integration](reference/08-query-grafana-integration.md)
+- [Deployment runbooks and common incidents](reference/11-deployment-runbooks.md)
+- [Dashboards, alerts, and SLOs](reference/09-dashboards-alerts-slos.md)

@@ -121,6 +121,11 @@ service:
 This configuration routes traces to Tempo, logs to Loki, and metrics to a Prometheus-compatible remote write endpoint such as Mimir. Use a Collector distribution that contains every configured component. The minimal debug example works with the core Collector, while `prometheusremotewrite`, `probabilistic_sampler`, and `tail_sampling` are commonly deployed from the Collector Contrib distribution or a vendor distribution such as Grafana Alloy.
 
 ```yaml
+# Production-oriented Collector reference for Tempo, Loki, and Mimir.
+# Verify that your Collector distribution contains every configured component,
+# replace backend endpoints/security for your deployment, and never add raw
+# content or high-cardinality execution identifiers to metric labels.
+# Guide: examples/README.md; design: docs/reference/05-otel-pipeline-and-collector.md.
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133

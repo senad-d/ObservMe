@@ -120,7 +120,7 @@ async function sloArtifactContainsEveryDocumentedSlo() {
 
 async function sloMetricReferencesAreDocumented() {
   const [semanticConventionText, sloText] = await Promise.all([
-    readFile("ObservMe-Production-Docs/04-telemetry-semantic-conventions.md", "utf8"),
+    readFile("docs/reference/04-telemetry-semantic-conventions.md", "utf8"),
     readFile(sloFile, "utf8"),
   ]);
   const documentedNames = documentedMetricNames(semanticConventionText);

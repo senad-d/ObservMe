@@ -26,8 +26,8 @@ pi --no-extensions -e .
 - Update README/docs/examples when commands, tools, settings, packaging, or security behavior changes.
 - Run `npm run validate` before requesting review, or explain why it could not be run.
 - Do not commit secrets, local `.pi/` state, generated package tarballs, `node_modules/`, or machine-local paths.
-- If `ObservMe-Production-Docs/` and any implementation detail disagree, update the implementation to match the production docs, not the other way around.
+- If `docs/reference/` and any implementation detail disagree, update the implementation to match the production docs, not the other way around.
 
 ## Security expectations
 
-Pi extensions run with the user's local permissions. Treat changes that execute shell commands, read files, write files, or call the network as security-sensitive and document the behavior. See `SECURITY.md` and `ObservMe-Production-Docs/06-security-privacy-redaction.md`.
+Pi extensions run with the user's local permissions. Treat changes that execute shell commands, read files, write files, or call the network as security-sensitive and document the behavior. See `SECURITY.md` and `docs/reference/06-security-privacy-redaction.md`.

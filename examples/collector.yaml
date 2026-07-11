@@ -1,3 +1,8 @@
+# Production-oriented Collector reference for Tempo, Loki, and Mimir.
+# Verify that your Collector distribution contains every configured component,
+# replace backend endpoints/security for your deployment, and never add raw
+# content or high-cardinality execution identifiers to metric labels.
+# Guide: examples/README.md; design: docs/reference/05-otel-pipeline-and-collector.md.
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Smoke check: create a real npm tarball, install it into a temporary project,
-// then verify the installed package exposes the declared Pi extension entry.
+// then verify the installed package exposes its declared Pi extension and skill resources.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
@@ -28,14 +28,33 @@ try {
   const installedPackageJsonPath = join(packageDirectory, "node_modules", "@senad-d", "observme", "package.json");
   const installedPackageJson = JSON.parse(await readFile(installedPackageJsonPath, "utf8"));
   const extensionEntries = installedPackageJson.pi?.extensions ?? [];
+  const skillEntries = installedPackageJson.pi?.skills ?? [];
 
   assert.equal(installedPackageJson.name, packageJson.name, "installed package name should match package.json");
   assert.deepEqual(extensionEntries, packageJson.pi.extensions, "installed Pi extension entries should match package.json");
+  assert.deepEqual(skillEntries, packageJson.pi.skills, "installed Pi skill entries should match package.json");
+  assert.equal(installedPackageJson.exports?.["./integration"], "./src/integration.ts", "installed integration export should be declared");
 
   for (const entry of extensionEntries) {
     const installedEntryPath = join(packageDirectory, "node_modules", "@senad-d", "observme", entry.replace(/^\.\//, ""));
     await readFile(installedEntryPath, "utf8");
   }
+
+  const installedSkillPath = join(
+    packageDirectory,
+    "node_modules",
+    "@senad-d",
+    "observme",
+    "skills",
+    "observme-docs",
+    "SKILL.md",
+  );
+  await readFile(installedSkillPath, "utf8");
+  await readFile(join(packageDirectory, "node_modules", "@senad-d", "observme", "src", "integration.ts"), "utf8");
+  await readFile(
+    join(packageDirectory, "node_modules", "@senad-d", "observme", "examples", "integrations", "subagent-runner.ts"),
+    "utf8",
+  );
 
   console.log(`Packaged install smoke passed for ${packageJson.name}@${packageJson.version}.`);
 } finally {

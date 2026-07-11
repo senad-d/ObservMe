@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added a packaged `observme-docs` Pi skill that routes natural-language ObservMe questions to focused user, operator, reference, example, and contributor documentation through Pi's normal skill discovery, without an ObservMe system-prompt hook.
+- Added a versioned `@senad-d/observme/integration` event-bus API and transport-agnostic child-runner example for parent-side spawn/wait/join telemetry and child process lineage propagation.
+- Added README tables cataloging available metrics, trace spans, and structured log events, including opt-in and reserved signals.
 - Expanded the Grafana suite with SLO Health, Trace Journey, Agent Node Graphs, and LLM Conversations dashboards, plus richer multi-agent, cost, latency, tool, model, log, and export-health views.
 - Added correlated, content-safe telemetry for tool results, agent runs, workflows, subagent lifecycle events, interactive Bash executions, and configuration failures.
 - Added W3C trace continuation for launcher-propagated parent contexts, with sanitized lineage validation and fail-safe span-link/log fallbacks.
@@ -12,6 +15,9 @@
 
 ### Changed
 
+- Moved the detailed technical reference into `docs/reference/` and updated package, documentation, examples, dashboards, tests, and skill routes to use the new location.
+- Made the packaged `observme-docs` skill resolve routed references from its installed package root instead of the caller's working directory or a repository checkout.
+- Reorganized documentation around `docs/README.md`, a categorized technical-reference index, and an example guide with explicit usage and safety notes.
 - Split Pi event handling into focused lifecycle, agent/turn, LLM, tool/Bash, and session modules while preserving the `registerHandlers()` facade.
 - Centralized telemetry conventions, content-capture policy, sensitive-value rejection, diagnostic sanitization, Grafana transport, `/obs` command plumbing, and trusted-project configuration bootstrap.
 - Improved all dashboards with emitted-label-safe queries, selected-range calculations, zero/no-data states, bounded tables, canonical SLO formulas, and time-preserving Loki/Tempo drill-downs.

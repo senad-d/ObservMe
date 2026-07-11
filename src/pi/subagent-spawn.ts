@@ -44,7 +44,7 @@ export type {
 
 export type SubagentSpawnType = "command" | "tool" | "extension" | "unknown";
 export type AgentJoinStatus = "completed" | "failed" | "cancelled" | "timeout" | "unknown" | "waiting";
-export type AttributePrimitive = boolean | number | string;
+export type AttributePrimitive = boolean | number | string | string[];
 export type AttributeMap = Record<string, AttributePrimitive>;
 
 export interface SubagentSpanRegistry {

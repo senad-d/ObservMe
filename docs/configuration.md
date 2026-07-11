@@ -1,5 +1,7 @@
 # ObservMe configuration
 
+Use this guide for routine project setup. For every supported key and environment variable, see the [complete configuration reference](reference/12-configuration-reference.md). For the supported local profile, see the [example guide](../examples/README.md).
+
 ObservMe creates a project-local starter config automatically during trusted Pi session-start lifecycles.
 
 ## Automatic project config
@@ -36,3 +38,10 @@ defaults → global ~/.pi/agent/observme.yaml → trusted project .pi/observme.y
 Use `~/.pi/agent/observme.yaml` for standard-distribution global defaults that should apply across projects. Use `<CONFIG_DIR_NAME>/observme.yaml` for per-project setup. Because `.env` and system environment variables have higher precedence than YAML, remove or update stale `OBSERVME_REDACTION_ENABLED`, `OBSERVME_ALLOW_UNSAFE_CAPTURE`, and `OBSERVME_CAPTURE_*` overrides when YAML privacy settings appear to be ignored.
 
 Invalid or unsafe merged configuration falls back to safe defaults. `/obs status`, structured `config.rejected` telemetry, and Pi UI notifications when available report only bounded source and issue codes/counts; rejected values, paths, headers, regular expressions, and credentials are never rendered. Project `.env` remains a configuration layer only and cannot establish parent-agent lineage.
+
+## Related documentation
+
+- [Documentation index](README.md)
+- [Example configurations](../examples/README.md)
+- [Security, privacy, and redaction](reference/06-security-privacy-redaction.md)
+- [Grafana and `/obs` validation flow](validation-flow.md)

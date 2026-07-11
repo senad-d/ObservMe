@@ -13,17 +13,20 @@ It is documentation-only. It does not change runtime behavior.
 Project sources:
 
 - `README.md`
-- `ObservMe-Production-Docs/01-requirements-and-scope.md`
-- `ObservMe-Production-Docs/02-reference-architecture.md`
-- `ObservMe-Production-Docs/03-pi-event-and-session-model.md`
-- `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md`
-- `ObservMe-Production-Docs/06-security-privacy-redaction.md`
-- `ObservMe-Production-Docs/07-extension-implementation-blueprint.md`
-- `ObservMe-Production-Docs/09-dashboards-alerts-slos.md`
-- `ObservMe-Production-Docs/10-testing-release-operations.md`
-- `ObservMe-Production-Docs/12-configuration-reference.md`
+- `docs/extension-integration.md`
+- `docs/reference/01-requirements-and-scope.md`
+- `docs/reference/02-reference-architecture.md`
+- `docs/reference/03-pi-event-and-session-model.md`
+- `docs/reference/04-telemetry-semantic-conventions.md`
+- `docs/reference/06-security-privacy-redaction.md`
+- `docs/reference/07-extension-implementation-blueprint.md`
+- `docs/reference/09-dashboards-alerts-slos.md`
+- `docs/reference/10-testing-release-operations.md`
+- `docs/reference/12-configuration-reference.md`
+- `src/integration.ts`
 - `src/pi/agent-lineage.ts`
 - `src/pi/agent-tree-tracker.ts`
+- `src/pi/integration-api.ts`
 - `src/pi/subagent-spawn.ts`
 - `src/pi/handlers.ts`
 - `src/pi/handler-internals.ts`
@@ -41,6 +44,7 @@ Project sources:
 - `dashboards/observme-slos.yaml`
 - `examples/observme.yaml`
 - `examples/collector.yaml`
+- `examples/integrations/subagent-runner.ts`
 - `test/agent-lineage.test.ts`
 - `test/subagent-spawn.test.mjs`
 
@@ -233,18 +237,16 @@ The required parent-side flow is:
 9. Parent records `pi.agent.join` when it receives the child result/status.
 10. Parent updates the in-memory agent tree and `/obs agents` runtime state.
 
-The existing helper module for this is `src/pi/subagent-spawn.ts`:
+External extensions use the versioned API documented in [`extension-integration.md`](extension-integration.md):
 
-- `startSubagentSpawn(...)`
-- `completeSubagentSpawn(...)`
-- `failSubagentSpawn(...)`
-- `runSubagentWithObservability(...)`
-- `startAgentWait(...)` / `endAgentWait(...)`
-- `startAgentJoin(...)` / `endAgentJoin(...)`
-- `recordAgentWait(...)` / `recordAgentJoin(...)`
-- `observeTrustedSubagentLineage(...)`
+- `requestObservMeIntegration(pi)`
+- `startSubagent(...)`
+- `completeSubagent(...)`
+- `failSubagent(...)`
+- `startWait(...)` / `endWait(...)`
+- `startJoin(...)` / `endJoin(...)`
 
-If a subagent extension launches `pi` without using these helpers, ObservMe can still observe the launcher as a normal tool call, but the agent/subagent dashboards will not get the full spawn/depth/fan-out/wait/join contract.
+The API delegates to ObservMe's internal `src/pi/subagent-spawn.ts` helpers without exposing the private telemetry session. If a subagent extension launches `pi` without this integration, ObservMe can still observe the launcher as a normal tool call, but the agent/subagent dashboards will not get the full spawn/depth/fan-out/wait/join contract.
 
 ### Tmux-specific spawn requirements
 
@@ -262,14 +264,7 @@ Required flow:
 8. Record `wait` while the orchestrator is waiting for child completion or a child status signal.
 9. Record `join` when the orchestrator collects a child result, sees a terminal child status, or times out.
 
-Conceptual command shape:
-
-```text
-tmux new-session -d -s <safe-session-name> \
-  'env OBSERVME_WORKFLOW_ID=... OBSERVME_PARENT_AGENT_ID=... traceparent=... pi ...'
-```
-
-The command above is illustrative only. The implementation must avoid logging the raw command because it contains environment values and user task text.
+Prefer a dedicated tmux server/socket that is started with the returned process environment, or explicit tmux per-session environment facilities. Do not serialize the envelope into a shell command. The generic [`../examples/integrations/subagent-runner.ts`](../examples/integrations/subagent-runner.ts) adapter leaves this transport-specific environment handling to its `ChildTransport` implementation.
 
 ## 4. Environment propagation contract
 
@@ -821,20 +816,21 @@ The Pi example subagent extension:
 - collects child assistant messages, tool results, token usage, cost, and final output
 - supports Ctrl+C abort by killing child processes
 
-By default, the example spawn call does not pass ObservMe propagation env and does not call ObservMe's `startSubagentSpawn` / `completeSubagentSpawn` / `failSubagentSpawn` helpers.
+By default, the example spawn call does not request ObservMe's integration API or pass its propagation environment.
 
 Therefore, to use that style of subagent and still populate ObservMe dashboards, an ObservMe-aware adapter must wrap the child process spawn and pass the returned env to the child process.
 
 Minimum adapter behavior:
 
-1. Before spawning child Pi, call `startSubagentSpawn` with spawn type/reason and safe command metadata.
-2. Pass `started.env` into `child_process.spawn`.
-3. On child process close success, call `completeSubagentSpawn`.
-4. On child process error/abort/failure, call `failSubagentSpawn` or complete with cancelled/failed status.
-5. Around blocking waits, record `pi.agent.wait`.
-6. When child output is collected, record `pi.agent.join` with child status.
-7. Ensure the child command loads ObservMe as an extension/package.
-8. Ensure the child ObservMe runtime accepts the propagated parent context as trusted.
+1. Request the API with `requestObservMeIntegration(pi)`.
+2. Before spawning child Pi, call `startSubagent` with spawn type/reason and safe command metadata.
+3. Pass the returned `env` into `child_process.spawn`.
+4. On launcher success, call `completeSubagent` with child status `active`.
+5. On launcher error/abort/failure, call `failSubagent` or complete with cancelled status.
+6. Around blocking waits, call `startWait` and `endWait`.
+7. When child output is collected, call `startJoin` and `endJoin` with child status.
+8. Ensure the child command loads ObservMe as an extension/package.
+9. Ensure the child ObservMe runtime receives the complete propagated parent context.
 
 Without that adapter, parent tool metrics may show a `subagent` tool call, but the agent-tree dashboard will not have reliable spawn/depth/fan-out/wait/join lineage.
 
@@ -946,7 +942,7 @@ These checkpoints reflect the current code and dashboards after source-review re
 - The production extension enables process-environment lineage eligibility while keeping trusted project `.env` outside the provenance boundary.
 - Valid W3C context explicitly parents the child `pi.session`; unavailable continuation uses a validated span link or bounded propagation-failure fallback.
 - Bounded agent-tree tracking exists in `src/pi/agent-tree-tracker.ts`.
-- Spawn/wait/join helper functions exist in `src/pi/subagent-spawn.ts`.
+- Spawn/wait/join helper functions exist in `src/pi/subagent-spawn.ts` and are exposed to other loaded extensions through the versioned `@senad-d/observme/integration` event-bus API.
 - Spawn duration is recorded on completion and launcher failure. Child completion/join records child failure and confirmed parent recovery once through bounded deduplication state.
 - Session, agent-run/turn, LLM, tool/bash, and session metadata/tree handlers are split under `src/pi/event-handlers/` behind the stable `src/pi/handlers.ts` facade.
 - Root workflow duration is recorded at shutdown, and failed agent runs increment `observme_agent_run_errors_total`.
@@ -957,7 +953,7 @@ These checkpoints reflect the current code and dashboards after source-review re
 ### Remaining integration gaps before relying on full subagent dashboards
 
 1. **External and tmux subagent launchers are not automatically wrapped.**
-   - `src/pi/subagent-spawn.ts` exposes helpers, but arbitrary extensions that call `child_process.spawn` or `tmux new-session` will not be detected automatically.
+   - The public integration API lets launchers record the lifecycle explicitly, but arbitrary extensions that call `child_process.spawn` or `tmux new-session` without it cannot be detected automatically.
    - The Pi example subagent extension currently spawns child Pi processes without ObservMe env propagation.
    - A future tmux orchestration extension must own this wrapping and lifecycle tracking.
 

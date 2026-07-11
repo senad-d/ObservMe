@@ -1,5 +1,5 @@
 version: 1
-source: ObservMe-Production-Docs/09-dashboards-alerts-slos.md#12-slos
+source: docs/reference/09-dashboards-alerts-slos.md#12-slos
 slos:
   - id: observability-export
     name: Observability Export SLO

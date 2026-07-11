@@ -3,7 +3,7 @@
 ## 1. Bootstrap
 - Template source: `/Users/senad/Documents/Code/Moj_git/pi-tmp`
 - Target directory: `/Users/senad/Documents/Code/Moj_git/pi-observme` (current directory)
-- Copy status: **Done.** Template copied via `rsync` (excluding `.git/`, `node_modules/`, `.pi/`, `.agents/`, caches, build output). Pre-existing `ObservMe-Production-Docs/` and `observability-stack/` were untouched by the copy (rsync only adds/overwrites template-owned paths).
+- Copy status: **Done.** Template copied via `rsync` (excluding `.git/`, `node_modules/`, `.pi/`, `.agents/`, caches, build output). Pre-existing `docs/reference/` and `observability-stack/` were untouched by the copy (rsync only adds/overwrites template-owned paths).
 
 ## 2. Project identity
 - Package name: `@senad-d/observme`
@@ -132,7 +132,7 @@ Per template convention: Pi core packages (`@earendil-works/pi-ai`, `@earendil-w
 - package.json: `name` → `@senad-d/observme`; `description` → ObservMe's one-line pitch; `repository`/`bugs`/`homepage` → `senad-d/ObservMe`; keep `pi.extensions: ["./src/extension.ts"]`; update `pi.image` URL to the new repo; keep or drop `_template` block per your preference (recommend keeping until first real command/tool exists, then remove); keywords stay largely the same (`pi-package`, `pi-extension`, etc.) plus maybe `observability`, `opentelemetry`.
 - sonar-project.properties: `sonar.projectKey=senad-d_observme` (org unchanged).
 - npm/git distribution plan: npm scoped package `@senad-d/observme`, public access, via existing `.github/workflows/publish.yml` (workflow already generic/template-safe, only needs default branch + npm trusted publishing already configured — no functional change needed).
-- `observability-stack/` and `ObservMe-Production-Docs/`: **left completely untouched**, confirmed by you as reference/companion assets, not part of the extension package itself (not in package.json `files[]`).
+- `observability-stack/` and `docs/reference/`: **left completely untouched**, confirmed by you as reference/companion assets, not part of the extension package itself (not in package.json `files[]`).
 
 ## 9. Validation plan
 - Typecheck: `npm run typecheck`

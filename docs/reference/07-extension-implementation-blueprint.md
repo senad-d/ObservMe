@@ -424,7 +424,15 @@ Rules:
 - Rate limit export
 - Confirm with user before sending historical content
 
-## 13. Versioning
+## 13. Inter-extension integration
+
+Other Pi extensions must not import ObservMe's private telemetry session or `src/pi/subagent-spawn.ts` directly. ObservMe exposes a versioned request/response API through Pi's shared `pi.events` bus and the `@senad-d/observme/integration` package export.
+
+The public API covers current context plus subagent spawn, launcher completion/failure, wait, and join transitions. `startSubagent()` returns the sanitized process environment that the launcher passes to the child. Runtime negotiation lets an orchestrator remain optional when ObservMe is absent or inactive.
+
+See [`../extension-integration.md`](../extension-integration.md) for the public contract and [`../../examples/integrations/subagent-runner.ts`](../../examples/integrations/subagent-runner.ts) for a transport-agnostic consumer example.
+
+## 14. Versioning
 
 Extension versioning:
 
@@ -432,16 +440,19 @@ Extension versioning:
 MAJOR.MINOR.PATCH
 ```
 
-Breaking semconv changes require MAJOR.
+Breaking semantic-convention changes require MAJOR. Incompatible inter-extension API changes require a newly negotiated integration API version.
 
-## 14. Build Artifact
+## 15. Package surface
 
-Recommended output:
+The published Pi package includes:
 
 ```text
-dist/observme.js
-dist/observme.d.ts
+src/extension.ts                         # Pi extension entry
+src/integration.ts                       # public inter-extension types and discovery helper
+skills/observme-docs/SKILL.md            # progressive documentation routing
+docs/extension-integration.md            # integration contract
+examples/integrations/subagent-runner.ts
 examples/observme.yaml
 examples/collector.yaml
-dashboards/*.json
+dashboards/*
 ```

@@ -3,6 +3,7 @@ import { registerLifecycleHandlers } from "./event-handlers/lifecycle.ts";
 import { registerLlmHandlers } from "./event-handlers/llm.ts";
 import { registerSessionEventHandlers } from "./event-handlers/session-events.ts";
 import { registerToolBashHandlers } from "./event-handlers/tool-bash.ts";
+import { registerObservMeIntegration } from "./integration-api.ts";
 import {
   HandlerRegistrar,
   SerializedLifecycleQueue,
@@ -71,5 +72,15 @@ export function registerHandlers(pi: unknown, options: RegisterHandlersOptions =
   registerLlmHandlers(registrar, state);
   registerToolBashHandlers(registrar, state);
   registerSessionEventHandlers(registrar, state);
+  registerIntegrationCleanup(registrar, registerObservMeIntegration(pi, state));
   registrar.commit();
+}
+
+function registerIntegrationCleanup(registrar: HandlerRegistrar, unsubscribe: (() => void) | undefined): void {
+  if (!unsubscribe) return;
+  registrar.add("session_shutdown", unsubscribeIntegration.bind(undefined, unsubscribe));
+}
+
+function unsubscribeIntegration(unsubscribe: () => void): void {
+  unsubscribe();
 }

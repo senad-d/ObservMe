@@ -641,7 +641,7 @@ async function dashboardFilesAreValidGrafanaDashboards() {
 }
 
 async function dashboardPromqlQueriesUseDocumentedMetrics() {
-  const semanticConventionText = await readFile("ObservMe-Production-Docs/04-telemetry-semantic-conventions.md", "utf8");
+  const semanticConventionText = await readFile("docs/reference/04-telemetry-semantic-conventions.md", "utf8");
   const documentedNames = documentedMetricNames(semanticConventionText);
 
   for (const path of dashboardFiles) {

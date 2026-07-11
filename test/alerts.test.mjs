@@ -176,7 +176,7 @@ function escapeRegExp(value) {
 
 async function alertRulesUseOnlyDocumentedMetricNames() {
   const [semanticConventionText, alertText] = await Promise.all([
-    readFile("ObservMe-Production-Docs/04-telemetry-semantic-conventions.md", "utf8"),
+    readFile("docs/reference/04-telemetry-semantic-conventions.md", "utf8"),
     readFile(alertFile, "utf8"),
   ]);
   const documentedNames = documentedMetricNames(semanticConventionText);

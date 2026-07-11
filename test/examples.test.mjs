@@ -159,7 +159,7 @@ async function observmeExampleIsQueryReadyWithDocumentedSecretInputs() {
 
 async function collectorExampleMatchesProductionReference() {
   const [docs, collector] = await Promise.all([
-    readText("ObservMe-Production-Docs/05-otel-pipeline-and-collector.md"),
+    readText("docs/reference/05-otel-pipeline-and-collector.md"),
     readText(collectorExampleFile),
   ]);
   const reference = extractProductionCollectorReference(docs);

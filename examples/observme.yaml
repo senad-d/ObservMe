@@ -1,3 +1,7 @@
+# Privacy-preserving local-development profile for the supported ObservMe stack.
+# Copy to <project>/<CONFIG_DIR_NAME>/observme.yaml (normally .pi/observme.yaml).
+# Keep credentials in environment variables or a trusted project .env, not here.
+# Guide: examples/README.md; full schema: docs/reference/12-configuration-reference.md.
 observme:
   enabled: true
   environment: development

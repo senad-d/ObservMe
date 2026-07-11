@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const checkExtensions = new Set([".ts", ".mjs", ".json", ".md", ".yml", ".yaml"]);
-const roots = [".github", "dashboards", "dev-shims", "docs", "scripts", "specs", "src", "test"];
+const roots = [".github", "dashboards", "dev-shims", "docs", "examples", "scripts", "specs", "src", "test"];
 const rootFiles = [
   ".gitignore",
   "CHANGELOG.md",

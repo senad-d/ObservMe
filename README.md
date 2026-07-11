@@ -42,8 +42,10 @@ ObservMe maps Pi lifecycle and session events to OpenTelemetry traces, metrics, 
 - [Implementation Status](#implementation-status)
 - [Quick Start](#quick-start)
 - [Installation](#installation)
+- [Extension Integration](#extension-integration)
 - [Commands](#commands)
 - [Architecture](#architecture)
+- [Available Telemetry](#available-telemetry)
 - [Configuration and Privacy](#configuration-and-privacy)
 - [Safety Model](#safety-model)
 - [Dashboards and Examples](#dashboards-and-examples)
@@ -56,7 +58,7 @@ ObservMe maps Pi lifecycle and session events to OpenTelemetry traces, metrics, 
 
 ## Implementation Status
 
-This checkout implements the ObservMe MVP scope from the packaged `ObservMe-Production-Docs/00-README.md` design overview:
+This checkout implements the ObservMe MVP scope described by the packaged [`docs/reference/00-README.md`](docs/reference/00-README.md) technical reference:
 
 - Extension load checks and `/obs health` backend checks.
 - Session, workflow, agent-run, turn, LLM, tool, bash, subagent-spawn, wait/join, compaction, branch, model-change, and thinking-level telemetry.
@@ -65,8 +67,6 @@ This checkout implements the ObservMe MVP scope from the packaged `ObservMe-Prod
 - Configurable capture controls, redaction, path scrubbing, hashing, truncation, and high-cardinality metric-label guards.
 - Grafana dashboard JSON, alert rules, SLO definitions, Collector examples, and compatibility matrix artifacts.
 - Unit, contract, integration, chaos/failure, performance, package, and smoke-test coverage in the validation pipeline.
-
-The repository version is currently `0.1.0`. Run the validation commands below before publishing or deploying a release build.
 
 ## Quick Start
 
@@ -144,6 +144,31 @@ pi --no-extensions -e .
 | Git | `pi install git:senad-d/ObservMe` | Install from Git; use a tag or commit when you need a fixed version. |
 | Local checkout | `pi --no-extensions -e .` | Develop or test this repository. |
 
+The package also includes the `observme-docs` skill. Pi can load it automatically for natural-language ObservMe questions, or you can invoke it explicitly with `/skill:observme-docs`. The skill reads only the relevant packaged documentation and cites the matching file and section. ObservMe registers no system-prompt hook; Pi exposes the skill through its normal skill-discovery metadata.
+
+## Extension Integration
+
+Orchestrators, subagent runners, process managers, remote executors, and other Pi extensions can request ObservMe's versioned integration API through `pi.events`. The API records parent-side spawn/wait/join telemetry and returns the sanitized environment that must be passed to each child Pi process for workflow, agent-lineage, and W3C trace propagation.
+
+```typescript
+import { requestObservMeIntegration } from "@senad-d/observme/integration";
+
+const observme = requestObservMeIntegration(pi);
+const started = observme?.startSubagent({
+  command: "pi",
+  spawnType: "extension",
+  spawnReason: "delegated_task",
+  env: process.env,
+});
+
+if (started?.ok) {
+  await launchChildPi({ env: started.env });
+  observme.completeSubagent(started.spawnId, { childStatus: "active" });
+}
+```
+
+Use [`docs/extension-integration.md`](docs/extension-integration.md) for the complete lifecycle and API contract. The shipped [`examples/integrations/subagent-runner.ts`](examples/integrations/subagent-runner.ts) wraps a generic child transport, while [`docs/agent-subagent-observability-requirements.md`](docs/agent-subagent-observability-requirements.md) covers the larger orchestration design.
+
 ## Commands
 
 All commands are registered under `/obs`.
@@ -183,7 +208,67 @@ Grafana
 
 The extension factory in `src/extension.ts` only registers handlers and commands. OTEL SDK startup happens from `session_start`, and bounded flush/shutdown happens from `session_shutdown`, so importing or registering the extension does not open exporters, timers, or sockets.
 
-See `ObservMe-Production-Docs/02-reference-architecture.md` for the full architecture. Implementation planning specs are repository-only and live at <https://github.com/senad-d/ObservMe/tree/main/specs>. A reference Docker Compose deployment of the Grafana/Tempo/Loki/Prometheus/Collector stack is also repository-only at <https://github.com/senad-d/ObservMe/tree/main/observability-stack> because it contains generated local credentials and state placeholders.
+## Available Telemetry
+
+Traces, metrics, and logs are enabled by default and can be disabled independently in configuration. The names below are the OpenTelemetry instrument, span, and `event.name` values defined by ObservMe; backend ingestion may normalize dotted names. The tables identify reserved or registered names that do not yet have a live recording point. Other signals appear only after their corresponding Pi lifecycle event occurs.
+
+Metric labels are intentionally low-cardinality. Session, workflow, agent, trace, span, and entry IDs are available on correlated spans and logs, but are not added to Prometheus labels. Prometheus-compatible backends expose histograms as the usual `_bucket`, `_sum`, and `_count` series.
+
+### Metrics
+
+| Type | Area | Available metrics | What they show |
+| --- | --- | --- | --- |
+| Counter | Sessions and workflows | `observme_sessions_started_total`<br>`observme_sessions_shutdown_total`<br>`observme_workflows_started_total`<br>`observme_workflows_completed_total`<br>`observme_workflow_errors_total` | Session lifecycle and root-workflow outcomes. |
+| Counter | Agents and subagents | `observme_agent_runs_total`<br>`observme_agent_run_errors_total`<br>`observme_subagents_spawned_total`<br>`observme_subagent_spawn_failures_total`<br>`observme_orphan_agents_total`<br>`observme_trace_context_propagation_failures_total`<br>`observme_child_agent_failures_total`<br>`observme_parent_recovered_from_child_failure_total` | Agent activity, lineage health, child failures, and parent recovery. |
+| Counter | Turns and LLM requests | `observme_turns_started_total`<br>`observme_turns_completed_total`<br>`observme_llm_requests_total`<br>`observme_llm_errors_total` | Turn throughput and provider request outcomes. |
+| Counter | LLM tokens and cost | `observme_llm_input_tokens_total`<br>`observme_llm_output_tokens_total`<br>`observme_llm_cache_read_tokens_total`<br>`observme_llm_cache_write_tokens_total`<br>`observme_llm_cache_write_1h_tokens_total`<br>`observme_llm_reasoning_tokens_total`<br>`observme_llm_total_tokens_total`<br>`observme_llm_cost_usd_total` | Provider-reported token usage, cache usage, reasoning usage, and USD cost. Values are recorded when the provider supplies them. |
+| Counter | Tools and Bash | `observme_tool_calls_total`<br>`observme_tool_failures_total`<br>`observme_bash_executions_total`<br>`observme_bash_failures_total` | Tool and interactive Bash volume and failures. |
+| Counter | Session changes | `observme_model_changes_total`<br>`observme_thinking_level_changes_total`<br>`observme_compactions_total`<br>`observme_branches_total` | Model/thinking changes, compactions, and branch creation. |
+| Counter | ObservMe health | `observme_telemetry_dropped_total`<br>`observme_export_errors_total`<br>`observme_redaction_failures_total`<br>`observme_events_observed_total`<br>`observme_handler_errors_total` | Local drops, export/redaction failures, handler activity, and handler failures. |
+| Histogram | Workflow and agent tree | `observme_workflow_duration_ms`<br>`observme_agent_run_duration_ms`<br>`observme_subagent_spawn_duration_ms`<br>`observme_agent_wait_duration_ms`<br>`observme_agent_join_duration_ms`<br>`observme_agent_tree_depth`<br>`observme_agent_tree_width`<br>`observme_agent_fanout_count` | Workflow/agent latency and multi-agent tree shape. |
+| Histogram | Operation latency | `observme_turn_duration_ms`<br>`observme_llm_request_duration_ms`<br>`observme_tool_duration_ms`<br>`observme_bash_duration_ms`<br>`observme_handler_duration_ms` | End-to-end operation and extension-handler duration in milliseconds. |
+| Histogram | Context and payload size | `observme_compaction_tokens_before`<br>`observme_prompt_size_chars`<br>`observme_response_size_chars`<br>`observme_tool_result_size_chars` | Context size before compaction and payload sizes in characters. Size metrics do not contain payload content. |
+| Up-down counter | Current activity | `observme_active_spans`<br>`observme_active_agents` | Active operations and agents for the current exported stream. |
+| Registered, not yet recorded | Agent lifetime | `observme_agent_lifetime_duration_ms` | Reserved instrument; the current live handlers do not record measurements yet. |
+| Registered, not yet recorded | Official GenAI compatibility | `gen_ai.client.token.usage`<br>`gen_ai.client.operation.duration` | Reserved OpenTelemetry GenAI instruments; use the `observme_llm_*` metrics above for current data. |
+
+### Traces
+
+| Span name | Created for | Notes |
+| --- | --- | --- |
+| `pi.session` | A trusted Pi session | Root session span. It remains open during the session and is ended, flushed, and exported on `session_shutdown`. |
+| `pi.agent.run` | An agent run | Child of the session span; records run identity, lineage, source, duration, and status. |
+| `pi.agent.spawn` | A subagent launch | Records spawn type/reason, child identity, propagation outcome, duration, and failure status. |
+| `pi.agent.wait` | Waiting for a child agent | Correlates the parent, child, spawn, wait reason, and duration. |
+| `pi.agent.join` | Joining a child agent | Records child/join status, failure propagation or recovery, and duration. |
+| `pi.turn` | An agent turn | Child of the active agent run when available; contains turn, model, and lineage metadata. |
+| `pi.llm.request` | An LLM provider request | Records provider/model, API, usage, cost, stop reason, duration, and status. Redacted content attributes are opt-in. |
+| `pi.tool.call` | A Pi tool call | Records safe tool metadata, result size, duration, success, and bounded error class. Arguments/results are opt-in. |
+| `pi.bash.execution` | Interactive Bash execution | Records exit/cancel/truncation metadata, output size, duration, and status. Commands/output are opt-in. Tool-driven Bash remains a `pi.tool.call` span. |
+| `pi.compaction` | Session compaction | Records compaction reason, token count, summary metadata, and file-count metadata. |
+| `pi.branch` | Session-tree branch creation | Records source/destination entry metadata, branch summary metadata, and file counts. |
+| `pi.model.change` | Model change | Reserved span name. Current live telemetry adds a `model.changed` event to `pi.session` and emits a structured log instead of a standalone span. |
+| `pi.thinking.change` | Thinking-level change | Reserved span name. Current live telemetry adds a `thinking.changed` event to `pi.session` and emits a structured log instead of a standalone span. |
+
+### Logs
+
+All operational logs use short event bodies plus structured attributes. Correlation fields include available session, workflow, agent, agent-run, turn, trace, and span IDs. Raw prompts, responses, thinking, tool data, Bash data, paths, and error messages are excluded unless their specific capture setting is enabled and the value passes the redaction policy.
+
+| Area | Available `event.name` values | Availability and purpose |
+| --- | --- | --- |
+| Configuration, session, and workflow | `config.rejected`<br>`session.started`<br>`session.shutdown`<br>`session.duplicate_start`<br>`workflow.started`<br>`workflow.completed`<br>`workflow.failed` | Configuration diagnostics and top-level lifecycle/outcome events. |
+| Reserved session events | `session.named`<br>`session.error` | Public event names reserved for compatibility; current live handlers do not emit them. |
+| Agent run | `agent.run.started`<br>`agent.run.completed`<br>`agent.run.failed` | Agent-run lifecycle and outcome. |
+| Subagent lineage | `agent.spawn.started`<br>`agent.spawn.completed`<br>`agent.spawn.failed`<br>`agent.wait.started`<br>`agent.wait.completed`<br>`agent.join.started`<br>`agent.join.completed`<br>`agent.orphaned`<br>`trace_context.propagation_failed` | Parent/child lifecycle, lineage gaps, propagation failures, and join outcomes. |
+| Turn | `turn.started`<br>`turn.completed` | Turn lifecycle with run/turn correlation. |
+| LLM lifecycle | `llm.request.started`<br>`llm.request.completed`<br>`llm.request.failed` | Content-free provider request lifecycle, usage, cost, stop reason, and bounded errors. |
+| LLM content | `llm.prompt.captured`<br>`llm.response.captured`<br>`llm.thinking.captured` | Emitted only when the corresponding prompt, response, or thinking capture flag is enabled and redaction succeeds. |
+| Replay | `message.replayed` | Emitted by explicit `/obs backfill` replay; historical replay is disabled by default. |
+| Tools | `tool.call.started`<br>`tool.call.completed`<br>`tool.call.failed` | Content-free tool lifecycle, safe tool metadata, status, and correlation. |
+| Tool content | `tool.error.captured` | Separate failed-tool result log emitted only when `capture.toolResults` is enabled and redaction succeeds. |
+| Bash | `bash.completed` | Interactive Bash completion, status, exit/cancel/truncation metadata, and safe size/hash metadata. |
+| Session changes | `model.changed`<br>`thinking.changed`<br>`branch.created`<br>`compaction.created` | Model/thinking annotations and branch/compaction lifecycle. |
+| ObservMe health | `telemetry.dropped`<br>`redaction.failed`<br>`export.failed`<br>`handler.failed` | Bounded, content-safe diagnostics for the extension's own telemetry pipeline. |
 
 ## Configuration and Privacy
 
@@ -192,8 +277,6 @@ ObservMe supports layered configuration with this precedence:
 ```text
 defaults → global ~/.pi/agent/observme.yaml → trusted project config → trusted project .env → system environment variables → runtime options
 ```
-
-The extension automatically creates `<project>/<CONFIG_DIR_NAME>/observme.yaml` (`<project>/.pi/observme.yaml` in the standard distribution) the first time Pi emits `session_start` in a trusted project and the file does not already exist. It uses Pi's exported config-directory name and serialized file-mutation queue. Pi emits that lifecycle for startup, `/reload`, new-session, resume, and fork flows; ObservMe attempts the same idempotent bootstrap for each trusted flow, skips untrusted projects or contexts without `ctx.cwd`, and never overwrites an existing file. Edit this file for project-specific setup: `otlp.endpoint` / `otlp.signalEndpoints` for your Collector, `resource.attributes` for service/project/tenant/environment identity, `capture` and `privacy` for content visibility, and `query.grafana` plus `query.links.traceUrlTemplate` for `/obs` Grafana commands. The generated starter keeps content-capture flags disabled, `privacy.redactionEnabled: true`, and `privacy.allowUnsafeCapture: false`; for local debugging, set only the needed `capture.*` flags to `true` and keep redaction enabled. Keep secrets out of YAML; use environment variables or a trusted project `.env` for values such as `OBSERVME_OTLP_TOKEN`, `OBSERVME_GRAFANA_TOKEN`, `OBSERVME_GRAFANA_PASSWORD`, and `OBSERVME_HASH_SALT`. See [`docs/configuration.md`](docs/configuration.md) for the quick configuration guide.
 
 Factory-safe loading uses defaults/global/system-environment/runtime options only. Session-scoped loading can add trusted project config and a project-local `.env` when Pi marks the project trusted. `/obs status` reports the effective config source, whether project-local config was loaded, skipped because the project is untrusted, or missing, plus bounded rejection issue codes, the configured Grafana URL, and query-readiness status without rendering tokens or passwords. In untrusted projects, ObservMe does not read project-local config or `.env` files and uses safe defaults/global/system-environment layers instead. Invalid or unsafe configuration emits a bounded `config.rejected` diagnostic and falls back safely without exposing rejected values.
 
@@ -269,7 +352,7 @@ For intentionally raw local debugging only, set `OBSERVME_REDACTION_ENABLED=fals
 
 Only new LLM events emitted after these settings and the updated Collector are active can show content; older telemetry dropped by the Collector cannot be recovered. Open the **ObservMe LLM Conversations** dashboard for a dedicated opt-in chat timeline. Do not query Grafana with raw prompt or response text.
 
-Full configuration schema: `ObservMe-Production-Docs/12-configuration-reference.md`. Full redaction/privacy design: `ObservMe-Production-Docs/06-security-privacy-redaction.md`.
+Full configuration schema: `docs/reference/12-configuration-reference.md`. Full redaction/privacy design: `docs/reference/06-security-privacy-redaction.md`.
 
 ## Safety Model
 
@@ -281,7 +364,7 @@ Full configuration schema: `ObservMe-Production-Docs/12-configuration-reference.
 - `/obs` query commands are read-only and are not imported by telemetry-emission code paths.
 - Invalid or unsafe configuration falls back to safe defaults with bounded `config.rejected`, `/obs status`, and available Pi UI diagnostics; rejected values are never rendered. Intentionally unsafe capture emits a visible warning.
 
-See [`SECURITY.md`](SECURITY.md) and `ObservMe-Production-Docs/06-security-privacy-redaction.md` for details.
+See [`SECURITY.md`](SECURITY.md) and `docs/reference/06-security-privacy-redaction.md` for details.
 
 ## Dashboards and Examples
 
@@ -290,21 +373,28 @@ These assets are included in the npm package:
 - Grafana dashboards: `dashboards/observme-*.json`, including Overview, SLO Health, Export Health, Trace Journey, Agents, Agent Node Graphs, Cost, Models, Latency, Tools, Errors, Logs and LLM I/O, LLM Conversations, and Branches/Compactions.
 - Alert rules: `dashboards/observme-alerts.yaml`.
 - SLO definitions: `dashboards/observme-slos.yaml`.
-- Supported local-stack ObservMe config: `examples/observme.yaml`.
-- Production Collector config with high-cardinality and content-drop processors: `examples/collector.yaml`.
-- Compatibility matrix: `docs/compatibility-matrix.md`.
+- Example guide and safety notes: [`examples/README.md`](examples/README.md).
+- Transport-agnostic subagent integration example: [`examples/integrations/subagent-runner.ts`](examples/integrations/subagent-runner.ts).
+- Supported local-stack ObservMe config: [`examples/observme.yaml`](examples/observme.yaml).
+- Production Collector config with high-cardinality and content-drop processors: [`examples/collector.yaml`](examples/collector.yaml).
+- Compatibility matrix: [`docs/compatibility-matrix.md`](docs/compatibility-matrix.md).
 
 Open **ObservMe Overview** first for health/SLO chips, workload, cost, latency, agent-lineage status, and time-preserving links to focused dashboards. Use **Trace Journey** to follow a session/workflow/agent/run across Prometheus aggregates, Loki logs, and Tempo traces. Use **LLM Conversations** only for redacted opt-in content; raw prompt, response, command, path, and error-message values should never be placed in dashboard URLs or Prometheus labels. Empty failure tables normally mean no matching failures in the selected range, while optional content panels can be empty because capture is disabled by default.
 
-The full dashboard map, standard variables, drill-down workflow, threshold colors, and zero-state semantics are documented in `ObservMe-Production-Docs/09-dashboards-alerts-slos.md`.
+The full dashboard map, standard variables, drill-down workflow, threshold colors, and zero-state semantics are documented in `docs/reference/09-dashboards-alerts-slos.md`.
 
 ## Documentation Set
+
+Start with [`docs/README.md`](docs/README.md), which routes installation, configuration, privacy, telemetry, troubleshooting, operations, architecture, and contributor questions to the smallest relevant document set.
 
 - [`docs/configuration.md`](docs/configuration.md): quick configuration guide.
 - [`docs/compatibility-matrix.md`](docs/compatibility-matrix.md): supported Pi, Node.js, OpenTelemetry, and local-stack versions.
 - [`docs/validation-flow.md`](docs/validation-flow.md): secret-safe Grafana and `/obs` troubleshooting flow.
-- `ObservMe-Production-Docs/`: architecture, configuration, privacy, dashboards, and operational reference docs.
+- [`docs/extension-integration.md`](docs/extension-integration.md): public API and process-propagation contract for other Pi extensions.
+- [`examples/README.md`](examples/README.md): example selection, usage, and safety guidance.
+- [`docs/reference/00-README.md`](docs/reference/00-README.md): categorized technical reference index.
 - [`SECURITY.md`](SECURITY.md): security reporting and package safety guidance.
+- [`skills/observme-docs/SKILL.md`](skills/observme-docs/SKILL.md): Pi's progressive-disclosure router for natural-language ObservMe questions.
 
 ## Development
 

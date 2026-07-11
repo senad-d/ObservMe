@@ -10,14 +10,14 @@ Every implementation task uses the project task format: a `### <number>. <task_n
 
 ## Objective
 
-Give a future implementation session an ordered, testable, incrementally-shippable, and session-sized path from the current prepared repository (template bootstrapped, identity renamed, docs untouched, three specs present) to a working ObservMe extension that satisfies `ObservMe-Production-Docs/00-README.md`'s "Minimum Viable Production Release" checklist.
+Give a future implementation session an ordered, testable, incrementally-shippable, and session-sized path from the current prepared repository (template bootstrapped, identity renamed, docs untouched, three specs present) to a working ObservMe extension that satisfies `docs/reference/00-README.md`'s "Minimum Viable Production Release" checklist.
 
 ## Relevant Files
 
 - `specs/project-definition-brief.md` — approved identity/scope/integration-surface decisions.
 - `specs/spec-architecture.md` — module boundaries, data flow, dependency policy, security boundaries.
 - `specs/spec-guidelines.md` — coding/Pi/package/documentation/testing/security/smoke-test rules.
-- `ObservMe-Production-Docs/*.md` — canonical source of truth for all semantics; consult before implementing any task below.
+- `docs/reference/*.md` — canonical source of truth for all semantics; consult before implementing any task below.
 - `src/extension.ts`, `src/constants.ts`, `src/commands/`, `src/tools/`, `src/events/` — current template skeleton to be extended/replaced task by task.
 - `package.json`, `docs/STRUCTURE.md` — current metadata and structure convention to extend.
 
@@ -50,7 +50,7 @@ Confirm with the user whether the implementation session should author the missi
 
 ### 2. Define config schema and safe defaults
 
-- [x] Create `src/config/schema.ts` and `src/config/defaults.ts` implementing the full configuration shape and safe-by-default values from `ObservMe-Production-Docs/12-configuration-reference.md` §1 and §5 (privacy-preserving defaults: capture flags `false`, `redactionEnabled: true`, `allowUnsafeCapture: false`, `allowInsecureTransport: false`, `workflow.enabled: true`).
+- [x] Create `src/config/schema.ts` and `src/config/defaults.ts` implementing the full configuration shape and safe-by-default values from `docs/reference/12-configuration-reference.md` §1 and §5 (privacy-preserving defaults: capture flags `false`, `redactionEnabled: true`, `allowUnsafeCapture: false`, `allowInsecureTransport: false`, `workflow.enabled: true`).
 
 #### Why
 
@@ -63,7 +63,7 @@ Translate the documented configuration fields and defaults into typed schema/def
 #### Where
 
 - Target: `src/config/schema.ts`, `src/config/defaults.ts`, and related unit tests.
-- Source docs: `ObservMe-Production-Docs/12-configuration-reference.md` §1 and §5.
+- Source docs: `docs/reference/12-configuration-reference.md` §1 and §5.
 
 #### Acceptance criteria
 
@@ -86,7 +86,7 @@ Implement separate factory-safe and session-scoped loaders, read only trusted pr
 #### Where
 
 - Target: `src/config/load-config.ts` and config loader tests.
-- Source docs: `ObservMe-Production-Docs/12-configuration-reference.md` §4, `ObservMe-Production-Docs/05-otel-pipeline-and-collector.md` §10, and `specs/spec-architecture.md` §Config.
+- Source docs: `docs/reference/12-configuration-reference.md` §4, `docs/reference/05-otel-pipeline-and-collector.md` §10, and `specs/spec-architecture.md` §Config.
 
 #### Acceptance criteria
 
@@ -109,7 +109,7 @@ Implement the documented rejection rules, make invalid config fall back to safe 
 #### Where
 
 - Target: `src/config/load-config.ts` or `src/config/validate.ts`, session-start integration, and config validation tests.
-- Source docs: `ObservMe-Production-Docs/12-configuration-reference.md` §7–8.
+- Source docs: `docs/reference/12-configuration-reference.md` §7–8.
 
 #### Acceptance criteria
 
@@ -119,7 +119,7 @@ Implement the documented rejection rules, make invalid config fall back to safe 
 
 ### 5. Define attribute name constants
 
-- [x] Create `src/semconv/attributes.ts` exporting every resource, span, and log attribute key from `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §2–3, §5–11, §14 as typed constants, including `observme.tenant.id`, `pi.workflow.*`, `pi.agent.wait.*`, `pi.agent.join.*`, `pi.agent.children.*`, and operational attributes such as `observme.replayed`, `observme.evicted`, `observme.truncated`, and `observme.original_length`.
+- [x] Create `src/semconv/attributes.ts` exporting every resource, span, and log attribute key from `docs/reference/04-telemetry-semantic-conventions.md` §2–3, §5–11, §14 as typed constants, including `observme.tenant.id`, `pi.workflow.*`, `pi.agent.wait.*`, `pi.agent.join.*`, `pi.agent.children.*`, and operational attributes such as `observme.replayed`, `observme.evicted`, `observme.truncated`, and `observme.original_length`.
 
 #### Why
 
@@ -132,7 +132,7 @@ Enumerate every documented resource/span/log attribute as typed exports, group t
 #### Where
 
 - Target: `src/semconv/attributes.ts` and semantic-convention tests.
-- Source docs: `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §2–3, §5–11, and §14.
+- Source docs: `docs/reference/04-telemetry-semantic-conventions.md` §2–3, §5–11, and §14.
 
 #### Acceptance criteria
 
@@ -155,7 +155,7 @@ Export each documented span name exactly once, type the exports consistently wit
 #### Where
 
 - Target: `src/semconv/spans.ts` and span-name tests.
-- Source docs: `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §1.
+- Source docs: `docs/reference/04-telemetry-semantic-conventions.md` §1.
 
 #### Acceptance criteria
 
@@ -177,7 +177,7 @@ Export every documented metric and event name, distinguish ObservMe-owned names 
 #### Where
 
 - Target: `src/semconv/metrics.ts` and metric-name tests.
-- Source docs: `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §12, §12.5, and §14.
+- Source docs: `docs/reference/04-telemetry-semantic-conventions.md` §12, §12.5, and §14.
 
 #### Acceptance criteria
 
@@ -186,7 +186,7 @@ Export every documented metric and event name, distinguish ObservMe-owned names 
 
 ### 8. Implement secret-detection patterns
 
-- [x] Create `src/privacy/secret-patterns.ts` implementing every regex pattern from `ObservMe-Production-Docs/06-security-privacy-redaction.md` §5 (AWS access key, generic bearer token, GitHub token, OpenAI-like key, Anthropic-like key, Slack token, private key block, password assignment, API key assignment, URL credentials), each exported as a named, independently testable matcher.
+- [x] Create `src/privacy/secret-patterns.ts` implementing every regex pattern from `docs/reference/06-security-privacy-redaction.md` §5 (AWS access key, generic bearer token, GitHub token, OpenAI-like key, Anthropic-like key, Slack token, private key block, password assignment, API key assignment, URL credentials), each exported as a named, independently testable matcher.
 
 #### Why
 
@@ -199,7 +199,7 @@ Implement one named matcher per documented pattern, return enough match metadata
 #### Where
 
 - Target: `src/privacy/secret-patterns.ts` and privacy pattern tests.
-- Source docs: `ObservMe-Production-Docs/06-security-privacy-redaction.md` §5.
+- Source docs: `docs/reference/06-security-privacy-redaction.md` §5.
 
 #### Acceptance criteria
 
@@ -221,7 +221,7 @@ Compose the pipeline stages in documented order, reuse the task 8 matchers, appl
 #### Where
 
 - Target: `src/privacy/redact.ts` and redaction pipeline tests.
-- Source docs: `ObservMe-Production-Docs/06-security-privacy-redaction.md` §4 and §6, plus `ObservMe-Production-Docs/10-testing-release-operations.md` §7.
+- Source docs: `docs/reference/06-security-privacy-redaction.md` §4 and §6, plus `docs/reference/10-testing-release-operations.md` §7.
 
 #### Acceptance criteria
 
@@ -244,7 +244,7 @@ Read tenant salt only from secure runtime inputs, implement the exact hash formu
 #### Where
 
 - Target: `src/privacy/hash.ts`, `src/privacy/truncate.ts`, and privacy utility tests.
-- Source docs: `ObservMe-Production-Docs/06-security-privacy-redaction.md` §7 and §9.
+- Source docs: `docs/reference/06-security-privacy-redaction.md` §7 and §9.
 
 #### Acceptance criteria
 
@@ -275,7 +275,7 @@ Implement a pure generic wrapper around `Map`, evict the oldest entry at capacit
 
 ### 12. Implement workflow and agent-lineage context
 
-- [x] Create `src/pi/agent-lineage.ts` and `src/pi/agent-tree-tracker.ts` implementing the `pi.workflow.id/root_agent_id` and `pi.agent.id/parent_id/root_id/depth/role/capability` lineage model from `ObservMe-Production-Docs/07-extension-implementation-blueprint.md` §5 and `03-pi-event-and-session-model.md` §8, using `src/util/bounded-map.ts` (task 11) for any lineage-scoped registries it needs.
+- [x] Create `src/pi/agent-lineage.ts` and `src/pi/agent-tree-tracker.ts` implementing the `pi.workflow.id/root_agent_id` and `pi.agent.id/parent_id/root_id/depth/role/capability` lineage model from `docs/reference/07-extension-implementation-blueprint.md` §5 and `03-pi-event-and-session-model.md` §8, using `src/util/bounded-map.ts` (task 11) for any lineage-scoped registries it needs.
 
 #### Why
 
@@ -288,7 +288,7 @@ Generate IDs safely, accept only trusted parent context, track root/parent/depth
 #### Where
 
 - Target: `src/pi/agent-lineage.ts`, `src/pi/agent-tree-tracker.ts`, and lineage tests.
-- Source docs: `ObservMe-Production-Docs/07-extension-implementation-blueprint.md` §5 and `ObservMe-Production-Docs/03-pi-event-and-session-model.md` §8.
+- Source docs: `docs/reference/07-extension-implementation-blueprint.md` §5 and `docs/reference/03-pi-event-and-session-model.md` §8.
 - Dependency: `src/util/bounded-map.ts` from task 11.
 
 #### Acceptance criteria
@@ -313,7 +313,7 @@ Expose explicit start and shutdown functions, keep module imports side-effect fr
 #### Where
 
 - Target: `src/otel/sdk.ts`, `src/otel/shutdown.ts`, and OTEL lifecycle tests.
-- Source docs: `specs/spec-architecture.md` and `ObservMe-Production-Docs/07-extension-implementation-blueprint.md` §1 and §7.
+- Source docs: `specs/spec-architecture.md` and `docs/reference/07-extension-implementation-blueprint.md` §1 and §7.
 
 #### Acceptance criteria
 
@@ -335,7 +335,7 @@ Build the tracer provider/exporter from session config after SDK startup, apply 
 #### Where
 
 - Target: `src/otel/traces.ts` and trace exporter tests.
-- Source docs: `ObservMe-Production-Docs/05-otel-pipeline-and-collector.md` §3.
+- Source docs: `docs/reference/05-otel-pipeline-and-collector.md` §3.
 - Dependency: task 13 SDK startup.
 
 #### Acceptance criteria
@@ -358,7 +358,7 @@ Create the meter provider/exporter only during enabled session startup, apply do
 #### Where
 
 - Target: `src/otel/metrics.ts` and metrics exporter tests.
-- Source docs: `ObservMe-Production-Docs/05-otel-pipeline-and-collector.md` §3.
+- Source docs: `docs/reference/05-otel-pipeline-and-collector.md` §3.
 - Dependency: task 13 SDK startup.
 
 #### Acceptance criteria
@@ -381,7 +381,7 @@ Create the logger provider/exporter only during enabled session startup, match d
 #### Where
 
 - Target: `src/otel/logs.ts` and logs exporter tests.
-- Source docs: `ObservMe-Production-Docs/05-otel-pipeline-and-collector.md` §3.
+- Source docs: `docs/reference/05-otel-pipeline-and-collector.md` §3.
 - Dependency: task 13 SDK startup.
 
 #### Acceptance criteria
@@ -404,7 +404,7 @@ Register safe session handlers, start configured OTEL signals on `session_start`
 #### Where
 
 - Target: `src/pi/handlers.ts` and session handler tests.
-- Source docs: `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §3–4, `ObservMe-Production-Docs/07-extension-implementation-blueprint.md` §10.
+- Source docs: `docs/reference/04-telemetry-semantic-conventions.md` §3–4, `docs/reference/07-extension-implementation-blueprint.md` §10.
 - Dependencies: tasks 13–16.
 
 #### Acceptance criteria
@@ -428,7 +428,7 @@ Add bounded registries for active agent and turn spans, derive turn IDs exactly 
 #### Where
 
 - Target: `src/pi/handlers.ts` and event-mapping tests.
-- Source docs: `ObservMe-Production-Docs/03-pi-event-and-session-model.md` §6 and §9, `specs/spec-architecture.md` trace-shape section.
+- Source docs: `docs/reference/03-pi-event-and-session-model.md` §6 and §9, `specs/spec-architecture.md` trace-shape section.
 - Dependencies: tasks 11–12 and 17.
 
 #### Acceptance criteria
@@ -452,7 +452,7 @@ Add resume detection to session start, read only the minimal session header/corr
 #### Where
 
 - Target: `src/pi/handlers.ts` and startup recovery tests.
-- Source docs: `ObservMe-Production-Docs/03-pi-event-and-session-model.md` §10–11.
+- Source docs: `docs/reference/03-pi-event-and-session-model.md` §10–11.
 - Dependency: task 17.
 
 #### Acceptance criteria
@@ -476,7 +476,7 @@ Track provider request lifecycle, finalize usage from assistant `message_end`, a
 #### Where
 
 - Target: `src/pi/handlers.ts` or `src/pi/llm-tracker.ts`, plus LLM handler tests.
-- Source docs: `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §7 and `ObservMe-Production-Docs/07-extension-implementation-blueprint.md` §8.
+- Source docs: `docs/reference/04-telemetry-semantic-conventions.md` §7 and `docs/reference/07-extension-implementation-blueprint.md` §8.
 - Dependencies: tasks 8–10 and 17–18.
 
 #### Acceptance criteria
@@ -501,7 +501,7 @@ Track tool execution lifecycle, close spans with success/error status, attach lo
 #### Where
 
 - Target: `src/pi/handlers.ts` and tool handler tests.
-- Source docs: `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §8.
+- Source docs: `docs/reference/04-telemetry-semantic-conventions.md` §8.
 - Dependencies: tasks 8–10 and 17–18.
 
 #### Acceptance criteria
@@ -525,7 +525,7 @@ Map bash events to spans, attach exit/cancel/truncation status, update execution
 #### Where
 
 - Target: `src/pi/handlers.ts` and bash handler tests.
-- Source docs: `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §9.
+- Source docs: `docs/reference/04-telemetry-semantic-conventions.md` §9.
 - Dependencies: tasks 8–10 and 17–18.
 
 #### Acceptance criteria
@@ -549,7 +549,7 @@ Wrap spawn launch points, inject W3C and ObservMe lineage environment values, tr
 #### Where
 
 - Target: subagent spawn/wait/join implementation modules, likely `src/pi/handlers.ts`, `src/pi/agent-lineage.ts`, and `src/pi/agent-tree-tracker.ts`.
-- Source docs: `ObservMe-Production-Docs/07-extension-implementation-blueprint.md` §7 and `ObservMe-Production-Docs/05-otel-pipeline-and-collector.md` §4.
+- Source docs: `docs/reference/07-extension-implementation-blueprint.md` §7 and `docs/reference/05-otel-pipeline-and-collector.md` §4.
 - Dependencies: tasks 11–12 and 17–18.
 
 #### Acceptance criteria
@@ -575,7 +575,7 @@ Map selection/change events to structured logs and counters, include provider/mo
 #### Where
 
 - Target: `src/pi/handlers.ts` and model/thinking handler tests.
-- Source docs: `ObservMe-Production-Docs/03-pi-event-and-session-model.md` §6 and `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §1, §12, and §14.
+- Source docs: `docs/reference/03-pi-event-and-session-model.md` §6 and `docs/reference/04-telemetry-semantic-conventions.md` §1, §12, and §14.
 
 #### Acceptance criteria
 
@@ -598,7 +598,7 @@ Map `session_compact` and `compactionEntry` fields to the canonical span attribu
 #### Where
 
 - Target: `src/pi/handlers.ts` and compaction handler tests.
-- Source docs: `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §11 and `ObservMe-Production-Docs/03-pi-event-and-session-model.md` §5.
+- Source docs: `docs/reference/04-telemetry-semantic-conventions.md` §11 and `docs/reference/03-pi-event-and-session-model.md` §5.
 
 #### Acceptance criteria
 
@@ -620,7 +620,7 @@ Map `session_tree` event data to branch span/log/metric attributes, hash or norm
 #### Where
 
 - Target: `src/pi/handlers.ts` and branch handler tests.
-- Source docs: `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §10 and `ObservMe-Production-Docs/03-pi-event-and-session-model.md` §4 and §6.
+- Source docs: `docs/reference/04-telemetry-semantic-conventions.md` §10 and `docs/reference/03-pi-event-and-session-model.md` §4 and §6.
 
 #### Acceptance criteria
 
@@ -629,7 +629,7 @@ Map `session_tree` event data to branch span/log/metric attributes, hash or norm
 
 ### 27. Implement `/obs status` command
 
-- [x] Create `src/commands/obs-status.ts` implementing the read-only local-state command per `ObservMe-Production-Docs/08-query-grafana-integration.md` §4.
+- [x] Create `src/commands/obs-status.ts` implementing the read-only local-state command per `docs/reference/08-query-grafana-integration.md` §4.
 
 #### Why
 
@@ -642,7 +642,7 @@ Read in-memory/local runtime state only, format a concise status report, and avo
 #### Where
 
 - Target: `src/commands/obs-status.ts` and command tests.
-- Source docs: `ObservMe-Production-Docs/08-query-grafana-integration.md` §4.
+- Source docs: `docs/reference/08-query-grafana-integration.md` §4.
 
 #### Acceptance criteria
 
@@ -663,7 +663,7 @@ Perform bounded-timeout reachability checks, summarize successes and failures, a
 #### Where
 
 - Target: `src/commands/obs-health.ts` and command tests.
-- Source docs: `ObservMe-Production-Docs/08-query-grafana-integration.md` §4.
+- Source docs: `docs/reference/08-query-grafana-integration.md` §4.
 
 #### Acceptance criteria
 
@@ -685,7 +685,7 @@ Read only in-memory runtime counters and trace-link state, render the session su
 #### Where
 
 - Target: `src/commands/obs-session.ts` and command tests.
-- Source docs: `ObservMe-Production-Docs/08-query-grafana-integration.md` §4.
+- Source docs: `docs/reference/08-query-grafana-integration.md` §4.
 
 #### Acceptance criteria
 
@@ -707,7 +707,7 @@ Implement health checks and trace-link URL construction with configured timeout 
 #### Where
 
 - Target: `src/query/grafana.ts` and Grafana client tests.
-- Source docs: `ObservMe-Production-Docs/08-query-grafana-integration.md` §3 and §6.
+- Source docs: `docs/reference/08-query-grafana-integration.md` §3 and §6.
 
 #### Acceptance criteria
 
@@ -729,7 +729,7 @@ Build bounded Tempo search requests from generated IDs or hashed fields only, en
 #### Where
 
 - Target: `src/query/tempo.ts` and Tempo client tests.
-- Source docs: `ObservMe-Production-Docs/08-query-grafana-integration.md` §6 and §7.
+- Source docs: `docs/reference/08-query-grafana-integration.md` §6 and §7.
 
 #### Acceptance criteria
 
@@ -751,7 +751,7 @@ Implement bounded LogQL query construction, normalize dotted attributes to under
 #### Where
 
 - Target: `src/query/loki.ts` and Loki client tests.
-- Source docs: `ObservMe-Production-Docs/08-query-grafana-integration.md` §4 and §6, `ObservMe-Production-Docs/13-source-notes.md`.
+- Source docs: `docs/reference/08-query-grafana-integration.md` §4 and §6, `docs/reference/13-source-notes.md`.
 
 #### Acceptance criteria
 
@@ -773,7 +773,7 @@ Implement bounded PromQL execution, enforce result caps, and add query-construct
 #### Where
 
 - Target: `src/query/prometheus.ts` and Prometheus client tests.
-- Source docs: `ObservMe-Production-Docs/08-query-grafana-integration.md` §4 and §6, `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §13.
+- Source docs: `docs/reference/08-query-grafana-integration.md` §4 and §6, `docs/reference/04-telemetry-semantic-conventions.md` §13.
 
 #### Acceptance criteria
 
@@ -795,7 +795,7 @@ Use the Prometheus client to run documented aggregate PromQL, default to provide
 #### Where
 
 - Target: `src/commands/obs-cost.ts` and command tests.
-- Source docs: `ObservMe-Production-Docs/08-query-grafana-integration.md` §4.
+- Source docs: `docs/reference/08-query-grafana-integration.md` §4.
 - Dependency: task 33.
 
 #### Acceptance criteria
@@ -818,7 +818,7 @@ Build links through the Grafana client and configurable URL template, support cu
 #### Where
 
 - Target: `src/commands/obs-trace.ts`, `src/commands/obs-link.ts`, and command tests.
-- Source docs: `ObservMe-Production-Docs/08-query-grafana-integration.md` §4 and §5.
+- Source docs: `docs/reference/08-query-grafana-integration.md` §4 and §5.
 - Dependency: task 30.
 
 #### Acceptance criteria
@@ -841,7 +841,7 @@ Run the documented PromQL through the Prometheus client, aggregate only by allow
 #### Where
 
 - Target: `src/commands/obs-tools.ts` and command tests.
-- Source docs: `ObservMe-Production-Docs/08-query-grafana-integration.md` §4.
+- Source docs: `docs/reference/08-query-grafana-integration.md` §4.
 - Dependency: task 33.
 
 #### Acceptance criteria
@@ -864,7 +864,7 @@ Build the documented Loki queries through the Loki client, filter errors/session
 #### Where
 
 - Target: `src/commands/obs-errors.ts`, `src/commands/obs-logs.ts`, and command tests.
-- Source docs: `ObservMe-Production-Docs/08-query-grafana-integration.md` §4.
+- Source docs: `docs/reference/08-query-grafana-integration.md` §4.
 - Dependency: task 32.
 
 #### Acceptance criteria
@@ -887,7 +887,7 @@ Combine in-memory lineage context with Prometheus aggregates and Tempo/Loki dril
 #### Where
 
 - Target: `src/commands/obs-agents.ts` and command tests.
-- Source docs: `ObservMe-Production-Docs/08-query-grafana-integration.md` §4.
+- Source docs: `docs/reference/08-query-grafana-integration.md` §4.
 - Dependencies: tasks 12, 31, and 33.
 
 #### Acceptance criteria
@@ -910,7 +910,7 @@ Implement an explicit command-only replay flow with user confirmation, rate limi
 #### Where
 
 - Target: `src/commands/obs-backfill.ts` and backfill tests.
-- Source docs: `ObservMe-Production-Docs/07-extension-implementation-blueprint.md` §12.
+- Source docs: `docs/reference/07-extension-implementation-blueprint.md` §12.
 - Dependencies: tasks 8–10 and 19.
 
 #### Acceptance criteria
@@ -943,7 +943,7 @@ Delete or repurpose example modules, make `src/extension.ts` registration-only, 
 
 ### 41. Build overview, cost, and latency dashboards
 
-- [x] Create `dashboards/observme-overview.json`, `dashboards/observme-cost.json`, and `dashboards/observme-latency.json` per `ObservMe-Production-Docs/09-dashboards-alerts-slos.md` §2–3.
+- [x] Create `dashboards/observme-overview.json`, `dashboards/observme-cost.json`, and `dashboards/observme-latency.json` per `docs/reference/09-dashboards-alerts-slos.md` §2–3.
 
 #### Why
 
@@ -956,7 +956,7 @@ Create valid Grafana dashboard JSON using only documented metric names and PromQ
 #### Where
 
 - Target: `dashboards/observme-overview.json`, `dashboards/observme-cost.json`, and `dashboards/observme-latency.json`.
-- Source docs: `ObservMe-Production-Docs/09-dashboards-alerts-slos.md` §2–3.
+- Source docs: `docs/reference/09-dashboards-alerts-slos.md` §2–3.
 
 #### Acceptance criteria
 
@@ -978,7 +978,7 @@ Create valid Grafana dashboard JSON, copy only documented query patterns, and ex
 #### Where
 
 - Target: `dashboards/observme-tools.json`, `dashboards/observme-agents.json`, and `dashboards/observme-models.json`.
-- Source docs: `ObservMe-Production-Docs/09-dashboards-alerts-slos.md` §4–6.
+- Source docs: `docs/reference/09-dashboards-alerts-slos.md` §4–6.
 
 #### Acceptance criteria
 
@@ -1000,7 +1000,7 @@ Create valid Grafana dashboard JSON, use documented PromQL/LogQL, and normalize 
 #### Where
 
 - Target: `dashboards/observme-errors.json`, `dashboards/observme-branches-compactions.json`, and `dashboards/observme-export-health.json`.
-- Source docs: `ObservMe-Production-Docs/09-dashboards-alerts-slos.md` §7–9 and `ObservMe-Production-Docs/13-source-notes.md`.
+- Source docs: `docs/reference/09-dashboards-alerts-slos.md` §7–9 and `docs/reference/13-source-notes.md`.
 
 #### Acceptance criteria
 
@@ -1022,7 +1022,7 @@ Create the alert artifact with every documented expression and severity, referen
 #### Where
 
 - Target: `dashboards/observme-alerts.yaml` or equivalent alerting artifact.
-- Source docs: `ObservMe-Production-Docs/09-dashboards-alerts-slos.md` §11 and `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md`.
+- Source docs: `docs/reference/09-dashboards-alerts-slos.md` §11 and `docs/reference/04-telemetry-semantic-conventions.md`.
 
 #### Acceptance criteria
 
@@ -1044,7 +1044,7 @@ Document each SLO indicator with PromQL where applicable, identify measurement s
 #### Where
 
 - Target: an SLO artifact under `dashboards/` or docs, and any supporting validation tests.
-- Source docs: `ObservMe-Production-Docs/09-dashboards-alerts-slos.md` §12.
+- Source docs: `docs/reference/09-dashboards-alerts-slos.md` §12.
 
 #### Acceptance criteria
 
@@ -1066,7 +1066,7 @@ Copy the production reference settings into example YAML, include high-cardinali
 #### Where
 
 - Target: `examples/observme.yaml` and `examples/collector.yaml`.
-- Source docs: `ObservMe-Production-Docs/05-otel-pipeline-and-collector.md` §5–6.
+- Source docs: `docs/reference/05-otel-pipeline-and-collector.md` §5–6.
 
 #### Acceptance criteria
 
@@ -1088,7 +1088,7 @@ Create the document, populate it with versions tested in CI/local validation, an
 #### Where
 
 - Target: a compatibility matrix document under `docs/`, `specs/`, or another agreed documentation location.
-- Source docs: `ObservMe-Production-Docs/10-testing-release-operations.md` §11.
+- Source docs: `docs/reference/10-testing-release-operations.md` §11.
 
 #### Acceptance criteria
 
@@ -1109,7 +1109,7 @@ Start a local debug-exporter Collector, run representative telemetry through Obs
 #### Where
 
 - Target: integration test files and Collector test fixtures/config.
-- Source docs: `ObservMe-Production-Docs/10-testing-release-operations.md` §5.
+- Source docs: `docs/reference/10-testing-release-operations.md` §5.
 
 #### Acceptance criteria
 
@@ -1131,7 +1131,7 @@ Run the `observability-stack/` Compose services, emit representative telemetry, 
 #### Where
 
 - Target: integration tests and any fixtures under `observability-stack/` or test directories.
-- Source docs: `ObservMe-Production-Docs/10-testing-release-operations.md` §6.
+- Source docs: `docs/reference/10-testing-release-operations.md` §6.
 - Existing stack: `observability-stack/`.
 
 #### Acceptance criteria
@@ -1154,7 +1154,7 @@ Implement each documented scenario, assert Pi continues running, and assert the 
 #### Where
 
 - Target: chaos/failure integration tests.
-- Source docs: `ObservMe-Production-Docs/10-testing-release-operations.md` §7.
+- Source docs: `docs/reference/10-testing-release-operations.md` §7.
 
 #### Acceptance criteria
 
@@ -1175,7 +1175,7 @@ Generate the documented workload, measure handler latency percentiles, memory gr
 #### Where
 
 - Target: performance test files and result-reporting output.
-- Source docs: `ObservMe-Production-Docs/10-testing-release-operations.md` §8.
+- Source docs: `docs/reference/10-testing-release-operations.md` §8.
 
 #### Acceptance criteria
 
@@ -1197,7 +1197,7 @@ Build test cases for every documented secret/PII/path/content category, exercise
 #### Where
 
 - Target: `test/redaction.test.ts` and any redaction fixtures.
-- Source docs: `ObservMe-Production-Docs/10-testing-release-operations.md` §4.
+- Source docs: `docs/reference/10-testing-release-operations.md` §4.
 - Dependencies: tasks 8–10.
 
 #### Acceptance criteria
@@ -1219,7 +1219,7 @@ Add the documented fixture files, run every handler path from tasks 17–26, and
 #### Where
 
 - Target: `test/event-mapping.test.ts`, `test/fixtures/`, and `test/fixtures/events/`.
-- Source docs: `ObservMe-Production-Docs/10-testing-release-operations.md` §3.
+- Source docs: `docs/reference/10-testing-release-operations.md` §3.
 - Dependencies: tasks 17–26.
 
 #### Acceptance criteria
@@ -1242,7 +1242,7 @@ Enumerate the constants from task 7, exercise the corresponding handler or metri
 #### Where
 
 - Target: `test/metrics.test.ts`.
-- Source docs: `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §12.
+- Source docs: `docs/reference/04-telemetry-semantic-conventions.md` §12.
 - Dependency: task 7 and the relevant handler tasks.
 
 #### Acceptance criteria
@@ -1264,7 +1264,7 @@ Mock exporters for down/slow/full-queue behavior, run telemetry emission paths, 
 #### Where
 
 - Target: `test/exporter-failure.test.ts`.
-- Source docs: `ObservMe-Production-Docs/10-testing-release-operations.md` §7.
+- Source docs: `docs/reference/10-testing-release-operations.md` §7.
 - Related task: task 50 covers broader chaos/integration scenarios.
 
 #### Acceptance criteria
@@ -1286,7 +1286,7 @@ Exercise lineage and tree-tracker modules directly, simulate propagated/missing/
 #### Where
 
 - Target: `test/agent-lineage.test.ts`.
-- Source docs: `ObservMe-Production-Docs/10-testing-release-operations.md` §7 and `ObservMe-Production-Docs/06-security-privacy-redaction.md` §8.
+- Source docs: `docs/reference/10-testing-release-operations.md` §7 and `docs/reference/06-security-privacy-redaction.md` §8.
 - Dependencies: tasks 12 and 23.
 
 #### Acceptance criteria
@@ -1310,7 +1310,7 @@ Enumerate every emitted metric and label set, compare labels against the allowed
 #### Where
 
 - Target: `test/cardinality.test.ts`.
-- Source docs: `ObservMe-Production-Docs/10-testing-release-operations.md` §9 and `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` §13.
+- Source docs: `docs/reference/10-testing-release-operations.md` §9 and `docs/reference/04-telemetry-semantic-conventions.md` §13.
 
 #### Acceptance criteria
 
@@ -1331,24 +1331,24 @@ Review user-facing docs against the implemented MVP, replace template/planned la
 #### Where
 
 - Target: `README.md`, `CHANGELOG.md`, `SECURITY.md`, and final smoke-test notes.
-- Source docs: `ObservMe-Production-Docs/00-README.md` MVP checklist and implemented behavior from tasks 1–57.
+- Source docs: `docs/reference/00-README.md` MVP checklist and implemented behavior from tasks 1–57.
 
 #### Acceptance criteria
 
 - `npm run validate` passes (lint, typecheck, tests, pack check, all smoke scripts).
 - `README.md` documents every implemented `/obs` command and the safety/privacy model accurately; no `{{PLACEHOLDER}}` tokens or "Planned" labels remain for shipped behavior.
-- `CHANGELOG.md` has a real, dated entry describing the implemented MVP scope against `ObservMe-Production-Docs/00-README.md`'s "Minimum Viable Production Release" checklist.
+- `CHANGELOG.md` has a real, dated entry describing the implemented MVP scope against `docs/reference/00-README.md`'s "Minimum Viable Production Release" checklist.
 - An isolated smoke test (`pi --no-extensions -e .`) loads ObservMe without error and `/obs status` returns a sane result against a local debug Collector.
 
 ## Testing Strategy
 
-Follow `ObservMe-Production-Docs/10-testing-release-operations.md`: unit tests first (tasks 2–12, then 52–57 once their subject modules exist), then fixture-driven contract tests (task 53) against Pi event payloads produced by tasks 17–26, then Collector integration tests (task 48), then Grafana-stack integration tests (task 49, using the existing `observability-stack/` Docker Compose setup), then chaos/failure and performance tests (tasks 50–51). Keep `npm run validate` green after every task.
+Follow `docs/reference/10-testing-release-operations.md`: unit tests first (tasks 2–12, then 52–57 once their subject modules exist), then fixture-driven contract tests (task 53) against Pi event payloads produced by tasks 17–26, then Collector integration tests (task 48), then Grafana-stack integration tests (task 49, using the existing `observability-stack/` Docker Compose setup), then chaos/failure and performance tests (tasks 50–51). Keep `npm run validate` green after every task.
 
 ## Acceptance Criteria
 
-- All 58 tasks above are implemented in order, each with its own passing acceptance criteria, before ObservMe is considered MVP-complete per `ObservMe-Production-Docs/00-README.md`.
+- All 58 tasks above are implemented in order, each with its own passing acceptance criteria, before ObservMe is considered MVP-complete per `docs/reference/00-README.md`.
 - No task's acceptance criteria is satisfied by documentation alone when it specifies code/test behavior.
-- The final implementation satisfies every bullet in `ObservMe-Production-Docs/00-README.md`'s "Minimum Viable Production Release" list, plus the alerts, SLOs, compatibility matrix, and integration/chaos/performance tests identified in the production docs but not originally called out in the MVP bullet list.
+- The final implementation satisfies every bullet in `docs/reference/00-README.md`'s "Minimum Viable Production Release" list, plus the alerts, SLOs, compatibility matrix, and integration/chaos/performance tests identified in the production docs but not originally called out in the MVP bullet list.
 
 ## Validation Commands
 
@@ -1357,10 +1357,10 @@ Follow `ObservMe-Production-Docs/10-testing-release-operations.md`: unit tests f
 
 ## Notes
 
-This task spec is prepared but **not started**. All checkboxes are `- [ ]` and must remain unchecked until a separate implementation session works through them one at a time, per this skill's hard boundary against implementing features during preparation. If any task's acceptance criteria conflicts with `ObservMe-Production-Docs/`, update the task, not the production docs.
+This task spec is prepared but **not started**. All checkboxes are `- [ ]` and must remain unchecked until a separate implementation session works through them one at a time, per this skill's hard boundary against implementing features during preparation. If any task's acceptance criteria conflicts with `docs/reference/`, update the task, not the production docs.
 
 Tasks are intentionally small (one file or one tightly coupled pair per task) so each is completable within a single focused implementation session. Dependencies still flow top-to-bottom: later tasks assume earlier prerequisite tasks are complete (for example, task 18 assumes task 17 exists; task 38 assumes tasks 12, 31, and 33 exist).
 
 ### Open question carried into the implementation session
 
-`ObservMe-Production-Docs/07-extension-implementation-blueprint.md` §14 ("Build Artifact") lists `dist/observme.js` and `dist/observme.d.ts` as expected build output, implying a bundled/compiled distribution. The current template convention (confirmed working via `npm run check:pack`) ships raw TypeScript source directly — `package.json`'s `files[]` includes `src/**/*.ts` with no bundler in `devDependencies`, and `pi.extensions` points at `./src/extension.ts` directly. These two conventions conflict. The implementation session must ask the user to resolve this explicitly (add a build/bundle step to match the doc, or update the doc/spec to match the source-shipping convention) before task 41's dashboard/artifact packaging expectations are finalized.
+`docs/reference/07-extension-implementation-blueprint.md` §14 ("Build Artifact") lists `dist/observme.js` and `dist/observme.d.ts` as expected build output, implying a bundled/compiled distribution. The current template convention (confirmed working via `npm run check:pack`) ships raw TypeScript source directly — `package.json`'s `files[]` includes `src/**/*.ts` with no bundler in `devDependencies`, and `pi.extensions` points at `./src/extension.ts` directly. These two conventions conflict. The implementation session must ask the user to resolve this explicitly (add a build/bundle step to match the doc, or update the doc/spec to match the source-shipping convention) before task 41's dashboard/artifact packaging expectations are finalized.

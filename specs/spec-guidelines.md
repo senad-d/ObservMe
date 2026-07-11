@@ -6,7 +6,7 @@ Define coding conventions, Pi extension best practices, package-metadata rules, 
 
 ## Objective
 
-Give a later implementation session (and any reviewer) one place to check "is this change allowed / does this change follow ObservMe conventions" without re-reading the full `ObservMe-Production-Docs/` set every time.
+Give a later implementation session (and any reviewer) one place to check "is this change allowed / does this change follow ObservMe conventions" without re-reading the full `docs/reference/` set every time.
 
 ## Relevant Files
 
@@ -14,9 +14,9 @@ Give a later implementation session (and any reviewer) one place to check "is th
 - `eslint.config.js` — enforced lint rules (`@typescript-eslint/consistent-type-imports`, no-unused-vars with `^_` ignore pattern) that all new ObservMe source must satisfy.
 - `tsconfig.json` — `strict: true`, `NodeNext` module resolution, `ES2022` target; new modules must compile cleanly under these settings.
 - `AGENTS.md` — repo-wide task workflow rule: one task at a time, checkbox marked `x` only when acceptance criteria are met, update `CHANGELOG.md` per change, avoid nesting functions.
-- `ObservMe-Production-Docs/06-security-privacy-redaction.md` — canonical redaction/privacy rules.
-- `ObservMe-Production-Docs/10-testing-release-operations.md` — canonical test levels, fixtures, cardinality tests, release process.
-- `ObservMe-Production-Docs/12-configuration-reference.md` — canonical config validation rules.
+- `docs/reference/06-security-privacy-redaction.md` — canonical redaction/privacy rules.
+- `docs/reference/10-testing-release-operations.md` — canonical test levels, fixtures, cardinality tests, release process.
+- `docs/reference/12-configuration-reference.md` — canonical config validation rules.
 - `package.json` — `scripts.validate` pipeline (`lint`, `test`, `check:pack`, `smoke:packaged`, `smoke:handlers`, `smoke:pi-lifecycle`) that every change must keep passing.
 
 ## Coding Conventions
@@ -50,7 +50,7 @@ Give a later implementation session (and any reviewer) one place to check "is th
 - Put non-Pi runtime libraries (all `@opentelemetry/*` packages) in `dependencies`, pinned to exact versions once added; do not assume every `@opentelemetry/*` package shares one major version.
 - Put local development-only tools (test runners, linters, formatters, smoke-test scripts) in `devDependencies`.
 - Keep `pi.extensions` pointed at the real entry file (`./src/extension.ts`); update it only if the entry file moves.
-- Keep `files[]` in `package.json` limited to what actually ships (`README.md`, `LICENSE`, `SECURITY.md`, `CHANGELOG.md`, `docs/**/*.md`, `src/**/*.ts`, `tsconfig.json`); `ObservMe-Production-Docs/` and `observability-stack/` are companion assets and must not be added to `files[]`.
+- Keep `files[]` in `package.json` limited to what actually ships (`README.md`, `LICENSE`, `SECURITY.md`, `CHANGELOG.md`, `docs/**/*.md`, `src/**/*.ts`, `tsconfig.json`); `docs/reference/` and `observability-stack/` are companion assets and must not be added to `files[]`.
 - Remove the `_template` block from `package.json` only after the first real command/tool/event registration replaces the template examples — not before, and not as part of documentation-only prep work.
 - Run `npm run lint` after adding any new TypeScript or development script file so ESLint catches unused symbols and import-style drift immediately.
 
@@ -58,13 +58,13 @@ Give a later implementation session (and any reviewer) one place to check "is th
 
 - Every user-visible behavior change (new `/obs` command, new config key, new capture default) must update `README.md`'s Commands/Configuration sections and `CHANGELOG.md` in the same change.
 - `SECURITY.md` must stay accurate to the real trust model: what ObservMe reads, executes, writes, and sends over the network, and to which endpoints (Collector/backend/Grafana query APIs).
-- Do not restate the full `ObservMe-Production-Docs/` content inside `README.md` — link to it or summarize; the production docs remain the single source of truth for semantics, and this repo's user docs are a thinner "how do I install/use it" layer.
-- If `ObservMe-Production-Docs/` and any spec or implementation detail disagree, the production docs win; update the spec/code to match the docs, not the other way around (per explicit user instruction during preparation).
+- Do not restate the full `docs/reference/` content inside `README.md` — link to it or summarize; the production docs remain the single source of truth for semantics, and this repo's user docs are a thinner "how do I install/use it" layer.
+- If `docs/reference/` and any spec or implementation detail disagree, the production docs win; update the spec/code to match the docs, not the other way around (per explicit user instruction during preparation).
 - Keep `docs/STRUCTURE.md`'s "Rename points for a new project" section as a living checklist until every placeholder is resolved; do not delete it prematurely.
 
 ## Testing Rules
 
-- Test at the levels defined in `ObservMe-Production-Docs/10-testing-release-operations.md` §1: unit, contract (Pi event payload fixtures), Collector integration, Grafana-stack backend integration, chaos/failure.
+- Test at the levels defined in `docs/reference/10-testing-release-operations.md` §1: unit, contract (Pi event payload fixtures), Collector integration, Grafana-stack backend integration, chaos/failure.
 - Every event-to-span mapping change needs a corresponding JSON fixture under `test/fixtures/events/` and an assertion of: correct span name, correct `pi.*`/`observme.*`/`gen_ai.*` attributes, no forbidden metric labels, correct parent/child span nesting, absence of optional content unless capture is explicitly enabled.
 - Redaction changes require test cases for every secret-pattern category in `06-security-privacy-redaction.md` §5 (AWS keys, GitHub tokens, bearer tokens, OpenAI/Anthropic-like keys, Slack tokens, password/API-key assignments, private-key blocks, URL credentials) plus filesystem-path and environment-variable-dump cases.
 - Cardinality tests must assert that workflow IDs, session IDs, agent IDs (current/parent/child), agent-run IDs, spawn IDs, spawn tool-call IDs, trace IDs, span IDs, entry IDs, and raw path/command/prompt/error values never appear as metric labels.
@@ -91,12 +91,12 @@ Give a later implementation session (and any reviewer) one place to check "is th
 
 ## Versioning Policy
 
-- ObservMe extension versioning follows `MAJOR.MINOR.PATCH` per `ObservMe-Production-Docs/07-extension-implementation-blueprint.md` §13. Breaking changes to telemetry semantic conventions require a MAJOR version bump.
+- ObservMe extension versioning follows `MAJOR.MINOR.PATCH` per `docs/reference/07-extension-implementation-blueprint.md` §13. Breaking changes to telemetry semantic conventions require a MAJOR version bump.
 - `observme.semconv.version` (per `04-telemetry-semantic-conventions.md` §16) is versioned independently from the extension package version; bump it whenever span/attribute/metric naming changes in a breaking way, even if the package version bump is minor.
 
 ## Acceptance Criteria
 
-- Every rule in this document traces back to either the template's own conventions (`docs/STRUCTURE.md`, `eslint.config.js`, `tsconfig.json`, `AGENTS.md`) or a specific `ObservMe-Production-Docs/*.md` source, with no invented rules that contradict those sources.
+- Every rule in this document traces back to either the template's own conventions (`docs/STRUCTURE.md`, `eslint.config.js`, `tsconfig.json`, `AGENTS.md`) or a specific `docs/reference/*.md` source, with no invented rules that contradict those sources.
 - No source code is created or modified as a result of this spec.
 - This spec and `specs/spec-architecture.md` do not contradict each other on module boundaries, dependency placement, or config precedence.
 
@@ -107,4 +107,4 @@ Give a later implementation session (and any reviewer) one place to check "is th
 
 ## Notes
 
-This is a rules reference, not a task list — see `specs/spec-tasks.md` for the actual checkbox-driven implementation plan. If a future implementation session finds a guideline here that conflicts with `ObservMe-Production-Docs/`, the production docs win and this guideline spec should be corrected.
+This is a rules reference, not a task list — see `specs/spec-tasks.md` for the actual checkbox-driven implementation plan. If a future implementation session finds a guideline here that conflicts with `docs/reference/`, the production docs win and this guideline spec should be corrected.

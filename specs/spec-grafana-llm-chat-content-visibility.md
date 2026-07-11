@@ -49,11 +49,11 @@ Use the existing capture flags and redaction pipeline as the source of truth. Do
 - `src/privacy/redact.ts` and `src/privacy/truncate.ts` - Existing redaction/truncation behavior must remain the only path for emitted content.
 - `observability-stack/config/otel/otel-collector.yaml` - Remove redacted LLM content stripping from the Tempo path and ensure Loki receives content logs.
 - `dashboards/observme-logs-llm.json` - Add/update panels so captured redacted content appears in Grafana.
-- `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` - Document any new attributes and log behavior.
-- `ObservMe-Production-Docs/05-otel-pipeline-and-collector.md` - Keep the documented Collector reference aligned with the shipped local Collector config.
-- `ObservMe-Production-Docs/06-security-privacy-redaction.md` - Document opt-in content export to both Tempo and Loki.
-- `ObservMe-Production-Docs/09-dashboards-alerts-slos.md` - Document the updated dashboard behavior.
-- `ObservMe-Production-Docs/12-configuration-reference.md` - Clarify which env/config settings are required for content visibility.
+- `docs/reference/04-telemetry-semantic-conventions.md` - Document any new attributes and log behavior.
+- `docs/reference/05-otel-pipeline-and-collector.md` - Keep the documented Collector reference aligned with the shipped local Collector config.
+- `docs/reference/06-security-privacy-redaction.md` - Document opt-in content export to both Tempo and Loki.
+- `docs/reference/09-dashboards-alerts-slos.md` - Document the updated dashboard behavior.
+- `docs/reference/12-configuration-reference.md` - Clarify which env/config settings are required for content visibility.
 - `README.md` - Add concise user-facing troubleshooting/configuration notes.
 - `CHANGELOG.md` - Record the user-visible behavior change.
 - `test/handler-internals.test.ts`, `test/pi-handlers.test.mjs`, `test/event-mapping.test.ts` - Assert redacted content is exported only when capture is enabled.
@@ -201,11 +201,11 @@ IMPORTANT: Execute every step in order, top to bottom. Mark each item with `[x]`
 ### 8. Update Documentation and Changelog
 
 - [x] Update `README.md` with a short “Show LLM chat content in Grafana” section.
-- [x] Update `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` for new/changed log attributes.
-- [x] Update `ObservMe-Production-Docs/05-otel-pipeline-and-collector.md` for the Collector pipeline change.
-- [x] Update `ObservMe-Production-Docs/06-security-privacy-redaction.md` to explain redacted content export to Tempo and Loki.
-- [x] Update `ObservMe-Production-Docs/09-dashboards-alerts-slos.md` for the dashboard panels.
-- [x] Update `ObservMe-Production-Docs/12-configuration-reference.md` with the required env vars and safety warning.
+- [x] Update `docs/reference/04-telemetry-semantic-conventions.md` for new/changed log attributes.
+- [x] Update `docs/reference/05-otel-pipeline-and-collector.md` for the Collector pipeline change.
+- [x] Update `docs/reference/06-security-privacy-redaction.md` to explain redacted content export to Tempo and Loki.
+- [x] Update `docs/reference/09-dashboards-alerts-slos.md` for the dashboard panels.
+- [x] Update `docs/reference/12-configuration-reference.md` with the required env vars and safety warning.
 - [x] Update `CHANGELOG.md`.
 
 #### Acceptance criteria

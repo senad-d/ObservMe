@@ -24,14 +24,14 @@ Use these files/directories as the architectural basis (already present from the
 - `src/constants.ts` — extension display name / status key; branding already updated to ObservMe naming.
 - `docs/STRUCTURE.md` — template's file-layout convention (`commands/`, `tools/`, `events/`, `config/`, `utils/`) that this architecture extends with `otel/`, `pi/`, `semconv/`, `privacy/`, `query/`.
 - `package.json` — `pi.extensions` entry point, `peerDependencies` (`@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `typebox`) vs `dependencies` (OpenTelemetry packages) boundary.
-- `ObservMe-Production-Docs/02-reference-architecture.md` — canonical high-level architecture, component responsibilities, data flow, trace shape, deployment topologies, failure modes.
-- `ObservMe-Production-Docs/03-pi-event-and-session-model.md` — canonical Pi event/session-entry to span mapping table; turn-id derivation; recovery/backfill rules.
-- `ObservMe-Production-Docs/04-telemetry-semantic-conventions.md` — canonical attribute/span/metric/log naming.
-- `ObservMe-Production-Docs/05-otel-pipeline-and-collector.md` — canonical OTLP exporter defaults and Collector configs.
-- `ObservMe-Production-Docs/06-security-privacy-redaction.md` — canonical redaction pipeline and data classification.
-- `ObservMe-Production-Docs/07-extension-implementation-blueprint.md` — canonical repository layout, runtime interfaces, span registry, event handler pseudo-code.
-- `ObservMe-Production-Docs/12-configuration-reference.md` — canonical config schema, env vars, precedence order.
-- `ObservMe-Production-Docs/13-source-notes.md` — explicit list of assumptions cross-checked against Pi/OTEL/Grafana official docs; source of truth for anything ambiguous in the other docs.
+- `docs/reference/02-reference-architecture.md` — canonical high-level architecture, component responsibilities, data flow, trace shape, deployment topologies, failure modes.
+- `docs/reference/03-pi-event-and-session-model.md` — canonical Pi event/session-entry to span mapping table; turn-id derivation; recovery/backfill rules.
+- `docs/reference/04-telemetry-semantic-conventions.md` — canonical attribute/span/metric/log naming.
+- `docs/reference/05-otel-pipeline-and-collector.md` — canonical OTLP exporter defaults and Collector configs.
+- `docs/reference/06-security-privacy-redaction.md` — canonical redaction pipeline and data classification.
+- `docs/reference/07-extension-implementation-blueprint.md` — canonical repository layout, runtime interfaces, span registry, event handler pseudo-code.
+- `docs/reference/12-configuration-reference.md` — canonical config schema, env vars, precedence order.
+- `docs/reference/13-source-notes.md` — explicit list of assumptions cross-checked against Pi/OTEL/Grafana official docs; source of truth for anything ambiguous in the other docs.
 - `specs/project-definition-brief.md` — approved identity, scope, and integration-surface decisions for this project.
 
 ### New Files (created during a later implementation session, not during preparation)
@@ -160,11 +160,11 @@ The implementation must expose agent-tree visibility for orchestrator workloads 
 - **Package dry-run:** `npm run check:pack` / `npm run pack:dry-run`.
 - **Isolated Pi smoke test:** `pi --no-extensions -e .` (manual, run only on request).
 - **Full validate:** `npm run validate` (after `npm install`).
-- Integration/backend/chaos tests (Collector debug config, Grafana-stack Docker Compose, collector-down/slow, queue-full, redaction-exception scenarios) are deferred to the implementation session per `ObservMe-Production-Docs/10-testing-release-operations.md`.
+- Integration/backend/chaos tests (Collector debug config, Grafana-stack Docker Compose, collector-down/slow, queue-full, redaction-exception scenarios) are deferred to the implementation session per `docs/reference/10-testing-release-operations.md`.
 
 ## Acceptance Criteria
 
-- This document accurately reflects `ObservMe-Production-Docs/02, 03, 04, 05, 06, 07, 12, 13` without inventing new architecture not present in those sources.
+- This document accurately reflects `docs/reference/02, 03, 04, 05, 06, 07, 12, 13` without inventing new architecture not present in those sources.
 - Every planned Pi surface listed here matches `specs/project-definition-brief.md` §4 exactly (no additions, no omissions).
 - No source code implementing OTEL SDK wiring, redaction logic, or `/obs` command behavior is created as a side effect of this spec.
 - The three specs (architecture, guidelines, tasks) are internally consistent — the task spec's file layout matches this architecture's module boundaries.
@@ -176,4 +176,4 @@ The implementation must expose agent-tree visibility for orchestrator workloads 
 
 ## Notes
 
-This is a preparation-phase architecture reference, not an implementation task list — see `specs/spec-tasks.md` for the checkbox-driven implementation plan and `specs/spec-guidelines.md` for coding/security/testing conventions to follow while implementing it. If `ObservMe-Production-Docs/` and this spec ever disagree in a future revision, the production docs are the source of truth per the user's explicit instruction.
+This is a preparation-phase architecture reference, not an implementation task list — see `specs/spec-tasks.md` for the checkbox-driven implementation plan and `specs/spec-guidelines.md` for coding/security/testing conventions to follow while implementing it. If `docs/reference/` and this spec ever disagree in a future revision, the production docs are the source of truth per the user's explicit instruction.
