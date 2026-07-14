@@ -1,6 +1,6 @@
 {
   "name": "@senad-d/observme",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "description": "ObservMe: a Pi extension that instruments Pi agent sessions and exports OpenTelemetry traces, metrics, and logs to an external observability stack (OTel Collector, Grafana Tempo/Loki/Prometheus).",
   "license": "MIT",
@@ -96,7 +96,7 @@
     "eslint": "^10.6.0",
     "globals": "^17.7.0",
     "typebox": "^1.3.6",
-    "typescript": "7.0.2",
+    "typescript": "6.0.3",
     "typescript-eslint": "^8.63.0"
   },
   "dependencies": {
