@@ -65,7 +65,8 @@ jobs:
       - name: Verify exact Pi compatibility target
         env:
           EXPECTED_PI_VERSION: ${{ matrix.pi-version }}
-        run: node -e 'for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai"]) { const actual = require(`./node_modules/${name}/package.json`).version; if (actual !== process.env.EXPECTED_PI_VERSION) throw new Error(`${name}: expected ${process.env.EXPECTED_PI_VERSION}, got ${actual}`); }'
+        run: >-
+          node -e 'for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai"]) { const actual = require(`./node_modules/${name}/package.json`).version; if (actual !== process.env.EXPECTED_PI_VERSION) throw new Error(`${name}: expected ${process.env.EXPECTED_PI_VERSION}, got ${actual}`); }'
 
       - name: Validate Pi contracts, package, and real runtime
         run: npm run validate:pi-compatibility
