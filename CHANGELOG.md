@@ -39,6 +39,15 @@
 
 ### Fixed
 
+- Used concise word-character syntax for single-brace unresolved trace-link placeholders.
+- Used concise word-character syntax for dollar-brace unresolved trace-link placeholders.
+- Used concise word-character syntax for double-brace unresolved trace-link placeholders.
+- Split unresolved trace-link placeholder validation into simple per-syntax patterns while preserving rejection behavior.
+- Documented why best-effort Grafana stream cancellation failures are intentionally ignored.
+- Removed redundant explicit `undefined` support from the optional lifecycle model context property.
+- Simplified lifecycle recovery header selection by replacing a nested conditional expression with explicit branches.
+- Removed redundant awaiting of Pi's synchronous lifecycle status update.
+- Replaced deprecated proxy tracer construction with an isolated always-off provider for disabled and shutdown trace states.
 - Validated OTLP endpoints as secret-free absolute HTTP(S) URLs and constructed signal exporter paths with deterministic URL pathname semantics.
 - Implemented opt-in, versioned, active-branch correlation persistence with bounded validation and idempotent reload recovery, and removed unsupported automatic replay configuration and synthetic duplicate startup telemetry.
 - Bound live telemetry, query commands, and backfill correlation to Pi's typed session manager, preserved identity across reload, adopted replacement-session identity, and refreshed active metadata on session rename.

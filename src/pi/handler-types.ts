@@ -84,7 +84,7 @@ export interface ObservMeHandlerContext {
   readonly cwd?: ExtensionContext["cwd"];
   readonly hasUI?: ExtensionContext["hasUI"];
   readonly sessionManager?: ObservMeSessionManager;
-  readonly model?: ExtensionContext["model"];
+  readonly model?: Exclude<ExtensionContext["model"], undefined>;
   readonly ui?: {
     notify?: (message: string, level?: "warning" | "info" | "error") => Promise<void> | void;
     setStatus?: (key: string, value: string | undefined) => Promise<void> | void;

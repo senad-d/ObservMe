@@ -40,8 +40,14 @@ const traceIdPattern = /^[a-f0-9]{32}$/iu;
 const zeroTraceIdPattern = /^0{32}$/u;
 const traceIdTemplatePattern = /\{\{\s*traceId\s*\}\}|\{traceId\}|\$\{traceId\}|%TRACE_ID%/u;
 const fallbackTraceTemplateMarkerPattern = /\.\.\./u;
-const unresolvedTemplatePlaceholderPattern =
-  /\{\{\s*[A-Za-z][A-Za-z0-9_]*\s*\}\}|\$\{[A-Za-z][A-Za-z0-9_]*\}|\{[A-Za-z][A-Za-z0-9_]*\}|%[A-Z][A-Z0-9_]*%|\$traceId\b|__TRACE_ID__/u;
+const unresolvedTemplatePlaceholderPatterns: readonly RegExp[] = [
+  /\{\{\s*[A-Za-z]\w*\s*\}\}/u,
+  /\$\{[A-Za-z]\w*\}/u,
+  /\{[A-Za-z]\w*\}/u,
+  /%[A-Z][A-Z0-9_]*%/u,
+  /\$traceId\b/u,
+  /__TRACE_ID__/u,
+];
 const traceTemplateReplacements: readonly TraceTemplateReplacement[] = [
   { pattern: /\{\{\s*traceId\s*\}\}/gu, key: "traceId" },
   { pattern: /\$\{traceId\}/gu, key: "traceId" },
@@ -106,8 +112,15 @@ function renderTraceUrlTemplate(template: string, config: ObservMeConfig, traceI
     rendered = rendered.replace(replacement.pattern, values[replacement.key]);
   }
 
-  if (unresolvedTemplatePlaceholderPattern.test(rendered)) throw new Error(TRACE_LINK_CONFIGURATION_ERROR);
+  if (hasUnresolvedTemplatePlaceholder(rendered)) throw new Error(TRACE_LINK_CONFIGURATION_ERROR);
   return formatTraceLinkUrl(parseTraceLinkUrl(rendered));
+}
+
+function hasUnresolvedTemplatePlaceholder(value: string): boolean {
+  for (const pattern of unresolvedTemplatePlaceholderPatterns) {
+    if (pattern.test(value)) return true;
+  }
+  return false;
 }
 
 function createTraceTemplateValues(config: ObservMeConfig, traceId: string): TraceTemplateValues {

@@ -344,7 +344,9 @@ function cancelGrafanaResponseReader(reader: ReadableStreamDefaultReader<Uint8Ar
   void reader.cancel(reason).catch(ignoreCancellationFailure);
 }
 
-function ignoreCancellationFailure(): void {}
+function ignoreCancellationFailure(): void {
+  // Stream cancellation is best-effort after the original transport failure is already known.
+}
 
 function createGrafanaRequestInit(config: ObservMeConfig, options: GrafanaTransportFetchOptions): RequestInit {
   return {

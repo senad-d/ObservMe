@@ -123,7 +123,12 @@ test("unsupported and invalid templates produce one bounded actionable diagnosti
   const invalidConfigs = [
     { name: "unsupported placeholder", template: "https://grafana.local/explore?trace=$traceId" },
     { name: "invalid protocol", template: "javascript:{traceId}" },
-    { name: "unresolved placeholder", template: "https://grafana.local/explore?trace={traceId}&other={unknown}" },
+    { name: "unresolved double-brace placeholder", template: "https://grafana.local/explore?trace={traceId}&other={{ unknown }}" },
+    { name: "unresolved dollar-brace placeholder", template: "https://grafana.local/explore?trace={traceId}&other=${unknown}" },
+    { name: "unresolved brace placeholder", template: "https://grafana.local/explore?trace={traceId}&other={unknown}" },
+    { name: "unresolved percent placeholder", template: "https://grafana.local/explore?trace={traceId}&other=%UNKNOWN%" },
+    { name: "unresolved legacy trace placeholder", template: "https://grafana.local/explore?trace={traceId}&other=$traceId" },
+    { name: "unresolved trace sentinel", template: "https://grafana.local/explore?trace={traceId}&other=__TRACE_ID__" },
   ];
 
   for (const invalidConfig of invalidConfigs) {

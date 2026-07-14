@@ -262,7 +262,7 @@ async function handleSessionStart(
       emitLifecycleLog(session.logger, LOG_EVENT_NAMES.WORKFLOW_STARTED, attributes);
     }
 
-    await ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE);
+    ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE);
     activateSessionActiveAgent(session, labels);
     if (session.config.agent.writeCorrelationEntry) {
       appendSessionCorrelationEntry(options.appendEntry, lineage, recovery.customCorrelation);
@@ -296,11 +296,12 @@ async function resolveStartupRecovery(
 ): Promise<StartupRecoveryState> {
   const sessionFile = resolveSessionFilePath(event, ctx);
   const readHeader = options.readSessionHeader ?? readSessionHeaderFromFile;
-  const header = ctx.sessionManager
-    ? normalizeSessionHeader(ctx.sessionManager.getHeader())
-    : sessionFile
-      ? await readHeader(sessionFile)
-      : undefined;
+  let header: SessionRecoveryHeader | undefined;
+  if (ctx.sessionManager) {
+    header = normalizeSessionHeader(ctx.sessionManager.getHeader());
+  } else if (sessionFile) {
+    header = await readHeader(sessionFile);
+  }
   const customCorrelation = config.agent.writeCorrelationEntry ? readActiveBranchCorrelation(ctx) : undefined;
 
   return {

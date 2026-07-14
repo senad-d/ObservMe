@@ -1,9 +1,15 @@
-import { ProxyTracerProvider, type Tracer } from "@opentelemetry/api";
+import type { Tracer } from "@opentelemetry/api";
 import type { Resource } from "@opentelemetry/resources";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import type { Sampler, SpanExporter, SpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { BatchSpanProcessor, ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base";
+import {
+  AlwaysOffSampler,
+  BasicTracerProvider,
+  BatchSpanProcessor,
+  ParentBasedSampler,
+  TraceIdRatioBasedSampler,
+} from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import type { ObservMeConfig, TraceBatchConfig } from "../config/schema.ts";
 import { appendOtlpSignalPath } from "./otlp-endpoint.ts";
@@ -13,7 +19,7 @@ import type { StartOtelSdkFactoryOptions } from "./sdk.ts";
 export const OBSERVME_TRACER_NAME = "@senad-d/observme";
 export const OTLP_TRACE_SIGNAL_PATH = "/v1/traces";
 
-const noopTracer = new ProxyTracerProvider().getTracer(OBSERVME_TRACER_NAME);
+const noopTracer = new BasicTracerProvider({ sampler: new AlwaysOffSampler() }).getTracer(OBSERVME_TRACER_NAME);
 
 export const DOCUMENTED_TRACE_BATCH_DEFAULTS = {
   maxQueueSize: 2048,

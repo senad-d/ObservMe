@@ -177,6 +177,9 @@ test("disabled traces resolve to a safe no-op without exporter or provider facto
 
   assert.equal(sdk.state, "disabled");
   assert.notEqual(sdk.tracer, tracer);
+  const span = sdk.tracer.startSpan("disabled.noop");
+  assert.equal(span.isRecording(), false);
+  span.end();
   assert.equal(calls.exporterOptions, undefined);
   assert.equal(calls.batchOptions, undefined);
   assert.equal(calls.providerOptions, undefined);
