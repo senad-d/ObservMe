@@ -11,6 +11,7 @@ import {
 import {
   buildGrafanaApiUrl,
   buildGrafanaDatasourceApiUrl,
+  createGrafanaNodeRequestOptions,
   formatGrafanaFetchFailure,
   requiresCustomGrafanaTransport,
 } from "../src/query/grafana-transport.ts";
@@ -51,6 +52,28 @@ test("Grafana transport joins base and API paths with linear slash trimming", ()
     String(buildGrafanaDatasourceApiUrl("http://grafana.local///", "tempo/main", "///health")),
     "http://grafana.local/api/datasources/uid/tempo%2Fmain/health",
   );
+});
+
+test("Grafana transport keeps verification enabled unless the validated TLS bypass is selected", () => {
+  const productionSecure = cloneDefaultConfig();
+  productionSecure.query.grafana.url = "https://grafana.example.test";
+
+  const productionAcknowledgedBypass = cloneDefaultConfig();
+  productionAcknowledgedBypass.query.grafana.url = "https://grafana.example.test";
+  productionAcknowledgedBypass.query.grafana.tls.insecureSkipVerify = true;
+  productionAcknowledgedBypass.privacy.allowInsecureTransport = true;
+
+  const developmentHttp = cloneDefaultConfig();
+  developmentHttp.environment = "development";
+  developmentHttp.query.grafana.url = "http://localhost:3000";
+
+  assert.equal(requiresCustomGrafanaTransport(productionSecure), false);
+  assert.equal(createGrafanaNodeRequestOptions(productionSecure).rejectUnauthorized, undefined);
+  assert.equal(requiresCustomGrafanaTransport(productionAcknowledgedBypass), true);
+  assert.equal(createGrafanaNodeRequestOptions(productionAcknowledgedBypass).rejectUnauthorized, false);
+  assert.equal(requiresCustomGrafanaTransport(developmentHttp), false);
+  assert.equal(createGrafanaNodeRequestOptions(developmentHttp).rejectUnauthorized, undefined);
+  assert.doesNotMatch(JSON.stringify(createGrafanaNodeRequestOptions(productionAcknowledgedBypass)), /token|password/u);
 });
 
 async function collectTypeScriptFiles(root) {

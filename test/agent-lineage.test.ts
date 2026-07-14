@@ -448,6 +448,32 @@ test("missing lineage context is classified as root-like, while partial parent c
   assertNoUnsafeMetricLabels(session.metricRecords);
 });
 
+test("agent tree accepts forward lifecycle transitions and never revives terminal children", () => {
+  const tracker = new AgentTreeTracker({ maxAgents: 16 });
+  tracker.registerAgent(makeRootLineage());
+
+  for (const terminalStatus of ["completed", "failed", "cancelled"] as const) {
+    const agentId = `agent-${terminalStatus}`;
+    const lineage = {
+      workflowId: "workflow-unit",
+      workflowRootAgentId: "agent-root",
+      agentId,
+      parentAgentId: "agent-root",
+      rootAgentId: "agent-root",
+      depth: 1,
+      role: "subagent" as const,
+      orphaned: false,
+    };
+
+    assert.equal(tracker.registerAgent(lineage, "starting").status, "starting");
+    assert.equal(tracker.updateStatus(agentId, "active")?.status, "active");
+    assert.equal(tracker.updateStatus(agentId, terminalStatus)?.status, terminalStatus);
+    assert.equal(tracker.updateStatus(agentId, "active"), undefined);
+    assert.equal(tracker.updateStatus(agentId, terminalStatus)?.status, terminalStatus);
+    assert.equal(tracker.registerAgent(lineage, "active").status, terminalStatus);
+  }
+});
+
 test("fan-out, depth, active-child, wait/join, child-status, and propagation metrics stay low-cardinality", () => {
   const session = createSubagentSession();
   const first = startSubagentSpawn(session, { spawnId: "spawn-unit-a", spawnType: "command", spawnReason: "review" });
@@ -505,6 +531,6 @@ test("fan-out, depth, active-child, wait/join, child-status, and propagation met
   assert.equal(joinSpan?.attributes[AGENT_WAIT_JOIN_ATTRIBUTES.PI_AGENT_CHILDREN_ACTIVE], 0);
   assert.equal(joinSpan?.attributes[AGENT_WAIT_JOIN_ATTRIBUTES.PI_AGENT_CHILD_STATUS], "failed");
   assert.equal(joinSpan?.attributes[AGENT_WAIT_JOIN_ATTRIBUTES.PI_AGENT_FAILURE_PROPAGATED], true);
-  assert.equal(first.span.attributes?.[AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILDREN_ACTIVE], 2);
+  assert.equal(first.span.attributes?.[AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILDREN_ACTIVE], 1);
   assertNoUnsafeMetricLabels(session.metricRecords);
 });

@@ -2,7 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { ExtensionAPI, SessionEntry, SessionHeader } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
-import { ObservMeLogSdk } from "../otel/logs.ts";
+import { type ObservMeLogSdk, createLogSessionScopedOtelSdk } from "../otel/logs.ts";
 import type { BoundedOtelOperationResult } from "../otel/shutdown.ts";
 import { flushOtelSdk, shutdownOtelSdk } from "../otel/shutdown.ts";
 import { applyContentCapturePolicy } from "../privacy/content-capture.ts";
@@ -308,7 +308,7 @@ export function createObsBackfillLogExporter(
   config: ObservMeConfig,
   options: ObsBackfillOperationOptions = {},
 ): ObsBackfillExporter {
-  const sdk = new ObservMeLogSdk({ config });
+  const sdk = createLogSessionScopedOtelSdk({ config });
   sdk.start();
   return new ObsBackfillLogExporter(sdk, resolveBackfillOperationTimeoutMs(options, OBS_BACKFILL_DEFAULT_OPERATION_TIMEOUT_MS));
 }

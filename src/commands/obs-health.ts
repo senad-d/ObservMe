@@ -1,6 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
+import {
+  createObsTransportSecuritySnapshot,
+  type ObsTransportSecuritySnapshot,
+} from "../config/transport-security.ts";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
 import { getGrafanaHealth, type GrafanaFetch } from "../query/grafana.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
@@ -31,6 +35,7 @@ export interface ObsHealthCheckResult {
 export interface ObsHealthSnapshot {
   readonly timeoutMs: number;
   readonly checks: readonly ObsHealthCheckResult[];
+  readonly transportSecurity?: ObsTransportSecuritySnapshot;
 }
 
 export interface ObsHealthSnapshotOptions {
@@ -112,11 +117,18 @@ export async function getObsHealthSnapshot(
     getGrafanaHealth(config, { fetch: options.fetch, timeoutMs }),
   ]);
 
-  return { timeoutMs, checks: [collectorCheck, ...grafanaHealth.checks] };
+  return {
+    timeoutMs,
+    checks: [collectorCheck, ...grafanaHealth.checks],
+    transportSecurity: createObsTransportSecuritySnapshot(config),
+  };
 }
 
 export function renderObsHealth(snapshot: ObsHealthSnapshot): string {
-  return snapshot.checks.map(renderObsHealthCheck).join("\n");
+  return [
+    ...formatObsHealthTransportSecurity(snapshot.transportSecurity),
+    ...snapshot.checks.map(renderObsHealthCheck),
+  ].join("\n");
 }
 
 class ObsHealthCommand {
@@ -227,6 +239,14 @@ function failedHealthResult(label: string, kind: ObsHealthCheckKind, error: unkn
     status: "failed",
     detail: formatHealthFailure(error),
   };
+}
+
+function formatObsHealthTransportSecurity(security: ObsTransportSecuritySnapshot | undefined): string[] {
+  if (!security) return [];
+  return [
+    `Collector transport security: ${security.collector}`,
+    `Grafana transport security: ${security.grafana}`,
+  ];
 }
 
 function renderObsHealthCheck(check: ObsHealthCheckResult): string {

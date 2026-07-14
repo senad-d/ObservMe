@@ -6,6 +6,7 @@ import {
 } from "./schema.ts";
 import type { ObservMeConfig } from "./schema.ts";
 import { validateCustomRedactionPatterns } from "../privacy/redact.ts";
+import { classifyOtlpEndpointFailure } from "../otel/otlp-endpoint.ts";
 
 export interface ValidationIssue {
   code: string;
@@ -57,8 +58,12 @@ const maximumConfigDiagnosticIssueCount = 1_000_000;
 const unknownConfigValidationIssueCode = "unknown_config_validation_issue";
 const knownConfigValidationIssueCodes = new Set([
   "invalid_config_shape",
+  "config_source_malformed",
+  "config_source_rejected",
+  "config_source_unreadable",
   "unsafe_capture_without_redaction",
   "insecure_production_transport",
+  "invalid_otlp_endpoint",
   "invalid_signal_endpoint_path",
   "high_cardinality_metric_label",
   "active_agent_lease_too_short_for_export_interval",
@@ -84,7 +89,7 @@ export function validateObservMeConfig(
   const issues = [
     ...validateRedactionBoundary(config),
     ...validateTransportSecurity(config),
-    ...validateSignalEndpoints(config),
+    ...validateOtlpEndpoints(config),
     ...validateMetricLabels(config),
     ...validateActiveAgentLeaseDuration(config),
     ...validateCustomRedactionPatternConfig(config),
@@ -253,7 +258,15 @@ function validateTransportSecurity(config: ObservMeConfig): ValidationIssue[] {
     ...validateProductionHttpEndpoint("otlp.signalEndpoints.traces", config.otlp.signalEndpoints?.traces),
     ...validateProductionHttpEndpoint("otlp.signalEndpoints.metrics", config.otlp.signalEndpoints?.metrics),
     ...validateProductionHttpEndpoint("otlp.signalEndpoints.logs", config.otlp.signalEndpoints?.logs),
+    ...validateProductionTlsVerificationBypass(
+      "otlp.tls.insecureSkipVerify",
+      config.otlp.tls.insecureSkipVerify,
+    ),
     ...validateProductionHttpEndpoint("query.grafana.url", config.query.grafana.url),
+    ...validateProductionTlsVerificationBypass(
+      "query.grafana.tls.insecureSkipVerify",
+      config.query.grafana.tls.insecureSkipVerify,
+    ),
   ];
 }
 
@@ -268,30 +281,54 @@ function validateProductionHttpEndpoint(name: string, endpoint: string | undefin
   ];
 }
 
+function validateProductionTlsVerificationBypass(name: string, insecureSkipVerify: boolean): ValidationIssue[] {
+  if (!insecureSkipVerify) return [];
+
+  return [
+    {
+      code: "insecure_production_transport",
+      message: `${name} must be false in production unless privacy.allowInsecureTransport is true.`,
+    },
+  ];
+}
+
 function isHttpEndpoint(endpoint: string): boolean {
   return endpoint.trim().toLowerCase().startsWith("http://");
 }
 
-function validateSignalEndpoints(config: ObservMeConfig): ValidationIssue[] {
-  if (config.otlp.protocol !== "http/protobuf") return [];
-
+function validateOtlpEndpoints(config: ObservMeConfig): ValidationIssue[] {
   const endpoints = config.otlp.signalEndpoints;
-  if (!endpoints) return [];
 
   return [
-    ...validateSignalEndpoint("traces", endpoints.traces, "/v1/traces"),
-    ...validateSignalEndpoint("metrics", endpoints.metrics, "/v1/metrics"),
-    ...validateSignalEndpoint("logs", endpoints.logs, "/v1/logs"),
+    ...validateOtlpEndpoint("otlp.endpoint", config.otlp.endpoint),
+    ...validateSignalEndpoint("otlp.signalEndpoints.traces", endpoints?.traces, "/v1/traces"),
+    ...validateSignalEndpoint("otlp.signalEndpoints.metrics", endpoints?.metrics, "/v1/metrics"),
+    ...validateSignalEndpoint("otlp.signalEndpoints.logs", endpoints?.logs, "/v1/logs"),
   ];
 }
 
-function validateSignalEndpoint(signal: string, endpoint: string | undefined, requiredPath: string): ValidationIssue[] {
-  if (!endpoint || endpointPathMatches(endpoint, requiredPath)) return [];
+function validateOtlpEndpoint(name: string, endpoint: string): ValidationIssue[] {
+  const failureClass = classifyOtlpEndpointFailure(endpoint);
+  if (!failureClass) return [];
+
+  return [
+    {
+      code: "invalid_otlp_endpoint",
+      message: `${name} is invalid (${failureClass}).`,
+    },
+  ];
+}
+
+function validateSignalEndpoint(name: string, endpoint: string | undefined, requiredPath: string): ValidationIssue[] {
+  if (!endpoint) return [];
+
+  const endpointIssues = validateOtlpEndpoint(name, endpoint);
+  if (endpointIssues.length > 0 || endpointPathMatches(endpoint, requiredPath)) return endpointIssues;
 
   return [
     {
       code: "invalid_signal_endpoint_path",
-      message: `${signal} OTLP HTTP exporter URL must include ${requiredPath}.`,
+      message: `${name} must end with ${requiredPath}.`,
     },
   ];
 }

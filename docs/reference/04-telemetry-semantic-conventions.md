@@ -702,6 +702,7 @@ agent.run.failed
 agent.spawn.started
 agent.spawn.completed
 agent.spawn.failed
+agent.spawn.cancelled
 agent.wait.started
 agent.wait.completed
 agent.join.started

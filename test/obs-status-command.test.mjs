@@ -87,6 +87,8 @@ function createFakeExtensionPi() {
     on: (eventName, handler) => events.set(eventName, handler),
     registerCommand: (name, options) => commands.set(name, options),
     registerTool: tool => tools.push(tool),
+    appendEntry: () => undefined,
+    getThinkingLevel: () => "medium",
   };
 }
 
@@ -105,7 +107,9 @@ test("renderObsStatus reports local enablement, signals, capture flags, drops, a
     [
       "ObservMe: enabled",
       "OTLP endpoint: http://localhost:4318",
+      "OTLP transport security: plaintext HTTP",
       "Grafana URL: https://grafana.example.com/",
+      "Grafana transport security: TLS certificate verification enabled",
       "Grafana query readiness: not_ready (unresolved_grafana_token)",
       "Traces: enabled",
       "Metrics: disabled",
@@ -122,6 +126,21 @@ test("renderObsStatus reports local enablement, signals, capture flags, drops, a
       "Last export error: flush failed",
     ].join("\n"),
   );
+});
+
+test("renderObsStatus reports explicitly acknowledged TLS verification bypasses without credentials", () => {
+  const config = cloneDefaultConfig();
+  config.otlp.tls.insecureSkipVerify = true;
+  config.query.grafana.tls.insecureSkipVerify = true;
+  config.privacy.allowInsecureTransport = true;
+  config.otlp.headers.Authorization = "Bearer private-otlp-token";
+  config.query.grafana.token = "private-grafana-token";
+
+  const output = renderObsStatus({ config, queueDrops: 0 });
+
+  assert.match(output, /OTLP transport security: TLS certificate verification disabled \(explicitly acknowledged\)/u);
+  assert.match(output, /Grafana transport security: TLS certificate verification disabled \(explicitly acknowledged\)/u);
+  assert.doesNotMatch(output, /private-otlp-token|private-grafana-token/u);
 });
 
 test("renderObsStatus includes only bounded config rejection codes and counts", () => {
@@ -147,6 +166,34 @@ test("renderObsStatus includes only bounded config rejection codes and counts", 
     /Config rejection: safe defaults applied \(2 issue\(s\): insecure_production_transport, malformed_lineage_value\)/u,
   );
   assert.doesNotMatch(output, /private-token|password|Authorization|\/workspace\/private|custom regex/u);
+});
+
+test("renderObsStatus distinguishes malformed, unreadable, rejected, and missing config sources", () => {
+  const output = renderObsStatus({
+    config: cloneDefaultConfig(),
+    queueDrops: 0,
+    configDiagnostics: {
+      projectTrusted: true,
+      projectConfigStatus: "rejected",
+      globalConfigStatus: "unreadable",
+      envFileStatus: "malformed",
+      environmentStatus: "missing",
+      effectiveSource: "trusted_project",
+      globalConfigLoaded: false,
+      environmentOverrides: false,
+      runtimeOptionsApplied: false,
+      rejection: {
+        issueCodes: ["invalid_config_shape", "config_source_malformed", "config_source_unreadable"],
+        issueCount: 3,
+      },
+    },
+  });
+
+  assert.match(output, /Global config: ignored \(global config is unreadable\)/u);
+  assert.match(output, /Project config: ignored \(trusted \.pi\/observme\.yaml was structurally rejected\)/u);
+  assert.match(output, /Project \.env: ignored \(trusted project \.env is malformed\)/u);
+  assert.match(output, /Process environment: no ObservMe values/u);
+  assert.doesNotMatch(output, /private|workspace|Authorization|raw content/u);
 });
 
 test("/obs status does not throw when Pi has no UI notification API", async t => {
@@ -210,7 +257,7 @@ test("/obs status reports trusted project config source and Grafana query readin
   assert.match(notifications[0].message, /Grafana query readiness: ready/u);
 });
 
-test("/obs status does not render trusted project .env secret values", async t => {
+test("/obs status rejects credential-bearing OTLP env URLs without rendering secret values", async t => {
   resetObsStatusRuntimeState();
   t.after(() => resetObsStatusRuntimeState());
 
@@ -223,8 +270,9 @@ test("/obs status does not render trusted project .env secret values", async t =
   });
 
   assert.equal(notifications.length, 1);
-  assert.match(notifications[0].message, /OTLP endpoint: https:\/\/collector\.local:4318/u);
-  assert.match(notifications[0].message, /Grafana URL: https:\/\/grafana\.local:3000\//u);
+  assert.match(notifications[0].message, /OTLP endpoint: https:\/\/otel-collector\.example\.com:4318/u);
+  assert.match(notifications[0].message, /Grafana URL: https:\/\/grafana\.example\.com\//u);
+  assert.match(notifications[0].message, /Config rejection: safe defaults applied \(1 issue\(s\): invalid_otlp_endpoint\)/u);
   assert.doesNotMatch(
     notifications[0].message,
     /otlp-user|otlp-password|otlp-query-secret|otlp-header-secret|grafana-user|grafana-password|grafana-query-secret|grafana-token-secret|grafana-basic-secret/u,

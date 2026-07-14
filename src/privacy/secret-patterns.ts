@@ -49,7 +49,12 @@ export const GITHUB_TOKEN_PATTERN = /(gh[pousr]_\w{36,}|github_pat_\w{22,255})/g
 export const OPENAI_LIKE_KEY_PATTERN = /sk-[A-Za-z0-9_-]{20,}/gu;
 export const ANTHROPIC_LIKE_KEY_PATTERN = /sk-ant-[A-Za-z0-9_-]{20,}/gu;
 export const SLACK_TOKEN_PATTERN = /xox[baprs]-[A-Za-z0-9-]{10,}/gu;
-export const PRIVATE_KEY_BLOCK_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/gu;
+export const MAX_PRIVATE_KEY_BODY_CHARS = 1_000_000;
+const PRIVATE_KEY_LABEL_PATTERN = "([A-Z ]{0,64}PRIVATE KEY)";
+export const PRIVATE_KEY_BLOCK_PATTERN = new RegExp(
+  String.raw`-----BEGIN ${PRIVATE_KEY_LABEL_PATTERN}-----[\s\S]{0,${MAX_PRIVATE_KEY_BODY_CHARS}}?(?:-----END \1-----|$)`,
+  "gu",
+);
 export const PASSWORD_ASSIGNMENT_PATTERN = /(password|passwd|pwd)\s*[:=]\s*[^\s]+/giu;
 export const API_KEY_ASSIGNMENT_PATTERN = /(api[_-]?key|token|secret|client[_-]?secret)\s*[:=]\s*[^\s]+/giu;
 export const URL_CREDENTIALS_PATTERN = /[a-z][a-z0-9+.-]{0,63}:\/\/[^\s:/?#]{1,1024}:[^\s@/]{1,1024}@/gu;

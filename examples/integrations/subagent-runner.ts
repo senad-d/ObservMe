@@ -1,13 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   requestObservMeIntegration,
-  type ObservMeChildStatus,
   type ObservMeIntegrationApi,
   type ObservMeJoinStatus,
   type ObservMeProcessEnvironment,
   type ObservMeSpawnReason,
   type ObservMeSpawnType,
   type ObservMeStartedSubagent,
+  type ObservMeTerminalChildStatus,
 } from "@senad-d/observme/integration";
 
 /**
@@ -70,7 +70,6 @@ export class ObservableSubagentRunner<Request, Handle, Value> {
 
     try {
       handle = await this.#transport.launch(options.request, context, options.signal);
-      completeObservMeLaunch(observme, started);
     } catch (error) {
       failObservMeLaunch(observme, started, error);
       throw error;
@@ -90,10 +89,12 @@ export class ObservableSubagentRunner<Request, Handle, Value> {
     try {
       const result = await this.#transport.wait(handle, signal);
       endObservMeWait(observme, started, wait, result);
+      completeObservMeChild(observme, started, childStatus(result.status));
       recordObservMeJoin(observme, started, result);
       return result;
     } catch (error) {
       endObservMeWaitFailure(observme, started, wait);
+      completeObservMeChild(observme, started, "failed");
       recordObservMeJoinFailure(observme, started);
       throw error;
     }
@@ -127,14 +128,16 @@ function createLaunchContext(
   };
 }
 
-function completeObservMeLaunch(
+function completeObservMeChild(
   observme: ObservMeIntegrationApi | undefined,
   started: ObservMeStartedSubagent | undefined,
+  status: ObservMeTerminalChildStatus,
 ): void {
   if (!observme || !started) return;
   observme.completeSubagent(started.spawnId, {
     childAgentId: started.childAgentId,
-    childStatus: "active",
+    childStatus: status,
+    outcome: status,
   });
 }
 
@@ -245,7 +248,7 @@ function recordObservMeJoinFailure(
   });
 }
 
-function childStatus(status: ChildRunResult<unknown>["status"]): ObservMeChildStatus {
+function childStatus(status: ChildRunResult<unknown>["status"]): ObservMeTerminalChildStatus {
   if (status === "completed") return "completed";
   if (status === "cancelled") return "cancelled";
   return "failed";

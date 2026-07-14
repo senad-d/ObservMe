@@ -105,13 +105,15 @@ GitHub token:                (gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_
 OpenAI-like key:             sk-[A-Za-z0-9_-]{20,}
 Anthropic-like key:          sk-ant-[A-Za-z0-9_-]{20,}
 Slack token:                 xox[baprs]-[A-Za-z0-9-]{10,}
-Private key block:           -----BEGIN [A-Z ]*PRIVATE KEY-----
+Private key block:           complete uppercase labels ending in PRIVATE KEY (including PKCS#8, encrypted, RSA, and EC)
 Password assignment:         (?i)(password|passwd|pwd)\s*[:=]\s*[^\s]+
 API key assignment:          (?i)(api[_-]?key|token|secret|client[_-]?secret)\s*[:=]\s*[^\s]+
 URL credentials:             [a-z][a-z0-9+.-]*://[^\s:/?#]+:[^\s@/]+@
 ```
 
 These patterns are a minimum safety net, not a complete secret scanner. Keep them covered by tests and allow organizations to add custom regexes for proprietary credential formats.
+
+Private-key matching consumes a `PRIVATE KEY` label with an optional, bounded uppercase prefix, its body, and a same-label `END` marker with a 1,000,000-character body scan bound. This covers PKCS#8 (`PRIVATE KEY`), `ENCRYPTED PRIVATE KEY`, `RSA PRIVATE KEY`, `EC PRIVATE KEY`, and other uppercase private-key labels without accepting public-key labels. The shared input-size guard drops larger captured values before secret matching. If a supported private-key marker has no matching footer because it is missing, truncated, or mislabeled, redaction fails closed by replacing everything from that marker through the end of the captured value. `PUBLIC KEY` and `RSA PUBLIC KEY` blocks are not private-key matches.
 
 Matched values are replaced with:
 
@@ -246,12 +248,12 @@ Production default:
 
 ```yaml
 otlp:
+  endpoint: https://otel-collector.example.com:4318
   tls:
-    enabled: true
     insecureSkipVerify: false
 ```
 
-Development may use insecure local endpoints only when explicitly configured.
+The endpoint URL scheme selects TLS. The OTLP exporters explicitly keep certificate verification enabled unless `otlp.tls.insecureSkipVerify: true` is configured. Grafana query transport follows the same rule through `query.grafana.tls.insecureSkipVerify`. Production rejects either verification bypass, and any plain HTTP endpoint, unless `privacy.allowInsecureTransport: true` records the explicit insecure-transport acknowledgement. Development may use local HTTP or self-signed certificates, but the insecure setting remains visible in `/obs status` and `/obs health`.
 
 ## 13. Tenant Isolation
 
@@ -284,7 +286,8 @@ Do not log secrets while reporting security failures.
 Reject config if:
 
 - capture is enabled but redaction is disabled, unless `allowUnsafeCapture: true`
-- OTLP endpoint is plain HTTP in production, unless `allowInsecureTransport: true`
+- an OTLP or Grafana endpoint is plain HTTP in production, unless `allowInsecureTransport: true`
+- OTLP or Grafana certificate verification is bypassed in production, unless `allowInsecureTransport: true`
 - metric labels include forbidden high-cardinality fields such as workflow IDs, session IDs, or agent IDs
 - propagated workflow or agent lineage values are malformed, too long, or contain unsafe characters
 - queue sizes exceed configured memory limits

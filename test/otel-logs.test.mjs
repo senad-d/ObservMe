@@ -40,7 +40,6 @@ function createHarness(config) {
   const provider = createFakeLogProvider(calls, logger);
   const sdk = new ObservMeLogSdk({
     config,
-    registerGlobal: false,
     exporterFactory: options => {
       calls.exporterOptions = options;
       return { export: () => undefined, shutdown: () => undefined };
@@ -106,6 +105,7 @@ test("log exporter wiring matches documented OTLP endpoint and batch defaults", 
     url: "http://collector:4318/v1/logs",
     headers: { Authorization: "Bearer test-token" },
     timeoutMillis: 3000,
+    httpAgentOptions: { rejectUnauthorized: true },
   });
 });
 
@@ -120,7 +120,15 @@ test("explicit log signal endpoint overrides the base OTLP endpoint", () => {
   assert.equal(resolveLogEndpoint(config), "https://otel.example.test/custom/v1/logs");
 });
 
-test("logger provider and exporter are created only during enabled session startup", async () => {
+test("log exporter maps the retained OTLP TLS verification setting to its HTTP agent", () => {
+  const config = cloneDefault({ otlp: { tls: { insecureSkipVerify: true } } });
+
+  assert.deepEqual(buildLogExporterWiring(config).exporter.httpAgentOptions, {
+    rejectUnauthorized: false,
+  });
+});
+
+test("logger provider and exporter are created only during enabled direct session startup", async () => {
   const { sdk, calls, logger } = createHarness(defaultObservMeConfig);
 
   assert.equal(calls.exporterOptions, undefined);
@@ -139,6 +147,32 @@ test("logger provider and exporter are created only during enabled session start
   assert.equal(calls.providerOptions.resource.attributes["observme.tenant.id"], "platform");
 });
 
+test("log startup failure releases a processor created before provider construction fails", async () => {
+  let processorShutdowns = 0;
+  const sdk = new ObservMeLogSdk({
+    config: defaultObservMeConfig,
+    exporterFactory: () => ({ export: () => undefined, shutdown: () => undefined }),
+    processorFactory: () => ({
+      forceFlush: async () => undefined,
+      onEmit: () => undefined,
+      shutdown: async () => {
+        processorShutdowns += 1;
+      },
+    }),
+    loggerProviderFactory: () => {
+      throw new Error("log provider construction failed");
+    },
+  });
+
+  await assert.rejects(
+    () => startOtelSdk({ config: defaultObservMeConfig, sdkFactory: () => sdk }),
+    /log provider construction failed/u,
+  );
+
+  assert.equal(processorShutdowns, 1);
+  assert.equal(sdk.state, "shutdown");
+});
+
 test("disabled logs keep pre-start emission safe and avoid exporter or provider factories", async () => {
   const config = cloneDefault({ logs: { enabled: false } });
   const { sdk, calls } = createHarness(config);
@@ -147,6 +181,19 @@ test("disabled logs keep pre-start emission safe and avoid exporter or provider 
   await sdk.start();
   assert.doesNotThrow(() => sdk.logger.emit({ body: "disabled-after-start" }));
 
+  assert.equal(sdk.state, "disabled");
+  assert.equal(calls.exporterOptions, undefined);
+  assert.equal(calls.batchOptions, undefined);
+  assert.equal(calls.providerOptions, undefined);
+});
+
+test("top-level disablement keeps enabled log settings from creating exporters or providers", async () => {
+  const config = cloneDefault({ enabled: false, logs: { enabled: true } });
+  const { sdk, calls } = createHarness(config);
+
+  await sdk.start();
+
+  assert.equal(buildLogExporterWiring(config).enabled, false);
   assert.equal(sdk.state, "disabled");
   assert.equal(calls.exporterOptions, undefined);
   assert.equal(calls.batchOptions, undefined);

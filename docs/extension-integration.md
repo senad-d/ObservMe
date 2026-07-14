@@ -58,9 +58,9 @@ Use this order for each child process:
 1. Request the ObservMe integration API.
 2. Call `startSubagent()` immediately before launching the child.
 3. Pass the returned `env` as the child process environment without logging it.
-4. Call `completeSubagent(..., { childStatus: "active" })` when the launcher successfully creates the child.
-5. Call `failSubagent()` when the launcher fails before the child is active.
-6. Call `startWait()`/`endWait()` around time spent waiting for child completion.
+4. Call `failSubagent()` only when the launcher fails before the child is running.
+5. Call `startWait()`/`endWait()` around time spent waiting for child completion.
+6. Call `completeSubagent()` once with the matching terminal `childStatus` and `outcome` (`completed`, `failed`, or `cancelled`).
 7. Call `startJoin()`/`endJoin()` when collecting the terminal child status or result.
 
 ```typescript
@@ -78,12 +78,9 @@ if (!started?.ok) {
   return;
 }
 
+let child;
 try {
-  await launchChildPi({ env: started.env });
-  observme.completeSubagent(started.spawnId, {
-    childAgentId: started.childAgentId,
-    childStatus: "active",
-  });
+  child = await launchChildPi({ env: started.env });
 } catch (error) {
   observme.failSubagent(started.spawnId, {
     childAgentId: started.childAgentId,
@@ -91,6 +88,13 @@ try {
   });
   throw error;
 }
+
+const result = await waitForChildPi(child);
+observme.completeSubagent(started.spawnId, {
+  childAgentId: started.childAgentId,
+  childStatus: result.status,
+  outcome: result.status,
+});
 ```
 
 Do not put raw tasks, prompts, command lines, environment values, child output, or private paths in `errorClass`, `spawnReason`, or other bounded fields.
@@ -101,7 +105,7 @@ Do not put raw tasks, prompts, command lines, environment values, child output, 
 | --- | --- |
 | `getContext()` | Read the current workflow, root/parent/current agent, role, depth, session, and trace identifiers for local orchestration correlation. These are high-cardinality values and must not become metric labels. |
 | `startSubagent(options)` | Starts `pi.agent.spawn`, records spawn metrics/logs, creates bounded parent tree state, and returns a sanitized propagation environment. |
-| `completeSubagent(spawnId, options)` | Ends a successful launcher operation. Use child status `active` when the child is running; use `completed` only when launch and child completion are intentionally represented together. |
+| `completeSubagent(spawnId, options)` | Ends the active child lifecycle with one coherent `completed`, `failed`, or `cancelled` status/outcome pair. |
 | `failSubagent(spawnId, options)` | Ends a launcher failure and records bounded failure telemetry. |
 | `startWait(options)` / `endWait(id, options)` | Measures time the parent is blocked on a child or dependency. |
 | `startJoin(options)` / `endJoin(id, options)` | Measures result collection and records child failure propagation or confirmed parent recovery. |
@@ -120,7 +124,7 @@ Do not put raw tasks, prompts, command lines, environment values, child output, 
 
 Runtime callers are validated even when JavaScript bypasses the TypeScript types. Caller-provided lifecycle identifiers must match `[A-Za-z0-9._:-]{1,128}`. Commands and individual arguments are capped at 4096 characters, argument lists at 256 items, and environment objects at 4096 entries. Durations must be finite, non-negative milliseconds. Invalid or duplicate active operations return a failure without replacing an existing span.
 
-Completion and wait/join methods use bounded child states (`starting`, `active`, `completed`, `failed`, `cancelled`, `orphaned`), join states (`waiting`, `completed`, `failed`, `cancelled`, `timeout`, `unknown`), and wait reasons (`dependency`, `rate_limit`, `child_running`, `unknown`). `failurePropagated=false` on a completed join confirms that the parent recovered from a failed child.
+Completion accepts only terminal child states (`completed`, `failed`, `cancelled`), and any supplied outcome must match. Wait/join methods use bounded child states (`starting`, `active`, `completed`, `failed`, `cancelled`, `orphaned`), join states (`waiting`, `completed`, `failed`, `cancelled`, `timeout`, `unknown`), and wait reasons (`dependency`, `rate_limit`, `child_running`, `unknown`). `failurePropagated=false` on a completed join confirms that the parent recovered from a failed child.
 
 All mutation methods return a discriminated result. Handle these reasons without crashing Pi:
 
@@ -130,6 +134,8 @@ All mutation methods return a discriminated result. Handle these reasons without
 | `invalid_request` | An identifier, enum, duration, command/argument field, or environment shape is invalid or oversized. |
 | `spawn_already_exists` / `wait_already_exists` / `join_already_exists` | The requested lifecycle identifier is already active. Generate a unique identifier or finish the active operation; do not overwrite it. |
 | `spawn_not_found` / `wait_not_found` / `join_not_found` | The lifecycle handle is absent or has already ended. |
+| `child_agent_mismatch` | The supplied child ID does not match the child stored for the active spawn. |
+| `invalid_terminal_transition` | Terminal status/outcome fields contradict each other or would rewrite an existing terminal tree state. |
 | `operation_failed` | ObservMe could not safely complete the operation. |
 
 Do not retry a completed lifecycle handle blindly; repeated completion can otherwise hide an orchestration-state bug.
@@ -183,7 +189,7 @@ The integration API is transport-agnostic. A launcher can use a local subprocess
 
 - passes the returned environment unchanged to the child Pi process;
 - does not serialize the envelope or raw task into telemetry or captured logs;
-- reports launcher completion/failure separately from child completion;
+- reports launcher failure separately from child completion, failure, or cancellation;
 - records wait and join around the transport's actual blocking and result-collection boundaries;
 - guarantees the child loads a compatible ObservMe extension;
 - cleans up temporary files, pipes, sessions, containers, or remote resources deterministically.

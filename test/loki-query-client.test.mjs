@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import { createOversizedGrafanaStreamResponse } from "./grafana-response-limit-helpers.mjs";
 import {
   LokiQueryClient,
   normalizeLokiAttributeName,
@@ -157,6 +158,21 @@ test("queryLoki reports malformed success payloads as backend schema errors with
       return true;
     },
   );
+});
+
+test("queryLoki cancels injected oversized responses with a false Content-Length before JSON parsing", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const oversized = createOversizedGrafanaStreamResponse({ "content-length": "invalid" });
+
+  await assert.rejects(
+    queryLoki(config, '{service_name="observme-pi-extension"}', defaultRange, {
+      fetch: async () => oversized.response,
+    }),
+    /Grafana response body exceeded maximum size/u,
+  );
+  assert.equal(oversized.state.cancelled, true);
 });
 
 test("queryLoki preserves legitimate empty stream responses", async () => {

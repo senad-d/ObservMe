@@ -41,7 +41,6 @@ function createConfig() {
   config.otlp.endpoint = requiredEndpoint();
   config.otlp.headers = {};
   config.otlp.timeoutMs = 2000;
-  config.otlp.tls.enabled = false;
   config.privacy.allowInsecureTransport = true;
   config.resource.attributes = {
     "service.name": "observme-active-agent-lease-integration",

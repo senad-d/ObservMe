@@ -162,8 +162,24 @@ const started = observme?.startSubagent({
 });
 
 if (started?.ok) {
-  await launchChildPi({ env: started.env });
-  observme.completeSubagent(started.spawnId, { childStatus: "active" });
+  let child;
+  try {
+    child = await launchChildPi({ env: started.env });
+  } catch (error) {
+    observme.failSubagent(started.spawnId, {
+      childAgentId: started.childAgentId,
+      errorClass: error instanceof Error ? error.name : "launcher_error",
+    });
+  }
+
+  if (child) {
+    const result = await waitForChildPi(child);
+    observme.completeSubagent(started.spawnId, {
+      childAgentId: started.childAgentId,
+      childStatus: result.status,
+      outcome: result.status,
+    });
+  }
 }
 ```
 
@@ -268,7 +284,7 @@ All operational logs use short event bodies plus structured attributes. Correlat
 | Configuration, session, and workflow | `config.rejected`<br>`session.started`<br>`session.shutdown`<br>`session.duplicate_start`<br>`workflow.started`<br>`workflow.completed`<br>`workflow.failed` | Configuration diagnostics and top-level lifecycle/outcome events. |
 | Reserved session events | `session.named`<br>`session.error` | Public event names reserved for compatibility; current live handlers do not emit them. |
 | Agent run | `agent.run.started`<br>`agent.run.completed`<br>`agent.run.failed` | Agent-run lifecycle and outcome. |
-| Subagent lineage | `agent.spawn.started`<br>`agent.spawn.completed`<br>`agent.spawn.failed`<br>`agent.wait.started`<br>`agent.wait.completed`<br>`agent.join.started`<br>`agent.join.completed`<br>`agent.orphaned`<br>`trace_context.propagation_failed` | Parent/child lifecycle, lineage gaps, propagation failures, and join outcomes. |
+| Subagent lineage | `agent.spawn.started`<br>`agent.spawn.completed`<br>`agent.spawn.failed`<br>`agent.spawn.cancelled`<br>`agent.wait.started`<br>`agent.wait.completed`<br>`agent.join.started`<br>`agent.join.completed`<br>`agent.orphaned`<br>`trace_context.propagation_failed` | Parent/child lifecycle, lineage gaps, propagation failures, and join outcomes. |
 | Turn | `turn.started`<br>`turn.completed` | Turn lifecycle with run/turn correlation. |
 | LLM lifecycle | `llm.request.started`<br>`llm.request.completed`<br>`llm.request.failed` | Content-free provider request lifecycle, usage, cost, stop reason, and bounded errors. |
 | LLM content | `llm.prompt.captured`<br>`llm.response.captured`<br>`llm.thinking.captured` | Emitted only when the corresponding prompt, response, or thinking capture flag is enabled and redaction succeeds. |
@@ -287,7 +303,7 @@ ObservMe supports layered configuration with this precedence:
 defaults → global ~/.pi/agent/observme.yaml → trusted project config → trusted project .env → system environment variables → runtime options
 ```
 
-Factory-safe loading uses defaults/global/system-environment/runtime options only. Session-scoped loading can add trusted project config and a project-local `.env` when Pi marks the project trusted. `/obs status` reports the effective config source, whether project-local config was loaded, skipped because the project is untrusted, or missing, plus bounded rejection issue codes, the configured Grafana URL, and query-readiness status without rendering tokens or passwords. In untrusted projects, ObservMe does not read project-local config or `.env` files and uses safe defaults/global/system-environment layers instead. Invalid or unsafe configuration emits a bounded `config.rejected` diagnostic and falls back safely without exposing rejected values.
+Factory-safe loading uses defaults/global/system-environment/runtime options only. Session-scoped loading can add trusted project config and a project-local `.env` when Pi marks the project trusted. `/obs status` reports the effective config source, whether project-local config was loaded, skipped because the project is untrusted, or missing, plus bounded rejection issue codes, effective OTLP/Grafana transport security, the configured Grafana URL, and query-readiness status without rendering tokens or passwords. In untrusted projects, ObservMe does not read project-local config or `.env` files and uses safe defaults/global/system-environment layers instead. Invalid or unsafe configuration emits a bounded `config.rejected` diagnostic and falls back safely without exposing rejected values.
 
 Cross-process agent lineage has a separate boundary: only the Pi process environment available to the shipped extension, or explicit runtime options for controlled embedders, is eligible for parent provenance. Project-local `.env` values configure ObservMe but cannot establish lineage. A child accepts only a complete validated workflow/parent/root/depth/spawn envelope and valid W3C context; malformed or stale envelopes fail open to a root/orphan fallback with sanitized telemetry.
 
@@ -343,7 +359,7 @@ query:
       preferIPv4: true
 ```
 
-Create a Grafana service-account token in Grafana (Administration → Users and access → Service accounts → Add service account/token; Viewer is enough for read-only datasource queries) and export it as `OBSERVME_GRAFANA_TOKEN`, or for local-only Basic auth read the generated admin password from the repository-only local stack's secrets directory. If you prefer a project-local env file, run `cp .env.example .env`, fill either `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_PASSWORD`, then restart Pi from that project. The local Collector and Loki profile uses `service.name=observme-pi-extension`; Loki queries use normalized labels such as `service_name`, `pi_session_id`, `pi_agent_id`, `pi_agent_run_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, run `/obs health` and check extension env loading, Grafana auth, datasource UIDs, TLS, and DNS details.
+Create a Grafana service-account token in Grafana (Administration → Users and access → Service accounts → Add service account/token; Viewer is enough for read-only datasource queries) and export it as `OBSERVME_GRAFANA_TOKEN`, or for local-only Basic auth read the generated admin password from the repository-only local stack's secrets directory. Certificate verification stays enabled for HTTPS by default. Production rejects OTLP or Grafana certificate-verification bypass unless `privacy.allowInsecureTransport: true` explicitly acknowledges the risk; `otlp.tls.enabled` is not a supported setting because each endpoint URL scheme selects HTTP or HTTPS. If you prefer a project-local env file, run `cp .env.example .env`, fill either `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_PASSWORD`, then restart Pi from that project. The local Collector and Loki profile uses `service.name=observme-pi-extension`; Loki queries use normalized labels such as `service_name`, `pi_session_id`, `pi_agent_id`, `pi_agent_run_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, run `/obs health` and check extension env loading, Grafana auth, datasource UIDs, TLS, and DNS details.
 
 ### Show LLM chat content in Grafana
 
@@ -368,7 +384,7 @@ Full configuration schema: `docs/reference/12-configuration-reference.md`. Full 
 - ObservMe does not execute shell commands itself; it only observes tool/bash execution events emitted by Pi.
 - ObservMe never blocks Pi agent execution when the observability backend is degraded or unreachable.
 - ObservMe starts exporters only for a trusted session and shuts them down with bounded timeouts.
-- ObservMe does not continuously tail the full Pi session file; startup recovery reads only minimal session/correlation state, and historical replay requires an explicit `/obs backfill` command.
+- ObservMe does not continuously tail the full Pi session file. Optional correlation persistence uses one bounded `observme.correlation` custom entry on the active Pi branch, never LLM context; historical replay is never automatic and requires an explicit, confirmed `/obs backfill` command.
 - Optional content capture is disabled by default and must pass through the redaction pipeline before export when enabled.
 - `/obs` query commands are read-only and are not imported by telemetry-emission code paths.
 - Invalid or unsafe configuration falls back to safe defaults with bounded `config.rejected`, `/obs status`, and available Pi UI diagnostics; rejected values are never rendered. Intentionally unsafe capture emits a visible warning.

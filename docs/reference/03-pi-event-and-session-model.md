@@ -105,7 +105,7 @@ Optional telemetry:
 
 ### `custom` entry
 
-Extension state entry created through `pi.appendEntry()`. It does not participate in LLM context. ObservMe should append a custom entry only for explicitly enabled minimal correlation state; by default it should not append custom entries.
+Extension state entry created through `pi.appendEntry()`. It does not participate in LLM context. When `agent.writeCorrelationEntry` is explicitly enabled, ObservMe appends at most one `observme.correlation` entry per active branch after telemetry startup succeeds. The versioned data contains only bounded workflow/agent lineage identifiers and depth. Startup scans `ctx.sessionManager.getBranch()` from newest to oldest, restores the latest valid entry, ignores corrupt entries and entries on abandoned branches, and skips an idempotent reload write. By default ObservMe does not append custom entries.
 
 ### `custom_message` entry
 
@@ -244,12 +244,12 @@ The derived id must be scoped by session id and agent run id and must not be use
 
 On extension startup in an existing session:
 
-1. Read current session header if available.
+1. Read the current session header from `ctx.sessionManager` if available.
 2. Set `pi.session.id`, `pi.workflow.id`, `pi.agent.id`, and resource attributes.
-3. Reconstruct optional workflow/agent lineage only from trusted environment variables or an explicitly enabled minimal custom correlation entry.
-4. Do not replay old telemetry by default.
-5. Optionally support `replayOnStart: true` for backfill, but it must be off by default.
-6. If replay is enabled, mark spans/logs with `observme.replayed=true`.
+3. When `agent.writeCorrelationEntry` is enabled, reconstruct optional workflow/agent lineage only from the latest validated `observme.correlation` custom entry on `ctx.sessionManager.getBranch()`.
+4. Ignore malformed entries and entries outside the active branch without exporting their values or changing LLM context.
+5. After successful startup, append the minimal custom entry only when the active branch does not already contain the same validated correlation.
+6. Never replay historical telemetry automatically. Historical export requires the explicit, confirmed `/obs backfill` command, which marks each emitted record with `observme.replayed=true`.
 
 ## 11. Local Session Reading Rules
 

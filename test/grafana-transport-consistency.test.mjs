@@ -7,6 +7,11 @@ import { MAX_GRAFANA_RESPONSE_BODY_BYTES } from "../src/query/grafana-transport.
 import { queryLoki } from "../src/query/loki.ts";
 import { queryPrometheus } from "../src/query/prometheus.ts";
 import { searchTempo } from "../src/query/tempo.ts";
+import {
+  createExactBoundaryJsonResponse,
+  createOversizedGrafanaStreamResponse,
+  createStallingGrafanaResponse,
+} from "./grafana-response-limit-helpers.mjs";
 
 const defaultRange = {
   from: new Date("2026-07-07T10:00:00.250Z"),
@@ -213,7 +218,30 @@ test("shared Grafana transport applies aborting timeouts to health and datasourc
   await assert.rejects(runTempoSearch(config, createNeverResolvingFetch([])), /Tempo search timed out/u);
 });
 
-test("custom Node Grafana transport rejects oversized response bodies without exposing body content", async () => {
+test("default Grafana fetch rejects declared oversized response bodies without exposing body content", async () => {
+  const config = cloneReadyConfig();
+  const oversizedSecretBody = `default-fetch-secret-${"x".repeat(MAX_GRAFANA_RESPONSE_BODY_BYTES)}`;
+
+  await withLocalHttpServer(
+    (_request, response) => {
+      response.writeHead(200, {
+        "content-length": String(Buffer.byteLength(oversizedSecretBody)),
+        "content-type": "application/json",
+      });
+      response.end(oversizedSecretBody);
+    },
+    async baseUrl => {
+      config.query.grafana.url = baseUrl;
+      await assert.rejects(runPrometheusQuery(config), error => {
+        assert.match(error.message, /Grafana response body exceeded maximum size/u);
+        assert.doesNotMatch(error.message, /default-fetch-secret/u);
+        return true;
+      });
+    },
+  );
+});
+
+test("custom Node Grafana transport rejects streamed oversized response bodies without exposing body content", async () => {
   const config = cloneReadyConfig();
   config.query.grafana.transport.preferIPv4 = true;
   const oversizedSecretBody = `oversized-secret-token-${"x".repeat(MAX_GRAFANA_RESPONSE_BODY_BYTES)}`;
@@ -221,7 +249,9 @@ test("custom Node Grafana transport rejects oversized response bodies without ex
   await withLocalHttpServer(
     (_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(oversizedSecretBody);
+      const midpoint = Math.floor(oversizedSecretBody.length / 2);
+      response.write(oversizedSecretBody.slice(0, midpoint));
+      response.end(oversizedSecretBody.slice(midpoint));
     },
     async baseUrl => {
       config.query.grafana.url = baseUrl;
@@ -233,6 +263,62 @@ test("custom Node Grafana transport rejects oversized response bodies without ex
       });
     },
   );
+});
+
+test("injected Grafana fetch rejects false Content-Length bodies by streamed bytes and cancels them", async () => {
+  const config = cloneReadyConfig();
+  const oversized = createOversizedGrafanaStreamResponse({ "content-length": "not-a-number" });
+
+  await assert.rejects(runLokiQuery(config, async () => oversized.response), error => {
+    assert.match(error.message, /Grafana response body exceeded maximum size/u);
+    assert.doesNotMatch(error.message, /response body content/u);
+    return true;
+  });
+  assert.equal(oversized.state.cancelled, true);
+});
+
+test("Grafana health cancels responses whose declared Content-Length exceeds the limit", async () => {
+  const config = cloneReadyConfig();
+  const states = [];
+  const health = await getGrafanaHealth(config, {
+    fetch: async () => {
+      const oversized = createOversizedGrafanaStreamResponse({
+        "content-length": String(MAX_GRAFANA_RESPONSE_BODY_BYTES + 1),
+      });
+      states.push(oversized.state);
+      return oversized.response;
+    },
+  });
+
+  assert.deepEqual(
+    health.checks.map(check => check.status),
+    ["failed", "failed", "failed", "failed"],
+  );
+  for (const check of health.checks) {
+    assert.match(check.detail, /Grafana response body exceeded maximum size/u);
+  }
+  assert.equal(states.length, 4);
+  assert.ok(states.every(state => state.cancelled));
+});
+
+test("Grafana transport accepts and parses an exact-boundary valid response", async () => {
+  const config = cloneReadyConfig();
+  const response = createExactBoundaryJsonResponse({
+    status: "success",
+    data: { resultType: "vector", result: [] },
+  });
+
+  const result = await runPrometheusQuery(config, async () => response);
+  assert.deepEqual(result, { resultType: "vector", series: [] });
+});
+
+test("Grafana response-body reads preserve query timeout and cancellation semantics", async () => {
+  const config = cloneReadyConfig();
+  config.query.timeoutMs = 5;
+  const stalled = createStallingGrafanaResponse();
+
+  await assert.rejects(runTempoSearch(config, async () => stalled.response), /Tempo search timed out/u);
+  assert.equal(stalled.state.cancelled, true);
 });
 
 test("shared Grafana readiness rejects invalid Grafana URLs before health and datasource query fetches", async () => {

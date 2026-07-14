@@ -7,6 +7,7 @@ import { COMMON_SPAN_ATTRIBUTES, LOG_ATTRIBUTES, TOOL_ATTRIBUTES } from "../src/
 import type {
   Handler,
   ObservMeHandlerContext,
+  ObservMeSessionManager,
   ObservMeTelemetrySession,
   StartSessionTelemetryOptions,
 } from "../src/pi/handlers.ts";
@@ -32,6 +33,18 @@ import {
 } from "../src/semconv/metrics.ts";
 import { SPAN_NAMES } from "../src/semconv/spans.ts";
 import { isPlainRecord, mergeRecordConfig } from "./support/telemetry-types.ts";
+import {
+  agentEvents,
+  bashEvents,
+  branchEvents,
+  compactionEvent,
+  llmEvents,
+  modelThinkingEvents,
+  sessionShutdownEvent,
+  sessionStartEvent,
+  toolEvents,
+  turnEvents,
+} from "./support/pi-event-fixtures.ts";
 import type { TestAttributes, TestLogger, TestMetricRecord, TestSpan, TestSpanContext } from "./support/telemetry-types.ts";
 
 const requiredFixtureFiles = [
@@ -39,16 +52,8 @@ const requiredFixtureFiles = [
   "session-assistant-usage.json",
   "session-assistant-usage-reasoning-cache.json",
   "tool-result-error.json",
-  "bash-execution.json",
   "compaction.json",
   "branch-summary.json",
-  "events/session-start.json",
-  "events/agent-start-end.json",
-  "events/turn-start-end.json",
-  "events/message-end-assistant.json",
-  "events/tool-execution-start-end.json",
-  "events/session-compact.json",
-  "events/session-tree.json",
   "events/subagent-spawn.json",
   "events/agent-wait-join.json",
   "events/orphan-agent.json",
@@ -89,20 +94,18 @@ async function loadFixture(relativePath: string): Promise<Record<string, unknown
   return JSON.parse(await readFile(fixtureUrl(relativePath), "utf8")) as Record<string, unknown>;
 }
 
-async function loadEventFixtures() {
-  const [sessionStart, agentRun, turn, llm, toolCall, bashExecution, compaction, branch, modelThinking] = await Promise.all([
-    loadFixture("events/session-start.json"),
-    loadFixture("events/agent-start-end.json"),
-    loadFixture("events/turn-start-end.json"),
-    loadFixture("events/message-end-assistant.json"),
-    loadFixture("events/tool-execution-start-end.json"),
-    loadFixture("bash-execution.json"),
-    loadFixture("events/session-compact.json"),
-    loadFixture("events/session-tree.json"),
-    loadFixture("events/model-thinking-change.json"),
-  ]);
-
-  return { sessionStart, agentRun, turn, llm, toolCall, bashExecution, compaction, branch, modelThinking };
+function loadEventFixtures() {
+  return {
+    sessionStart: sessionStartEvent,
+    agentRun: agentEvents,
+    turn: turnEvents,
+    llm: llmEvents,
+    toolCall: toolEvents,
+    bashExecution: bashEvents,
+    compaction: compactionEvent,
+    branch: branchEvents,
+    modelThinking: modelThinkingEvents,
+  };
 }
 
 function cloneConfig(overrides: Record<string, unknown> = {}) {
@@ -117,9 +120,37 @@ function createFakePi() {
   const handlers = new Map<string, Handler>() as Omit<Map<string, Handler>, "get"> & { get(eventName: string): Handler };
   return {
     handlers,
+    getThinkingLevel: () => "medium" as const,
     on: (eventName: string, handler: Handler) => {
       handlers.set(eventName, handler);
     },
+  };
+}
+
+function createFixtureSessionManager(): ObservMeSessionManager {
+  const header = {
+    type: "session" as const,
+    version: 3,
+    id: "fixture-session",
+    timestamp: "2026-07-14T00:00:00.000Z",
+    cwd: "/workspace/event-mapping",
+  };
+
+  return {
+    getCwd: () => header.cwd,
+    getSessionDir: () => "/tmp/pi",
+    getSessionId: () => header.id,
+    getSessionFile: () => "/tmp/pi/fixture-session.jsonl",
+    getLeafId: () => null,
+    getLeafEntry: () => undefined,
+    getEntry: () => undefined,
+    getLabel: () => undefined,
+    getBranch: () => [],
+    buildContextEntries: () => [],
+    getHeader: () => header,
+    getEntries: () => [],
+    getTree: () => [],
+    getSessionName: () => "Fixture Session",
   };
 }
 
@@ -313,30 +344,41 @@ async function emitFixtureHandlerTrace(harness: HandlerHarness, fixtures: Awaite
   const handlers = harness.pi.handlers;
   const ctx: ObservMeHandlerContext = {
     cwd: "/workspace/event-mapping",
-    model: { provider: "anthropic", model: "claude-fixture", api: "messages" },
-    thinking: { level: "medium" },
+    sessionManager: createFixtureSessionManager(),
+    model: {
+      id: "claude-fixture",
+      name: "Claude Fixture",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://example.invalid",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8_192,
+    },
   };
 
   await handlers.get("session_start")(fixtures.sessionStart, ctx);
-  await handlers.get("agent_start")(fixtures.agentRun.start, {});
+  await handlers.get("agent_start")(fixtures.agentRun.start, ctx);
   await handlers.get("turn_start")(fixtures.turn.start, ctx);
   await handlers.get("before_provider_request")(fixtures.llm.beforeProviderRequest, ctx);
-  await handlers.get("after_provider_response")(fixtures.llm.afterProviderResponse, {});
-  await handlers.get("message_end")(fixtures.llm.messageEnd, {});
-  await handlers.get("tool_execution_start")(fixtures.toolCall.start, {});
-  await handlers.get("tool_call")(fixtures.toolCall.call, {});
-  await handlers.get("tool_result")(fixtures.toolCall.result, {});
-  await handlers.get("tool_execution_end")(fixtures.toolCall.end, {});
-  await handlers.get("bashExecution")(fixtures.bashExecution, {});
-  await handlers.get("model_select")(fixtures.modelThinking.modelSelect, {});
-  await handlers.get("model_change")(fixtures.modelThinking.modelChange, {});
-  await handlers.get("thinking_level_select")(fixtures.modelThinking.thinkingSelect, {});
-  await handlers.get("thinking_level_change")(fixtures.modelThinking.thinkingChange, {});
-  await handlers.get("session_compact")(fixtures.compaction, {});
-  await handlers.get("session_tree")(fixtures.branch, {});
-  await handlers.get("turn_end")(fixtures.turn.end, {});
-  await handlers.get("agent_end")(fixtures.agentRun.end, {});
-  await handlers.get("session_shutdown")({ status: "ok" }, {});
+  await handlers.get("after_provider_response")(fixtures.llm.afterProviderResponse, ctx);
+  await handlers.get("message_end")(fixtures.llm.messageEnd, ctx);
+  await handlers.get("tool_execution_start")(fixtures.toolCall.start, ctx);
+  await handlers.get("tool_call")(fixtures.toolCall.call, ctx);
+  await handlers.get("tool_result")(fixtures.toolCall.result, ctx);
+  await handlers.get("tool_execution_end")(fixtures.toolCall.end, ctx);
+  await handlers.get("user_bash")(fixtures.bashExecution.start, ctx);
+  await handlers.get("message_end")(fixtures.bashExecution.messageEnd, ctx);
+  await handlers.get("model_select")(fixtures.modelThinking.modelSelect, ctx);
+  await handlers.get("thinking_level_select")(fixtures.modelThinking.thinkingSelect, ctx);
+  await handlers.get("session_compact")(fixtures.compaction, ctx);
+  await handlers.get("session_before_tree")(fixtures.branch.before, ctx);
+  await handlers.get("session_tree")(fixtures.branch.after, ctx);
+  await handlers.get("turn_end")(fixtures.turn.end, ctx);
+  await handlers.get("agent_end")(fixtures.agentRun.end, ctx);
+  await handlers.get("session_shutdown")(sessionShutdownEvent, ctx);
 }
 
 function findSpan(telemetry: FakeTelemetrySession, spanName: string): TestSpan {
@@ -395,8 +437,8 @@ function assertCanonicalHandlerSpans(telemetry: FakeTelemetrySession): void {
   assert.equal(branchSpan.parentSpan, turnSpan);
   assert.equal(sessionSpan.attributes["pi.session.id"], "fixture-session");
   assert.equal(sessionSpan.attributes["pi.workflow.id"], telemetry.lineage.workflowId);
-  assert.equal(agentSpan.attributes["pi.agent.run.id"], "fixture-agent-run");
-  assert.equal(turnSpan.attributes["pi.turn.id"], "fixture-agent-run-turn-000001");
+  assert.equal(agentSpan.attributes["pi.agent.run.id"], "agent-run-000001");
+  assert.equal(turnSpan.attributes["pi.turn.id"], "agent-run-000001-turn-000001");
   assert.equal(llmSpan.attributes["gen_ai.provider.name"], "anthropic");
   assert.equal(llmSpan.attributes["gen_ai.request.model"], "claude-fixture");
   assert.equal(llmSpan.attributes["gen_ai.usage.input_tokens"], 21);
@@ -404,10 +446,6 @@ function assertCanonicalHandlerSpans(telemetry: FakeTelemetrySession): void {
   assert.equal(toolSpan.attributes["pi.tool.name"], "read");
   assert.equal(toolSpan.attributes["pi.tool.error_class"], "ToolError");
   assert.equal(bashSpan.attributes["pi.bash.exit_code"], 1);
-  assert.equal(
-    telemetry.meter.records.find(record => record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.BASH_DURATION_MS)?.value,
-    250,
-  );
   assert.equal(compactionSpan.attributes["pi.compaction.first_kept_entry_id"], "entry-kept-123");
   assert.equal(compactionSpan.attributes["pi.compaction.tokens_before"], 50000);
   assert.equal(branchSpan.attributes["pi.branch.from_id"], "leaf-prev");
@@ -422,12 +460,11 @@ function assertModelThinkingLogs(telemetry: FakeTelemetrySession): void {
   const modelLogs = telemetry.logger.records.filter(record => record.body === LOG_EVENT_NAMES.MODEL_CHANGED);
   const thinkingLogs = telemetry.logger.records.filter(record => record.body === LOG_EVENT_NAMES.THINKING_CHANGED);
 
-  assert.equal(modelLogs.length, 2);
-  assert.equal(thinkingLogs.length, 2);
+  assert.equal(modelLogs.length, 1);
+  assert.equal(thinkingLogs.length, 1);
   assert.equal(modelLogs[0]?.attributes?.["pi.model.provider.current"], "openai");
-  assert.equal(modelLogs[1]?.attributes?.["pi.model.id.current"], "claude-updated");
+  assert.equal(modelLogs[0]?.attributes?.["pi.model.id.current"], "gpt-fixture");
   assert.equal(thinkingLogs[0]?.attributes?.["pi.thinking.level.current"], "high");
-  assert.equal(thinkingLogs[1]?.attributes?.["pi.thinking.level.current"], "medium");
 }
 
 function assertToolCompletionLog(telemetry: FakeTelemetrySession): void {
@@ -481,7 +518,8 @@ function assertRedactedContentPresent(telemetry: FakeTelemetrySession): void {
   assertCapturedContentLog(telemetry, LOG_EVENT_NAMES.LLM_PROMPT_CAPTURED, "prompt", llmSpan.attributes["pi.llm.prompt.redacted"]);
   assertCapturedContentLog(telemetry, LOG_EVENT_NAMES.LLM_RESPONSE_CAPTURED, "response", llmSpan.attributes["pi.llm.response.redacted"]);
   assertCapturedContentLog(telemetry, LOG_EVENT_NAMES.LLM_THINKING_CAPTURED, "thinking", llmSpan.attributes["pi.llm.thinking.redacted"]);
-  assert.match(String(toolSpan.attributes["pi.tool.arguments.redacted"]), /\[REDACTED:/u);
+  assert.match(String(toolSpan.attributes["pi.tool.arguments.redacted"]), /<home>/u);
+  assert.doesNotMatch(String(toolSpan.attributes["pi.tool.arguments.redacted"]), /private-repo/u);
   assert.match(String(toolSpan.attributes["pi.tool.result.redacted"]), /\[REDACTED:/u);
   assert.match(String(bashSpan.attributes["pi.bash.command.redacted"]), /\[REDACTED:/u);
   assert.match(String(bashSpan.attributes["pi.bash.output.redacted"]), /\[REDACTED:/u);

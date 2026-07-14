@@ -1,4 +1,8 @@
 import { CONFIG_DIR_NAME, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionContext,
+  SessionStartEvent,
+} from "@earendil-works/pi-coding-agent";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
@@ -34,10 +38,10 @@ export interface EnsureProjectConfigOptions {
 
 export type EnsureProjectConfig = (options: EnsureProjectConfigOptions) => Promise<ProjectConfigBootstrapResult>;
 
-type ProjectConfigBootstrapHandler = (event: unknown, ctx: ProjectConfigBootstrapContext) => Promise<void> | void;
+type ProjectConfigBootstrapHandler = (event: SessionStartEvent, ctx: ExtensionContext) => Promise<void> | void;
 
 interface ProjectConfigBootstrapPiApi {
-  on: (eventName: string, handler: ProjectConfigBootstrapHandler) => void;
+  on: (eventName: "session_start", handler: ProjectConfigBootstrapHandler) => void;
 }
 
 const observmeYamlFileName = "observme.yaml";
@@ -46,7 +50,6 @@ export const PROJECT_OBSERVME_YAML_TEMPLATE = `observme:
   enabled: true
   environment: development
   tenant: local-dev
-  replayOnStart: false
 
   otlp:
     endpoint: http://localhost:4318
@@ -54,7 +57,6 @@ export const PROJECT_OBSERVME_YAML_TEMPLATE = `observme:
     timeoutMs: 3000
     headers: {}
     tls:
-      enabled: false
       insecureSkipVerify: false
     signalEndpoints:
       traces: http://localhost:4318/v1/traces
@@ -86,6 +88,8 @@ export const PROJECT_OBSERVME_YAML_TEMPLATE = `observme:
     propagateTraceContext: true
     propagateToSubagents: true
     capabilityEnv: OBSERVME_AGENT_CAPABILITY
+    # Opt in to one validated, branch-local custom entry for reload/resume recovery.
+    # This entry never participates in LLM context.
     writeCorrelationEntry: false
 
   traces:

@@ -2,6 +2,7 @@ import type { ObservMeConfig } from "../config/schema.ts";
 import { LOG_ATTRIBUTES } from "../semconv/attributes.ts";
 import type { GrafanaFetch, GrafanaTransportClient } from "./grafana-transport.ts";
 import { createGrafanaTransport } from "./grafana-transport.ts";
+import { normalizeObsBackendLabel } from "../safety/display-bounds.ts";
 import { assertNoSensitiveQueryInput } from "../safety/sensitive-input.ts";
 import { assertGrafanaQueryReady } from "./grafana-readiness.ts";
 
@@ -310,8 +311,9 @@ function readStringRecord(value: unknown): Record<string, string> {
   if (!isRecord(value)) return record;
 
   for (const [key, item] of Object.entries(value)) {
-    const text = readStringOrNumber(item);
-    if (text !== undefined) record[key] = text;
+    const normalizedKey = normalizeObsBackendLabel(key);
+    const normalizedValue = normalizeObsBackendLabel(readStringOrNumber(item));
+    if (normalizedKey && normalizedValue !== undefined) record[normalizedKey] = normalizedValue;
   }
 
   return record;

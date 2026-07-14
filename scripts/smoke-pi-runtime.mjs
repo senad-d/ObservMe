@@ -285,13 +285,14 @@ async function main() {
     await assertObsSessionCommand(client);
     await assertObsReloadLifecycle(client, backend.baseUrl);
     await assertObsNewSessionLifecycle(client, backend.baseUrl);
+    await assertObsSessionRename(client);
     await assertObsHealthCommand(client);
     backend.assertAuthenticatedGrafanaProbes();
     await assertObsCostTimeoutCommand(client, backend);
     await assertPiRuntimeEventShapeCoverage(client);
 
     console.log(
-      "Pi runtime smoke passed: real RPC process discovered /obs, verified reload and new-session lifecycle replacement, executed status/session/health/bounded query commands, and covered sanitized current Pi event shapes.",
+      "Pi runtime smoke passed: real RPC process matched /obs to Pi session context, preserved identity on reload, replaced it for a new session, tracked rename metadata, executed health/bounded query commands, and covered sanitized current Pi event shapes.",
     );
   } finally {
     await client?.stop();
@@ -383,6 +384,7 @@ const observedEvents = new Map();
 const observedCounts = new Map();
 const observedEventNames = [
   "session_start",
+  "session_info_changed",
   "agent_start",
   "turn_start",
   "before_provider_request",
@@ -402,8 +404,8 @@ const observedEventNames = [
   "session_tree",
 ];
 const fixtureBackedEvents = new Map([
-  ["session_compact", "session_compact is covered by test/fixtures/events/session-compact.json; the minimal credential-free RPC smoke does not force a compaction summary."],
-  ["session_tree", "session_tree is covered by test/fixtures/events/session-tree.json; interactive tree navigation is not exposed as a bounded RPC smoke action."],
+  ["session_compact", "session_compact is compile-time checked in test/support/pi-event-fixtures.ts; the minimal credential-free RPC smoke does not force a compaction summary."],
+  ["session_tree", "session_tree is compile-time checked in test/support/pi-event-fixtures.ts; interactive tree navigation is not exposed as a bounded RPC smoke action."],
   ["user_bash", "user_bash is emitted by interactive !/!! handling, not by Pi RPC bash or prompt commands; the smoke verifies the installed Pi UserBashEvent type contract and docs/review-validation.md records the manual TUI recipe."],
 ]);
 let providerCallCount = 0;
@@ -447,6 +449,10 @@ export default function observmeSmokeEventShapes(pi) {
     description: "Select the deterministic ObservMe smoke provider and thinking level.",
     handler: handleSelectModelCommand,
   });
+  pi.registerCommand("observme-smoke-session-context", {
+    description: "Report Pi's current typed session-manager context.",
+    handler: handleSessionContextCommand,
+  });
 }
 
 function registerShapeHandler(pi, eventName) {
@@ -460,6 +466,25 @@ function recordShapeEvent(eventName, event, ctx) {
 
 async function handleEventShapesCommand(_args, ctx) {
   await ctx.ui.notify("ObservMe smoke event shapes: " + JSON.stringify(createEventShapeReport()), "info");
+}
+
+async function handleSessionContextCommand(_args, ctx) {
+  const sessionManager = ctx.sessionManager;
+  const header = sessionManager.getHeader();
+  const branch = sessionManager.getBranch();
+  const correlationEntries = branch.filter(entry => entry.type === "custom" && entry.customType === "observme.correlation");
+  const customMessageEntries = branch.filter(entry => entry.type === "custom_message" && entry.customType === "observme.correlation");
+  const latestCorrelation = correlationEntries.at(-1);
+  await ctx.ui.notify("ObservMe smoke session context: " + JSON.stringify({
+    sessionId: sessionManager.getSessionId(),
+    sessionFile: sessionManager.getSessionFile(),
+    headerId: header?.id,
+    cwd: sessionManager.getCwd(),
+    sessionName: sessionManager.getSessionName(),
+    correlationEntryCount: correlationEntries.length,
+    correlationDataKeys: Object.keys(latestCorrelation?.data ?? {}).sort(),
+    correlationCustomMessageCount: customMessageEntries.length,
+  }), "info");
 }
 
 async function handleSelectModelCommand(_args, ctx) {
@@ -578,22 +603,32 @@ function summarizeEvent(eventName, event, ctx) {
   if (eventName === "turn_start" || eventName === "turn_end") return withoutUndefined({ ...base, ...summarizeTurnEvent(record) });
   if (eventName === "agent_end") return withoutUndefined({ ...base, ...summarizeAgentEnd(record) });
   if (eventName === "session_start") return withoutUndefined({ ...base, ...summarizeSessionStart(record) });
+  if (eventName === "session_info_changed") return withoutUndefined({ ...base, name: stringValue(record.name) });
 
   return withoutUndefined(base);
 }
 
 function summarizeContext(ctx) {
   const record = asRecord(ctx);
+  const sessionManager = record.sessionManager;
 
   return withoutUndefined({
     mode: stringValue(record.mode),
     hasUIType: valueType(record.hasUI),
     cwdType: valueType(record.cwd),
-    sessionFileType: valueType(record.sessionFile ?? record.session_file),
+    sessionIdType: valueType(callNoArgMethod(sessionManager, "getSessionId")),
+    sessionFileType: valueType(callNoArgMethod(sessionManager, "getSessionFile")),
+    sessionNameType: valueType(callNoArgMethod(sessionManager, "getSessionName")),
+    sessionHeaderKeys: sortedKeys(asRecord(callNoArgMethod(sessionManager, "getHeader"))),
     modelProvider: stringValue(asRecord(record.model).provider),
-    modelId: stringValue(asRecord(record.model).id ?? asRecord(record.model).model),
-    thinkingLevel: stringValue(asRecord(record.thinking).level),
+    modelId: stringValue(asRecord(record.model).id),
   });
+}
+
+function callNoArgMethod(value, methodName) {
+  const record = asRecord(value);
+  const method = record[methodName];
+  return typeof method === "function" ? method.call(value) : undefined;
 }
 
 function summarizeSessionStart(record) {
@@ -785,6 +820,8 @@ function renderSmokeObservMeConfig(baseUrl) {
       service.name: observme-pi-runtime-smoke
       observme.tenant.id: pi-runtime-smoke
       deployment.environment.name: development
+  agent:
+    writeCorrelationEntry: true
   traces:
     enabled: false
   metrics:
@@ -814,6 +851,7 @@ async function assertObsCommandIsDiscoverable(client) {
   await assertSingleExtensionCommand(client, "obs");
   await assertSingleExtensionCommand(client, "observme-smoke-event-shapes");
   await assertSingleExtensionCommand(client, "observme-smoke-select-model");
+  await assertSingleExtensionCommand(client, "observme-smoke-session-context");
   await assertSingleExtensionCommand(client, "observme-smoke-reload");
 }
 
@@ -843,12 +881,26 @@ async function assertObsSessionCommand(client) {
   const notification = client.waitForNotifyMessage("Session:");
   await client.request({ type: "prompt", message: "/obs session" });
   const message = await notification;
+  const sessionContext = await readSmokeSessionContext(client);
+  const sessionId = parseObsSessionId(message);
 
-  assert.match(message, /^Session: session-/mu, "/obs session should expose session_start runtime state");
   assert.doesNotMatch(message, /Session: unknown/u, "/obs session should not report an unknown session while the extension is active");
   assert.doesNotMatch(message, /ObservMe session unavailable/iu, "/obs session should not fail through Pi command routing");
+  assert.equal(sessionId, sessionContext.sessionId, "/obs session must equal ctx.sessionManager.getSessionId()");
+  assert.equal(sessionContext.headerId, sessionContext.sessionId, "Pi session header and manager id should agree");
+  assert.equal(sessionContext.correlationEntryCount, 1, "the active branch should contain one idempotent ObservMe correlation entry");
+  assert.deepEqual(sessionContext.correlationDataKeys, ["agentId", "depth", "rootAgentId", "schemaVersion", "workflowId"]);
+  assert.equal(sessionContext.correlationCustomMessageCount, 0, "correlation state must never enter LLM context");
 
-  return { message, sessionId: parseObsSessionId(message) };
+  return { message, sessionId, sessionContext };
+}
+
+async function readSmokeSessionContext(client) {
+  const prefix = "ObservMe smoke session context: ";
+  const notification = client.waitForNotifyMessage(prefix);
+  await client.request({ type: "prompt", message: "/observme-smoke-session-context" });
+  const message = await notification;
+  return JSON.parse(message.slice(prefix.length));
 }
 
 async function assertObsReloadLifecycle(client, baseUrl) {
@@ -861,11 +913,12 @@ async function assertObsReloadLifecycle(client, baseUrl) {
   await assertSingleExtensionCommand(client, "obs");
   await assertSingleExtensionCommand(client, "observme-smoke-event-shapes");
   await assertSingleExtensionCommand(client, "observme-smoke-select-model");
+  await assertSingleExtensionCommand(client, "observme-smoke-session-context");
   await assertSingleExtensionCommand(client, "observme-smoke-reload");
   await assertObsStatusCommand(client, baseUrl);
 
   const after = await assertObsSessionCommand(client);
-  assert.notEqual(after.sessionId, before.sessionId, "reload should create a fresh ObservMe runtime session identity");
+  assert.equal(after.sessionId, before.sessionId, "reload should preserve Pi's current session identity");
   assertFreshObsSessionCounters(after.message, "reload");
 }
 
@@ -880,6 +933,7 @@ async function assertObsNewSessionLifecycle(client, baseUrl) {
   await assertSingleExtensionCommand(client, "obs");
   await assertSingleExtensionCommand(client, "observme-smoke-event-shapes");
   await assertSingleExtensionCommand(client, "observme-smoke-select-model");
+  await assertSingleExtensionCommand(client, "observme-smoke-session-context");
   await assertSingleExtensionCommand(client, "observme-smoke-reload");
   await assertObsStatusCommand(client, baseUrl);
 
@@ -888,8 +942,15 @@ async function assertObsNewSessionLifecycle(client, baseUrl) {
   assertFreshObsSessionCounters(after.message, "new_session");
 }
 
+async function assertObsSessionRename(client) {
+  const renamed = "ObservMe runtime smoke renamed";
+  await client.request({ type: "set_session_name", name: renamed });
+  const sessionContext = await readSmokeSessionContext(client);
+  assert.equal(sessionContext.sessionName, renamed, "RPC rename should update ctx.sessionManager.getSessionName()");
+}
+
 function parseObsSessionId(message) {
-  const match = /^Session: (session-[^\s]+)/mu.exec(message);
+  const match = /^Session: ([^\s]+)/mu.exec(message);
   assert.ok(match?.[1], "/obs session should include a concrete session id");
   return match[1];
 }
@@ -901,7 +962,7 @@ function assertFreshObsSessionCounters(message, lifecycleName) {
 }
 
 async function assertObsHealthCommand(client) {
-  const notification = client.waitForNotifyMessage("Collector:");
+  const notification = client.waitForNotifyMessage("Collector transport security:");
   await client.request({ type: "prompt", message: "/obs health" });
   const message = await notification;
 
@@ -978,6 +1039,7 @@ async function readSmokeEventShapeReport(client) {
 function assertSmokeEventShapeReport(report) {
   assert.equal(report.version, 1, "event-shape smoke report should use the expected schema version");
   assertRequiredEventShapes(report);
+  assertSessionShapes(report.events);
   assertUserBashBlocker(report);
   assertToolLifecycleShapes(report.events);
   assertModelAndThinkingShapes(report.events);
@@ -986,7 +1048,7 @@ function assertSmokeEventShapeReport(report) {
 }
 
 function assertRequiredEventShapes(report) {
-  for (const eventName of ["session_start", "tool_execution_start", "tool_call", "tool_result", "tool_execution_end", "message_end", "model_select", "thinking_level_select", "agent_start", "turn_start", "turn_end", "agent_end"]) {
+  for (const eventName of ["session_start", "session_info_changed", "tool_execution_start", "tool_call", "tool_result", "tool_execution_end", "message_end", "model_select", "thinking_level_select", "agent_start", "turn_start", "turn_end", "agent_end"]) {
     assert.ok(report.events[eventName], `event-shape smoke should observe ${eventName}`);
     assert.ok(report.counts[eventName] >= 1, `event-shape smoke should count ${eventName}`);
   }
@@ -1001,6 +1063,13 @@ function assertRequiredEventShapes(report) {
     "string",
     "credential-free event smoke should document session_tree fixture coverage instead of requiring interactive tree navigation",
   );
+}
+
+function assertSessionShapes(events) {
+  assert.equal(events.session_start.sessionIdType, undefined, "session_start should not expose a synthetic current-session id field");
+  assert.equal(events.session_start.ctx.sessionIdType, "string", "ExtensionContext sessionManager should expose the current Pi session id");
+  assert.ok(events.session_start.ctx.sessionHeaderKeys.includes("id"), "ExtensionContext sessionManager should expose the current session header");
+  assert.equal(events.session_info_changed.name, "ObservMe runtime smoke renamed", "RPC rename should emit session_info_changed with the normalized name");
 }
 
 async function assertUserBashContractFromInstalledPiTypes() {

@@ -71,7 +71,7 @@ query:
       preferIPv4: true
 ```
 
-For the bundled `observability-stack/`, the supported command path is nginx HTTPS at `https://observability.local`; the default stack does not publish Grafana on `localhost:3000`. Create a Grafana service-account token with Viewer access for read-only datasource queries and export it as `OBSERVME_GRAFANA_TOKEN`, or export/set `OBSERVME_GRAFANA_PASSWORD` from `observability-stack/secrets/grafana_admin_password` for local Basic auth. Extension environment values can come from system environment variables before Pi starts, or from a trusted project `.env` copied from `.env.example`; system variables override `.env`. The local self-signed certificate requires `query.grafana.tls.insecureSkipVerify=true`, and `query.grafana.transport.preferIPv4=true` avoids DNS stalls when `observability.local` resolves to IPv6 first. Provisioned datasource UIDs are `tempo`, `loki`, and `prometheus`; Loki selectors use normalized labels such as `service_name`, `pi_session_id`, `event_name`, and `event_category`.
+For the bundled `observability-stack/`, the supported command path is nginx HTTPS at `https://observability.local`; the default stack does not publish Grafana on `localhost:3000`. Create a Grafana service-account token with Viewer access for read-only datasource queries and export it as `OBSERVME_GRAFANA_TOKEN`, or export/set `OBSERVME_GRAFANA_PASSWORD` from `observability-stack/secrets/grafana_admin_password` for local Basic auth. Extension environment values can come from system environment variables before Pi starts, or from a trusted project `.env` copied from `.env.example`; system variables override `.env`. The local self-signed certificate requires `query.grafana.tls.insecureSkipVerify=true`, and `query.grafana.transport.preferIPv4=true` avoids DNS stalls when `observability.local` resolves to IPv6 first. Production configurations using the TLS bypass must also set `privacy.allowInsecureTransport=true` as an explicit acknowledgement; trusting the production CA remains preferred. Provisioned datasource UIDs are `tempo`, `loki`, and `prometheus`; Loki selectors use normalized labels such as `service_name`, `pi_session_id`, `event_name`, and `event_category`.
 
 ## 4. Commands
 
@@ -84,6 +84,9 @@ Output:
 ```text
 ObservMe: enabled
 OTLP endpoint: https://otel.example.com:4318
+OTLP transport security: TLS certificate verification enabled
+Grafana URL: https://grafana.example.com/
+Grafana transport security: TLS certificate verification enabled
 Traces: enabled
 Metrics: enabled
 Logs: enabled
@@ -97,6 +100,8 @@ Last export error: none
 Checks Collector and Grafana reachability, and reports Grafana query auth/config readiness before datasource calls.
 
 ```text
+Collector transport security: TLS certificate verification enabled
+Grafana transport security: TLS certificate verification enabled
 Collector: reachable
 Grafana: reachable
 Tempo datasource: ok
@@ -216,13 +221,22 @@ Only available if Loki receives `pi.session.id` as structured metadata or label.
 
 ## 5. Trace Links
 
-If trace id is available:
+`/obs session`, `/obs trace`, and `/obs link` use the same pure trace-link builder, so one effective config and trace ID always produce one canonical URL. Custom absolute HTTP(S) templates support these trace-ID placeholders:
 
-```text
-https://grafana.example.com/explore?schemaVersion=1&panes=...
+- `{traceId}`
+- `{{traceId}}` or `{{ traceId }}`
+- `${traceId}`
+- `%TRACE_ID%`
+
+The matching optional Tempo datasource placeholders are `{tempoDatasourceUid}`, `{{tempoDatasourceUid}}` (whitespace is allowed), `${tempoDatasourceUid}`, and `%TEMPO_DATASOURCE_UID%`. Trace IDs and datasource UIDs are URL-encoded before substitution.
+
+An empty template or a template containing `...` selects the structured Grafana Explore fallback. The fallback uses `query.grafana.url`, preserves any path prefix, and constructs the current `schemaVersion=1&panes=...` Tempo query with `query.grafana.datasourceUids.tempo`. This is the behavior used by the generated starter:
+
+```yaml
+traceUrlTemplate: https://observability.local/explore?left=...
 ```
 
-ObservMe should support configurable URL templates because Grafana URL encoding changes across versions and organizations.
+Unsupported placeholders, non-HTTP(S) URLs, credential-bearing URLs, and malformed or oversized templates produce one bounded actionable diagnostic; commands do not silently omit a link or apply different substitutions.
 
 ## 6. Grafana Query Abstraction
 
@@ -257,6 +271,12 @@ query:
   maxMetricSeries: 20
   maxAgents: 20
 ```
+
+### Bounded command display
+
+Prometheus label keys and values used for `/obs` display are normalized before they enter command snapshots. Control and line-separator characters become spaces, repeated whitespace collapses, and each label is limited to 96 UTF-16 code units. Truncated labels retain a valid Unicode prefix and end with `…`.
+
+`/obs cost` renders at most 20 rows. `/obs tools` renders at most 20 call rows and 20 failure rows. Omitted rows are reported explicitly. `/obs agents` retains its 10-row recent-child display limit. Final `/obs cost`, `/obs tools`, and `/obs agents` notifications are limited to 8,192 UTF-16 code units; a notification that reaches the hard limit ends with `… output truncated`. These display bounds do not change PromQL, metric identity, or emitted telemetry.
 
 ## 8. Dependency Direction
 

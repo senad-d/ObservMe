@@ -1,10 +1,12 @@
 import type { ObservMeConfig } from "../config/schema.ts";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
-import { assertNoSensitiveQueryInput } from "../safety/sensitive-input.ts";
 import type { GrafanaTransportClient, GrafanaTransportOptions } from "./grafana-transport.ts";
 import { createGrafanaTransport } from "./grafana-transport.ts";
 import type { GrafanaQueryDatasourceKey } from "./grafana-readiness.ts";
 import { formatGrafanaQueryReadiness, getGrafanaQueryReadiness } from "./grafana-readiness.ts";
+import { buildGrafanaTraceLink } from "./trace-link.ts";
+
+export { buildGrafanaTraceLink as getGrafanaTraceLink } from "./trace-link.ts";
 
 export type { GrafanaFetch } from "./grafana-transport.ts";
 export type GrafanaHealthCheckKind = "service" | "datasource";
@@ -38,58 +40,11 @@ interface GrafanaDatasourceDefinition {
   readonly fallbackHealthPath?: string;
 }
 
-interface TraceTemplateReplacement {
-  readonly pattern: RegExp;
-  readonly key: TraceTemplateValueKey;
-}
-
-type TraceTemplateValueKey = "traceId" | "tempoDatasourceUid";
-
-type TraceTemplateValues = Record<TraceTemplateValueKey, string>;
-
-interface GrafanaExploreDatasourceRef {
-  readonly type: "tempo";
-  readonly uid: string;
-}
-
-interface GrafanaTraceQuery {
-  readonly refId: "A";
-  readonly datasource: GrafanaExploreDatasourceRef;
-  readonly queryType: "traceId";
-  readonly query: string;
-}
-
-interface GrafanaExplorePane {
-  readonly datasource: string;
-  readonly queries: readonly GrafanaTraceQuery[];
-  readonly range: {
-    readonly from: "now-1h";
-    readonly to: "now";
-  };
-}
-
-type GrafanaExplorePanes = Record<string, GrafanaExplorePane>;
-
-const traceIdPattern = /^[a-f0-9]{32}$/iu;
-const zeroTraceIdPattern = /^0{32}$/u;
-const traceIdTemplatePattern = /\{\{\s*traceId\s*\}\}|\{traceId\}|\$\{traceId\}|%TRACE_ID%/u;
-const fallbackTraceTemplateMarkerPattern = /\.\.\./u;
 const datasourceDefinitions = [
   { label: "Tempo datasource", key: "tempo", fallbackHealthPath: "/ready" },
   { label: "Loki datasource", key: "loki", fallbackHealthPath: undefined },
   { label: "Metrics datasource", key: "prometheus", fallbackHealthPath: undefined },
 ] as const;
-const traceTemplateReplacements: readonly TraceTemplateReplacement[] = [
-  { pattern: /\{\{\s*traceId\s*\}\}/gu, key: "traceId" },
-  { pattern: /\$\{traceId\}/gu, key: "traceId" },
-  { pattern: /\{traceId\}/gu, key: "traceId" },
-  { pattern: /%TRACE_ID%/gu, key: "traceId" },
-  { pattern: /\{\{\s*tempoDatasourceUid\s*\}\}/gu, key: "tempoDatasourceUid" },
-  { pattern: /\$\{tempoDatasourceUid\}/gu, key: "tempoDatasourceUid" },
-  { pattern: /\{tempoDatasourceUid\}/gu, key: "tempoDatasourceUid" },
-  { pattern: /%TEMPO_DATASOURCE_UID%/gu, key: "tempoDatasourceUid" },
-];
-
 export class GrafanaQueryClient {
   readonly #config: ObservMeConfig;
   readonly #transport: GrafanaTransportClient;
@@ -104,7 +59,7 @@ export class GrafanaQueryClient {
   }
 
   getTraceLink(traceId: string): string {
-    return getGrafanaTraceLink(this.#config, traceId);
+    return buildGrafanaTraceLink(this.#config, traceId);
   }
 }
 
@@ -132,16 +87,6 @@ async function getGrafanaHealthWithTransport(
   ]);
 
   return { timeoutMs: transport.timeoutMs, checks };
-}
-
-export function getGrafanaTraceLink(config: ObservMeConfig, traceId: string): string {
-  const normalizedTraceId = normalizeTraceId(traceId);
-  const template = config.query.links.traceUrlTemplate.trim();
-
-  if (hasTraceIdTemplatePlaceholder(template)) return renderTraceUrlTemplate(template, config, normalizedTraceId);
-  if (isFallbackTraceTemplate(template)) return buildDefaultGrafanaTraceLink(config, normalizedTraceId);
-
-  throw new Error("Grafana traceUrlTemplate must include a traceId placeholder or use the default Grafana link fallback.");
 }
 
 async function checkGrafanaReachability(
@@ -283,83 +228,6 @@ function failedHealthResult(label: string, kind: GrafanaHealthCheckKind, error: 
 
 function skippedHealthResult(label: string, kind: GrafanaHealthCheckKind, detail: string): GrafanaHealthCheckResult {
   return { label, kind, status: "skipped", detail };
-}
-
-function buildDefaultGrafanaTraceLink(config: ObservMeConfig, traceId: string): string {
-  const baseUrl = config.query.grafana.url.trim();
-  if (!baseUrl) throw new Error("Grafana URL is not configured for trace-link construction.");
-
-  const url = new URL(baseUrl);
-  const basePath = removeTrailingSlashes(url.pathname);
-  url.pathname = `${basePath}/explore`;
-  url.search = "";
-  url.hash = "";
-  url.searchParams.set("schemaVersion", "1");
-  url.searchParams.set("panes", JSON.stringify(createDefaultExplorePanes(config, traceId)));
-  return url.toString();
-}
-
-function removeTrailingSlashes(value: string): string {
-  let end = value.length;
-  while (end > 0 && value[end - 1] === "/") end -= 1;
-  return value.slice(0, end);
-}
-
-function createDefaultExplorePanes(config: ObservMeConfig, traceId: string): GrafanaExplorePanes {
-  const tempoUid = config.query.grafana.datasourceUids.tempo;
-  return {
-    observmeTrace: {
-      datasource: tempoUid,
-      queries: [
-        {
-          refId: "A",
-          datasource: { type: "tempo", uid: tempoUid },
-          queryType: "traceId",
-          query: traceId,
-        },
-      ],
-      range: { from: "now-1h", to: "now" },
-    },
-  };
-}
-
-function renderTraceUrlTemplate(template: string, config: ObservMeConfig, traceId: string): string {
-  const values = createTraceTemplateValues(config, traceId);
-  let rendered = template;
-
-  for (const replacement of traceTemplateReplacements) {
-    rendered = rendered.replace(replacement.pattern, values[replacement.key]);
-  }
-
-  return rendered;
-}
-
-function createTraceTemplateValues(config: ObservMeConfig, traceId: string): TraceTemplateValues {
-  return {
-    traceId: encodeURIComponent(traceId),
-    tempoDatasourceUid: encodeURIComponent(config.query.grafana.datasourceUids.tempo),
-  };
-}
-
-function normalizeTraceId(traceId: string): string {
-  const trimmed = traceId.trim();
-  assertNoSensitiveQueryInput(trimmed, "Grafana traceId");
-
-  if (!traceIdPattern.test(trimmed) || zeroTraceIdPattern.test(trimmed)) {
-    throw new Error(
-      "Unsafe Grafana traceId: expected a non-zero 32-character hexadecimal OpenTelemetry trace id; raw prompts, commands, paths, and environment values are not query inputs.",
-    );
-  }
-
-  return trimmed.toLowerCase();
-}
-
-function hasTraceIdTemplatePlaceholder(template: string): boolean {
-  return traceIdTemplatePattern.test(template);
-}
-
-function isFallbackTraceTemplate(template: string): boolean {
-  return template === "" || fallbackTraceTemplateMarkerPattern.test(template);
 }
 
 function formatHealthFailure(error: unknown): string {

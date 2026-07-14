@@ -1,5 +1,5 @@
 import type { Meter } from "@opentelemetry/api";
-import { createNoopMeter, metrics } from "@opentelemetry/api";
+import { createNoopMeter } from "@opentelemetry/api";
 import type { Resource } from "@opentelemetry/resources";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
@@ -7,6 +7,7 @@ import type { IMetricReader, PushMetricExporter } from "@opentelemetry/sdk-metri
 import { MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import type { MetricsConfig, ObservMeConfig } from "../config/schema.ts";
 import { appendOtlpSignalPath } from "./otlp-endpoint.ts";
+import { buildOtlpHttpAgentOptions, type OtlpHttpAgentOptions } from "./otlp-http-options.ts";
 import type { StartOtelSdkFactoryOptions } from "./sdk.ts";
 
 export const OBSERVME_METER_NAME = "@senad-d/observme";
@@ -23,6 +24,7 @@ export interface OtlpMetricExporterOptions {
   readonly url: string;
   readonly headers: Record<string, string>;
   readonly timeoutMillis: number;
+  readonly httpAgentOptions: OtlpHttpAgentOptions;
 }
 
 export interface MetricReaderOptions {
@@ -48,7 +50,6 @@ export type MetricProviderFactory = (options: MetricProviderOptions) => MetricPr
 export interface ObservMeMetricSdkOptions {
   readonly config: ObservMeConfig;
   readonly meterName?: string;
-  readonly registerGlobal?: boolean;
   readonly exporterFactory?: MetricExporterFactory;
   readonly readerFactory?: MetricReaderFactory;
   readonly meterProviderFactory?: MetricProviderFactory;
@@ -65,10 +66,11 @@ const noopMeter = createNoopMeter();
 export class ObservMeMetricSdk {
   readonly #config: ObservMeConfig;
   readonly #meterName: string;
-  readonly #registerGlobal: boolean;
   readonly #exporterFactory: MetricExporterFactory;
   readonly #readerFactory: MetricReaderFactory;
   readonly #meterProviderFactory: MetricProviderFactory;
+  #exporter?: PushMetricExporter;
+  #reader?: IMetricReader;
   #provider?: MetricProviderLike;
   #meter: Meter = noopMeter;
   #state: MetricPipelineState = "idle";
@@ -76,7 +78,6 @@ export class ObservMeMetricSdk {
   constructor(options: ObservMeMetricSdkOptions) {
     this.#config = options.config;
     this.#meterName = options.meterName ?? OBSERVME_METER_NAME;
-    this.#registerGlobal = options.registerGlobal ?? true;
     this.#exporterFactory = options.exporterFactory ?? createOtlpMetricExporter;
     this.#readerFactory = options.readerFactory ?? createPeriodicMetricReader;
     this.#meterProviderFactory = options.meterProviderFactory ?? createMetricProvider;
@@ -92,20 +93,19 @@ export class ObservMeMetricSdk {
 
   start(): void {
     if (this.#state === "started" || this.#state === "disabled") return;
-    if (!this.#config.metrics.enabled) {
+    if (!this.#config.enabled || !this.#config.metrics.enabled) {
       this.#state = "disabled";
       return;
     }
 
     const wiring = buildMetricExporterWiring(this.#config);
-    const exporter = this.#exporterFactory(wiring.exporter);
-    const reader = this.#readerFactory(exporter, wiring.reader);
+    this.#exporter = this.#exporterFactory(wiring.exporter);
+    this.#reader = this.#readerFactory(this.#exporter, wiring.reader);
     this.#provider = this.#meterProviderFactory({
       resource: createMetricResource(this.#config),
-      readers: [reader],
+      readers: [this.#reader],
     });
 
-    if (this.#registerGlobal) metrics.setGlobalMeterProvider(this.#provider);
     this.#meter = this.#provider.getMeter(this.#meterName);
     this.#state = "started";
   }
@@ -115,9 +115,19 @@ export class ObservMeMetricSdk {
   }
 
   async shutdown(): Promise<void> {
-    await this.#provider?.shutdown?.();
-    this.#state = "shutdown";
-    this.#meter = noopMeter;
+    if (this.#state === "shutdown") return;
+
+    try {
+      if (this.#provider?.shutdown) await this.#provider.shutdown();
+      else if (this.#reader) await this.#reader.shutdown();
+      else await this.#exporter?.shutdown();
+    } finally {
+      this.#provider = undefined;
+      this.#reader = undefined;
+      this.#exporter = undefined;
+      this.#state = "shutdown";
+      this.#meter = noopMeter;
+    }
   }
 }
 
@@ -127,7 +137,7 @@ export function createMetricSessionScopedOtelSdk(options: StartOtelSdkFactoryOpt
 
 export function buildMetricExporterWiring(config: ObservMeConfig): MetricExporterWiring {
   return {
-    enabled: config.metrics.enabled,
+    enabled: config.enabled && config.metrics.enabled,
     exporter: buildOtlpMetricExporterOptions(config),
     reader: {
       exportIntervalMillis: config.metrics.exportIntervalMillis,
@@ -141,6 +151,7 @@ export function buildOtlpMetricExporterOptions(config: ObservMeConfig): OtlpMetr
     url: resolveMetricEndpoint(config),
     headers: { ...config.otlp.headers },
     timeoutMillis: config.otlp.timeoutMs,
+    httpAgentOptions: buildOtlpHttpAgentOptions(config),
   };
 }
 

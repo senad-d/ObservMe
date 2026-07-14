@@ -15,6 +15,10 @@ function createPiWithFailingCommandRegistration(error) {
     on(eventName, handler) {
       events.push({ eventName, handler });
     },
+    appendEntry() {},
+    getThinkingLevel() {
+      return "medium";
+    },
     registerCommand(name) {
       commands.push(name);
       throw error;
@@ -46,6 +50,23 @@ test("production extension enables only the process-environment parent lineage b
 
   assert.match(source, /registerHandlers\(pi, \{ trustedParentContext: true \}\)/u);
   assert.match(source, /Only the Pi process environment is eligible/u);
+});
+
+test("extension compatibility preflight fails before partial registration", () => {
+  const events = [];
+  const commands = [];
+  const pi = {
+    on: (eventName, handler) => events.push({ eventName, handler }),
+    registerCommand: name => commands.push(name),
+    appendEntry: () => undefined,
+  };
+
+  assert.throws(
+    () => extensionModule.default(pi),
+    /ObservMe\/Pi API compatibility error: ObservMe requires @earendil-works\/pi-coding-agent >=0\.80\.5 <0\.81\.0; missing required API method\(s\): getThinkingLevel/u,
+  );
+  assert.deepEqual(events, []);
+  assert.deepEqual(commands, []);
 });
 
 test("extension initialization reports partial command registration failures", () => {

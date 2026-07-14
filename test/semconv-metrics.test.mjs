@@ -83,6 +83,7 @@ const documentedLogEventNames = [
   "agent.run.completed",
   "agent.run.failed",
   "agent.run.started",
+  "agent.spawn.cancelled",
   "agent.spawn.completed",
   "agent.spawn.failed",
   "agent.spawn.started",

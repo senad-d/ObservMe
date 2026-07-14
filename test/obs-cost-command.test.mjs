@@ -9,6 +9,11 @@ import {
   renderObsCost,
 } from "../src/commands/obs-cost.ts";
 import { findForbiddenPrometheusLabels } from "../src/query/prometheus.ts";
+import {
+  OBS_BACKEND_LABEL_MAX_CHARS,
+  OBS_COMMAND_OUTPUT_MAX_CHARS,
+  OBS_COMMAND_RENDER_ROW_LIMIT,
+} from "../src/safety/display-bounds.ts";
 
 function cloneDefaultConfig() {
   return structuredClone(defaultObservMeConfig);
@@ -96,6 +101,29 @@ test("renderObsCost reports aggregate cost rows and total", () => {
       "Total: $2.40",
     ].join("\n"),
   );
+});
+
+test("/obs cost bounds injected Unicode labels, controls, row count, and notification size", async () => {
+  const notifications = [];
+  const rows = Array.from({ length: OBS_COMMAND_RENDER_ROW_LIMIT + 5 }, (_value, index) => ({
+    model: `model-${"🙂".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}-tail-${index}`,
+    provider: `provider\ninjected\u0000-${"p".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`,
+    costUsd: 1,
+  }));
+
+  await handleObsCostCommand("cost", createCommandContext(notifications), {
+    getCost: () => ({ window: "24h", query: OBS_COST_AGGREGATE_PROMQL, rows }),
+  });
+
+  const output = notifications[0].message;
+  assert.equal(notifications[0].type, "info");
+  assert.ok(output.length <= OBS_COMMAND_OUTPUT_MAX_CHARS);
+  assert.match(output, /model-.*… \/ provider injected -/u);
+  assert.match(output, /… 5 cost row\(s\) omitted/u);
+  assert.match(output, /Total: \$25\.00/u);
+  assert.doesNotMatch(output, /tail-/u);
+  assert.doesNotMatch(output, /provider\ninjected/u);
+  assert.doesNotMatch(output.replaceAll("\n", ""), /[\p{Cc}\p{Zl}\p{Zp}]/u);
 });
 
 test("/obs cost queries aggregate model/provider PromQL with configured timeout and result limit", async () => {

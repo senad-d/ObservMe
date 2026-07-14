@@ -77,10 +77,10 @@ test("generic subagent runner wraps any transport with ObservMe lifecycle", asyn
   assert.deepEqual(calls.map(call => call[0]), [
     "startSubagent",
     "launch",
-    "completeSubagent",
     "startWait",
     "wait",
     "endWait",
+    "completeSubagent",
     "startJoin",
     "endJoin",
   ]);
@@ -90,6 +90,11 @@ test("generic subagent runner wraps any transport with ObservMe lifecycle", asyn
     childAgentId: "child-example",
     traceContextPropagated: true,
   });
+  assert.deepEqual(calls[5], [
+    "completeSubagent",
+    "spawn-example",
+    { childAgentId: "child-example", childStatus: "completed", outcome: "completed" },
+  ]);
 });
 
 test("generic subagent runner remains transport-functional when ObservMe is absent", async () => {

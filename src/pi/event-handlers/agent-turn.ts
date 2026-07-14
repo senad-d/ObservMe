@@ -1,4 +1,11 @@
 import { SpanStatusCode } from "@opentelemetry/api";
+import type {
+  AgentEndEvent,
+  AgentStartEvent,
+  ExtensionContext,
+  TurnEndEvent,
+  TurnStartEvent,
+} from "@earendil-works/pi-coding-agent";
 import { recordObsSessionTurn } from "../../commands/obs-session.ts";
 import { AGENT_RUN_ATTRIBUTES, TURN_ATTRIBUTES } from "../../semconv/attributes.ts";
 import { LOG_EVENT_NAMES } from "../../semconv/metrics.ts";
@@ -21,7 +28,7 @@ import {
 } from "../handler-internals.ts";
 import { workflowFailed } from "../handler-runtime.ts";
 import type { HandlerRegistrar } from "../handler-runtime.ts";
-import type { Handler, HandlerSessionState, ObservMeHandlerContext } from "../handler-types.ts";
+import type { HandlerSessionState, PiHandler } from "../handler-types.ts";
 
 export function registerAgentTurnHandlers(registrar: HandlerRegistrar, state: HandlerSessionState): void {
   registrar.add("agent_start", createAgentStartHandler(state));
@@ -30,11 +37,11 @@ export function registerAgentTurnHandlers(registrar: HandlerRegistrar, state: Ha
   registrar.add("agent_end", createAgentEndHandler(state));
 }
 
-function createAgentStartHandler(state: HandlerSessionState): Handler {
+function createAgentStartHandler(state: HandlerSessionState): PiHandler<"agent_start"> {
   return handleAgentStart.bind(undefined, state);
 }
 
-function handleAgentStart(state: HandlerSessionState, event: unknown, _ctx: ObservMeHandlerContext): void {
+function handleAgentStart(state: HandlerSessionState, event: AgentStartEvent, _ctx: ExtensionContext): void {
   const session = state.session;
   if (!session) return;
 
@@ -48,11 +55,11 @@ function handleAgentStart(state: HandlerSessionState, event: unknown, _ctx: Obse
   emitLifecycleLog(session.logger, LOG_EVENT_NAMES.AGENT_RUN_STARTED, attributes);
 }
 
-function createAgentEndHandler(state: HandlerSessionState): Handler {
+function createAgentEndHandler(state: HandlerSessionState): PiHandler<"agent_end"> {
   return handleAgentEnd.bind(undefined, state);
 }
 
-function handleAgentEnd(state: HandlerSessionState, event: unknown, _ctx: ObservMeHandlerContext): void {
+function handleAgentEnd(state: HandlerSessionState, event: AgentEndEvent, _ctx: ExtensionContext): void {
   const session = state.session;
   if (!session) return;
 
@@ -75,11 +82,11 @@ function handleAgentEnd(state: HandlerSessionState, event: unknown, _ctx: Observ
   });
 }
 
-function createTurnStartHandler(state: HandlerSessionState): Handler {
+function createTurnStartHandler(state: HandlerSessionState): PiHandler<"turn_start"> {
   return handleTurnStart.bind(undefined, state);
 }
 
-function handleTurnStart(state: HandlerSessionState, event: unknown, _ctx: ObservMeHandlerContext): void {
+function handleTurnStart(state: HandlerSessionState, event: TurnStartEvent, _ctx: ExtensionContext): void {
   const session = state.session;
   if (!session) return;
 
@@ -99,11 +106,11 @@ function handleTurnStart(state: HandlerSessionState, event: unknown, _ctx: Obser
   emitLifecycleLog(session.logger, LOG_EVENT_NAMES.TURN_STARTED, attributes);
 }
 
-function createTurnEndHandler(state: HandlerSessionState): Handler {
+function createTurnEndHandler(state: HandlerSessionState): PiHandler<"turn_end"> {
   return handleTurnEnd.bind(undefined, state);
 }
 
-function handleTurnEnd(state: HandlerSessionState, event: unknown, _ctx: ObservMeHandlerContext): void {
+function handleTurnEnd(state: HandlerSessionState, event: TurnEndEvent, _ctx: ExtensionContext): void {
   const session = state.session;
   if (!session) return;
 

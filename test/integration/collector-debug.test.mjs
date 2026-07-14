@@ -65,7 +65,6 @@ function createCollectorIntegrationConfig(otlpHttpPort) {
   config.otlp.endpoint = `http://127.0.0.1:${otlpHttpPort}`;
   config.otlp.headers = {};
   config.otlp.timeoutMs = 5000;
-  config.otlp.tls.enabled = false;
   config.privacy.allowInsecureTransport = true;
   config.resource.attributes = {
     "observme.tenant.id": "collector-it",

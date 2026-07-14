@@ -7,6 +7,10 @@ import { COMMON_SPAN_ATTRIBUTES } from "../src/semconv/attributes.ts";
 const previousSalt = process.env.OBSERVME_HASH_SALT;
 process.env.OBSERVME_HASH_SALT = "content-capture-policy-test-salt";
 
+function buildSyntheticPemBlock(label, body) {
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----`;
+}
+
 function cloneConfig(overrides = {}) {
   return mergeConfig(structuredClone(defaultObservMeConfig), overrides);
 }
@@ -69,6 +73,43 @@ test("content-capture policy redacts prompt, tool result, and bash output when r
   assertCapturedSecretIsRedacted("prompt");
   assertCapturedSecretIsRedacted("toolResult");
   assertCapturedSecretIsRedacted("bashOutput");
+});
+
+test("content-capture policy removes complete private-key material from live capture kinds", () => {
+  const captureCases = [
+    { kind: "prompt", label: "PRIVATE KEY", body: "UFJPTVBUX1NZTlRIRVRJQ19CT0RZ" },
+    { kind: "toolResult", label: "RSA PRIVATE KEY", body: "VE9PTF9TWU5USEVUSUNfQk9EWQ==" },
+    { kind: "bashOutput", label: "EC PRIVATE KEY", body: "QkFTSF9TWU5USEVUSUNfQk9EWQ==" },
+  ];
+  const config = cloneConfig({ privacy: { redactionEnabled: true, allowUnsafeCapture: false } });
+
+  for (const captureCase of captureCases) {
+    const input = buildSyntheticPemBlock(captureCase.label, captureCase.body);
+    const result = applyContentCapturePolicy({ captureEnabled: true, value: input, kind: captureCase.kind, config });
+
+    assert.equal(result.mode, "redacted");
+    assert.equal(result.captured, true);
+    assert.match(result.value, /^\[REDACTED:private_key_block:[a-f0-9]{12}\]$/u);
+    assert.doesNotMatch(result.value, new RegExp(captureCase.body, "u"));
+    assert.doesNotMatch(result.value, /-----BEGIN/u);
+    assert.doesNotMatch(result.value, /-----END/u);
+  }
+});
+
+test("content-capture policy fails closed for a truncated private-key block", () => {
+  const body = "VFJVTkNBVEVEX0xJVkVfU1lOVEhFVElDX0JPRFk=";
+  const result = applyContentCapturePolicy({
+    captureEnabled: true,
+    value: `safe prefix\n-----BEGIN ENCRYPTED PRIVATE KEY-----\n${body}`,
+    kind: "prompt",
+    config: cloneConfig({ privacy: { redactionEnabled: true, allowUnsafeCapture: false } }),
+  });
+
+  assert.equal(result.mode, "redacted");
+  assert.equal(result.captured, true);
+  assert.match(result.value, /^safe prefix\n\[REDACTED:private_key_block:[a-f0-9]{12}\]$/u);
+  assert.doesNotMatch(result.value, new RegExp(body, "u"));
+  assert.doesNotMatch(result.value, /-----BEGIN/u);
 });
 
 test("content-capture policy scrubs cross-platform absolute paths while preserving URLs", () => {

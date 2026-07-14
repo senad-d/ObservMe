@@ -97,6 +97,10 @@ for (const pathMode of documentedPathModeValues) {
   });
 }
 
+test("removed automatic replay configuration fails structural validation", () => {
+  assertInvalid(cloneDefault({ replayOnStart: true }), "invalid_config_shape", { env: {} });
+});
+
 test("unknown environment values fail structural validation and fall back safely", () => {
   const config = cloneDefault({ environment: "staging" });
 
@@ -159,6 +163,55 @@ test("validation rejects insecure production transport unless explicitly allowed
   );
 });
 
+test("validation requires production acknowledgement for every certificate-verification bypass", () => {
+  const otlpBypass = cloneDefault({
+    otlp: { tls: { insecureSkipVerify: true } },
+    privacy: { allowInsecureTransport: false },
+  });
+  const grafanaBypass = cloneDefault({
+    query: { grafana: { tls: { insecureSkipVerify: true } } },
+    privacy: { allowInsecureTransport: false },
+  });
+
+  const otlpResult = validateObservMeConfig(otlpBypass);
+  const grafanaResult = validateObservMeConfig(grafanaBypass);
+
+  assert.equal(otlpResult.valid, false);
+  assert.deepEqual(otlpResult.issues, [
+    {
+      code: "insecure_production_transport",
+      message: "otlp.tls.insecureSkipVerify must be false in production unless privacy.allowInsecureTransport is true.",
+    },
+  ]);
+  assert.equal(grafanaResult.valid, false);
+  assert.deepEqual(grafanaResult.issues, [
+    {
+      code: "insecure_production_transport",
+      message: "query.grafana.tls.insecureSkipVerify must be false in production unless privacy.allowInsecureTransport is true.",
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify([otlpResult, grafanaResult]), /token|password|Authorization/u);
+
+  assertValid(cloneDefault({
+    otlp: { tls: { insecureSkipVerify: true } },
+    query: { grafana: { tls: { insecureSkipVerify: true } } },
+    privacy: { allowInsecureTransport: true },
+  }));
+  assertValid(cloneDefault({
+    environment: "development",
+    otlp: { tls: { insecureSkipVerify: true } },
+    query: { grafana: { tls: { insecureSkipVerify: true } } },
+    privacy: { allowInsecureTransport: false },
+  }));
+});
+
+test("validation rejects the removed no-op otlp.tls.enabled setting", () => {
+  const config = cloneDefault();
+  config.otlp.tls.enabled = true;
+
+  assertInvalid(config, "invalid_config_shape");
+});
+
 for (const signal of ["traces", "metrics", "logs"]) {
   test(`validation rejects insecure production ${signal} OTLP endpoint unless explicitly allowed`, () => {
     assertValid(
@@ -200,6 +253,101 @@ test("validation accepts explicit insecure local development transport", () => {
     }),
   );
 });
+
+test("validation accepts absolute OTLP base URLs with supported URL semantics", () => {
+  const endpoints = [
+    "https://collector.example.test",
+    "https://collector.example.test/tenant/otlp///",
+    "http://127.0.0.1:4318/base",
+    "http://[2001:db8::1]:4318/base",
+    "https://collector.example.test/tenant%20one/%2Froot",
+  ];
+
+  for (const endpoint of endpoints) {
+    assertValid(cloneDefault({ environment: "development", otlp: { endpoint } }));
+  }
+});
+
+test("validation rejects unsafe OTLP base URLs with bounded secret-free failure classes", () => {
+  const endpointCases = [
+    {
+      endpoint: "relative/private-malformed-path",
+      failureClass: "malformed_url",
+      sensitiveFragment: "private-malformed-path",
+    },
+    {
+      endpoint: "ftp://private-unsupported.example.test/base",
+      failureClass: "unsupported_protocol",
+      sensitiveFragment: "private-unsupported",
+    },
+    {
+      endpoint: "https://private-user:private-password@collector.example.test/base",
+      failureClass: "embedded_credentials",
+      sensitiveFragment: "private-password",
+    },
+    {
+      endpoint: "https://collector.example.test/base?token=private-query",
+      failureClass: "query_not_supported",
+      sensitiveFragment: "private-query",
+    },
+    {
+      endpoint: "https://collector.example.test/base#private-fragment",
+      failureClass: "fragment_not_supported",
+      sensitiveFragment: "private-fragment",
+    },
+    {
+      endpoint: "https://collector.example.test/${PRIVATE_ENDPOINT}",
+      failureClass: "unresolved_placeholder",
+      sensitiveFragment: "PRIVATE_ENDPOINT",
+    },
+  ];
+
+  for (const endpointCase of endpointCases) {
+    const result = validateObservMeConfig(
+      cloneDefault({ environment: "development", otlp: { endpoint: endpointCase.endpoint } }),
+    );
+    const endpointIssue = result.issues.find(issue => issue.code === "invalid_otlp_endpoint");
+
+    assert.equal(result.valid, false);
+    assert.deepEqual(endpointIssue, {
+      code: "invalid_otlp_endpoint",
+      message: `otlp.endpoint is invalid (${endpointCase.failureClass}).`,
+    });
+    assert.equal(JSON.stringify(result).includes(endpointCase.sensitiveFragment), false);
+  }
+});
+
+for (const signal of ["traces", "metrics", "logs"]) {
+  test(`validation accepts an absolute explicit ${signal} OTLP endpoint`, () => {
+    assertValid(
+      cloneDefault({
+        otlp: {
+          signalEndpoints: {
+            [signal]: `https://[2001:db8::1]:4318/tenant%20one/v1/${signal}`,
+          },
+        },
+      }),
+    );
+  });
+
+  test(`validation rejects query-bearing explicit ${signal} OTLP endpoints without exposing values`, () => {
+    const result = validateObservMeConfig(
+      cloneDefault({
+        otlp: {
+          signalEndpoints: {
+            [signal]: `https://collector.example.test/v1/${signal}?token=private-${signal}-query`,
+          },
+        },
+      }),
+    );
+
+    assert.ok(result.issues.some(issue =>
+      issue.code === "invalid_otlp_endpoint"
+      && issue.message === `otlp.signalEndpoints.${signal} is invalid (query_not_supported).`
+    ));
+    assert.equal(JSON.stringify(result).includes(`private-${signal}-query`), false);
+  });
+}
 
 test("validation rejects signal-specific OTLP HTTP endpoints missing required paths", () => {
   assertValid(

@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import { createOversizedGrafanaStreamResponse } from "./grafana-response-limit-helpers.mjs";
 import {
   FORBIDDEN_HIGH_CARDINALITY_PROMETHEUS_LABELS,
   PrometheusQueryClient,
   findForbiddenPrometheusLabels,
   queryPrometheus,
 } from "../src/query/prometheus.ts";
+import { OBS_BACKEND_LABEL_MAX_CHARS } from "../src/safety/display-bounds.ts";
 
 const defaultQueryTime = new Date("2026-07-07T11:00:00.250Z");
 const documentedLowCardinalityPromQl = [
@@ -40,6 +42,28 @@ function createPrometheusVectorResponse() {
           {
             metric: { model: "gemini-2.5", provider: "google" },
             value: [1783422000.25, "0.21"],
+          },
+        ],
+      },
+    }),
+    { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
+  );
+}
+
+function createPrometheusUnsafeDisplayLabelsResponse() {
+  return new Response(
+    JSON.stringify({
+      status: "success",
+      data: {
+        resultType: "vector",
+        result: [
+          {
+            metric: {
+              model: `🙂\n\u0000${"界".repeat(120)}tail`,
+              provider: "  open\n\u0007ai  ",
+              "error\nclass": "Timeout\u2028Error",
+            },
+            value: [1783422000.25, "1.42"],
           },
         ],
       },
@@ -97,6 +121,21 @@ function createAbortError() {
   return new DOMException("The operation was aborted.", "AbortError");
 }
 
+function hasUnpairedSurrogate(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function createNeverResolvingFetch(signals) {
   return (_input, init) =>
     new Promise((_resolve, reject) => {
@@ -149,6 +188,29 @@ test("PrometheusQueryClient queries metrics through the Grafana Prometheus datas
   assert.equal(result.series[0].value.value, "1.42");
 });
 
+test("queryPrometheus bounds and sanitizes backend label keys and values without splitting Unicode", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+
+  const result = await queryPrometheus(config, "observme_llm_cost_usd_total", undefined, {
+    fetch: async () => createPrometheusUnsafeDisplayLabelsResponse(),
+  });
+
+  const labels = result.series[0].metric;
+  assert.ok(labels.model.length <= OBS_BACKEND_LABEL_MAX_CHARS);
+  assert.match(labels.model, /…$/u);
+  assert.equal(hasUnpairedSurrogate(labels.model), false);
+  assert.equal(labels.provider, "open ai");
+  assert.equal(labels["error class"], "Timeout Error");
+  for (const [key, value] of Object.entries(labels)) {
+    assert.ok(key.length <= OBS_BACKEND_LABEL_MAX_CHARS);
+    assert.ok(value.length <= OBS_BACKEND_LABEL_MAX_CHARS);
+    assert.doesNotMatch(key, /[\p{Cc}\p{Zl}\p{Zp}]/u);
+    assert.doesNotMatch(value, /[\p{Cc}\p{Zl}\p{Zp}]/u);
+  }
+});
+
 test("queryPrometheus reports malformed success payloads as backend schema errors without raw body content", async () => {
   const config = cloneDefaultConfig();
   config.query.grafana.url = "http://grafana.local";
@@ -165,6 +227,21 @@ test("queryPrometheus reports malformed success payloads as backend schema error
       return true;
     },
   );
+});
+
+test("queryPrometheus cancels injected oversized responses without Content-Length before JSON parsing", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const oversized = createOversizedGrafanaStreamResponse();
+
+  await assert.rejects(
+    queryPrometheus(config, "observme_sessions_started_total", undefined, {
+      fetch: async () => oversized.response,
+    }),
+    /Grafana response body exceeded maximum size/u,
+  );
+  assert.equal(oversized.state.cancelled, true);
 });
 
 test("queryPrometheus preserves legitimate empty vector responses", async () => {

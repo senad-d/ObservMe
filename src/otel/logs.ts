@@ -1,5 +1,5 @@
 import type { Logger } from "@opentelemetry/api-logs";
-import { createNoopLogger, logs } from "@opentelemetry/api-logs";
+import { createNoopLogger } from "@opentelemetry/api-logs";
 import type { Resource } from "@opentelemetry/resources";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
@@ -7,6 +7,7 @@ import type { LogRecordExporter, LogRecordProcessor } from "@opentelemetry/sdk-l
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
 import type { LogsBatchConfig, ObservMeConfig } from "../config/schema.ts";
 import { appendOtlpSignalPath } from "./otlp-endpoint.ts";
+import { buildOtlpHttpAgentOptions, type OtlpHttpAgentOptions } from "./otlp-http-options.ts";
 import type { StartOtelSdkFactoryOptions } from "./sdk.ts";
 
 export const OBSERVME_LOGGER_NAME = "@senad-d/observme";
@@ -24,6 +25,7 @@ export interface OtlpLogExporterOptions {
   readonly url: string;
   readonly headers: Record<string, string>;
   readonly timeoutMillis: number;
+  readonly httpAgentOptions: OtlpHttpAgentOptions;
 }
 
 export interface LogProviderOptions {
@@ -45,7 +47,6 @@ export type LogProviderFactory = (options: LogProviderOptions) => LogProviderLik
 export interface ObservMeLogSdkOptions {
   readonly config: ObservMeConfig;
   readonly loggerName?: string;
-  readonly registerGlobal?: boolean;
   readonly exporterFactory?: LogExporterFactory;
   readonly processorFactory?: LogRecordProcessorFactory;
   readonly loggerProviderFactory?: LogProviderFactory;
@@ -62,10 +63,11 @@ const noopLogger = createNoopLogger();
 export class ObservMeLogSdk {
   readonly #config: ObservMeConfig;
   readonly #loggerName: string;
-  readonly #registerGlobal: boolean;
   readonly #exporterFactory: LogExporterFactory;
   readonly #processorFactory: LogRecordProcessorFactory;
   readonly #loggerProviderFactory: LogProviderFactory;
+  #exporter?: LogRecordExporter;
+  #processor?: LogRecordProcessor;
   #provider?: LogProviderLike;
   #logger: Logger = noopLogger;
   #state: LogPipelineState = "idle";
@@ -73,7 +75,6 @@ export class ObservMeLogSdk {
   constructor(options: ObservMeLogSdkOptions) {
     this.#config = options.config;
     this.#loggerName = options.loggerName ?? OBSERVME_LOGGER_NAME;
-    this.#registerGlobal = options.registerGlobal ?? true;
     this.#exporterFactory = options.exporterFactory ?? createOtlpLogExporter;
     this.#processorFactory = options.processorFactory ?? createBatchLogRecordProcessor;
     this.#loggerProviderFactory = options.loggerProviderFactory ?? createLogProvider;
@@ -89,21 +90,20 @@ export class ObservMeLogSdk {
 
   start(): void {
     if (this.#state === "started" || this.#state === "disabled") return;
-    if (!this.#config.logs.enabled) {
+    if (!this.#config.enabled || !this.#config.logs.enabled) {
       this.#state = "disabled";
       return;
     }
 
     const wiring = buildLogExporterWiring(this.#config);
-    const exporter = this.#exporterFactory(wiring.exporter);
-    const processor = this.#processorFactory(exporter, wiring.batch);
+    this.#exporter = this.#exporterFactory(wiring.exporter);
+    this.#processor = this.#processorFactory(this.#exporter, wiring.batch);
     this.#provider = this.#loggerProviderFactory({
       resource: createLogResource(this.#config),
-      processors: [processor],
+      processors: [this.#processor],
       forceFlushTimeoutMillis: this.#config.shutdown.flushTimeoutMs,
     });
 
-    if (this.#registerGlobal) logs.setGlobalLoggerProvider(this.#provider);
     this.#logger = this.#provider.getLogger(this.#loggerName);
     this.#state = "started";
   }
@@ -113,9 +113,19 @@ export class ObservMeLogSdk {
   }
 
   async shutdown(): Promise<void> {
-    await this.#provider?.shutdown?.();
-    this.#state = "shutdown";
-    this.#logger = noopLogger;
+    if (this.#state === "shutdown") return;
+
+    try {
+      if (this.#provider?.shutdown) await this.#provider.shutdown();
+      else if (this.#processor) await this.#processor.shutdown();
+      else await this.#exporter?.shutdown();
+    } finally {
+      this.#provider = undefined;
+      this.#processor = undefined;
+      this.#exporter = undefined;
+      this.#state = "shutdown";
+      this.#logger = noopLogger;
+    }
   }
 }
 
@@ -125,7 +135,7 @@ export function createLogSessionScopedOtelSdk(options: StartOtelSdkFactoryOption
 
 export function buildLogExporterWiring(config: ObservMeConfig): LogExporterWiring {
   return {
-    enabled: config.logs.enabled,
+    enabled: config.enabled && config.logs.enabled,
     exporter: buildOtlpLogExporterOptions(config),
     batch: { ...config.logs.batch },
   };
@@ -136,6 +146,7 @@ export function buildOtlpLogExporterOptions(config: ObservMeConfig): OtlpLogExpo
     url: resolveLogEndpoint(config),
     headers: { ...config.otlp.headers },
     timeoutMillis: config.otlp.timeoutMs,
+    httpAgentOptions: buildOtlpHttpAgentOptions(config),
   };
 }
 

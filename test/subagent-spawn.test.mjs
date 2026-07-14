@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { trace } from "@opentelemetry/api";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { clearObsAgentsRuntimeState, getLocalObsAgentsRuntimeSnapshot } from "../src/commands/obs-agents-runtime.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { createObservMeMetrics, createSpanRegistry, createAgentTreeTracker } from "../src/pi/handlers.ts";
@@ -351,6 +351,169 @@ test("malformed propagated lineage records a propagation failure and missing par
   assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.AGENT_ORPHANED));
 });
 
+test("subagent completion rejects non-terminal, mismatched, and contradictory transitions without mutation", () => {
+  const telemetry = createFakeTelemetry();
+  const started = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-invalid-transition",
+    childAgentId: "child-invalid-transition",
+    spawnType: "command",
+  });
+  const activeState = telemetry.spans.activeSubagentSpawns.get(started.spawnId);
+  const meterRecordCount = telemetry.meter.records.length;
+  const logRecordCount = telemetry.logger.records.length;
+
+  assert.deepEqual(completeSubagentSpawn(telemetry, started.spawnId, { childStatus: "starting" }), {
+    ok: false,
+    reason: "invalid_terminal_transition",
+  });
+  assert.deepEqual(completeSubagentSpawn(telemetry, started.spawnId, { childStatus: "active" }), {
+    ok: false,
+    reason: "invalid_terminal_transition",
+  });
+  assert.deepEqual(
+    completeSubagentSpawn(telemetry, started.spawnId, {
+      childAgentId: "different-child",
+      childStatus: "completed",
+    }),
+    { ok: false, reason: "child_agent_mismatch" },
+  );
+  assert.deepEqual(
+    completeSubagentSpawn(telemetry, started.spawnId, {
+      childStatus: "failed",
+      outcome: "completed",
+    }),
+    { ok: false, reason: "invalid_terminal_transition" },
+  );
+  assert.equal(telemetry.spans.activeSubagentSpawns.get(started.spawnId), activeState);
+  assert.equal(telemetry.agentTree.getAgent(started.childAgentId).status, "starting");
+  assert.equal(started.span.ended, false);
+  assert.equal(telemetry.meter.records.length, meterRecordCount);
+  assert.equal(telemetry.logger.records.length, logRecordCount);
+});
+
+test("subagent terminal transitions keep spans, events, tree state, metrics, and runtime state coherent", () => {
+  const terminalCases = [
+    {
+      status: "completed",
+      eventName: LOG_EVENT_NAMES.AGENT_SPAWN_COMPLETED,
+      spanStatus: SpanStatusCode.OK,
+      childFailures: 0,
+    },
+    {
+      status: "failed",
+      eventName: LOG_EVENT_NAMES.AGENT_SPAWN_FAILED,
+      spanStatus: SpanStatusCode.ERROR,
+      childFailures: 1,
+    },
+    {
+      status: "cancelled",
+      eventName: LOG_EVENT_NAMES.AGENT_SPAWN_CANCELLED,
+      spanStatus: SpanStatusCode.ERROR,
+      childFailures: 0,
+    },
+  ];
+
+  for (const terminalCase of terminalCases) {
+    clearObsAgentsRuntimeState();
+    const telemetry = createFakeTelemetry();
+    const started = startSubagentSpawn(telemetry, {
+      spawnId: `spawn-terminal-${terminalCase.status}`,
+      childAgentId: `child-terminal-${terminalCase.status}`,
+      spawnType: "command",
+    });
+
+    assert.deepEqual(
+      completeSubagentSpawn(telemetry, started.spawnId, {
+        childAgentId: started.childAgentId,
+        childStatus: terminalCase.status,
+        outcome: terminalCase.status,
+      }),
+      { ok: true },
+    );
+    assert.equal(started.span.ended, true);
+    assert.equal(started.span.status.code, terminalCase.spanStatus);
+    assert.equal(started.span.attributes["pi.agent.spawn.outcome"], terminalCase.status);
+    assert.equal(started.span.attributes["pi.agent.children.active"], 0);
+    assert.equal(telemetry.agentTree.getAgent(started.childAgentId).status, terminalCase.status);
+    assert.ok(started.span.events.some(event => event.name === terminalCase.eventName));
+    assert.ok(telemetry.logger.records.some(record => record.body === terminalCase.eventName));
+    assert.equal(
+      telemetry.meter.records.filter(record => record.name === OBSERVME_COUNTER_METRIC_NAMES.CHILD_AGENT_FAILURES_TOTAL).length,
+      terminalCase.childFailures,
+    );
+    assert.equal(
+      telemetry.meter.records.filter(record => record.name === OBSERVME_COUNTER_METRIC_NAMES.SUBAGENT_SPAWN_FAILURES_TOTAL).length,
+      0,
+    );
+    assert.equal(
+      getLocalObsAgentsRuntimeSnapshot().children.find(child => child.agentId === started.childAgentId)?.status,
+      terminalCase.status,
+    );
+
+    const meterRecordCount = telemetry.meter.records.length;
+    const logRecordCount = telemetry.logger.records.length;
+    assert.deepEqual(completeSubagentSpawn(telemetry, started.spawnId, { childStatus: terminalCase.status }), {
+      ok: false,
+      reason: "spawn_not_found",
+    });
+    assert.equal(telemetry.meter.records.length, meterRecordCount);
+    assert.equal(telemetry.logger.records.length, logRecordCount);
+  }
+  clearObsAgentsRuntimeState();
+});
+
+test("launcher failure cannot double-count a child failure already reported by join", () => {
+  const telemetry = createFakeTelemetry();
+  const started = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-child-failed-before-launcher-failure",
+    childAgentId: "child-failed-before-launcher-failure",
+    spawnType: "command",
+  });
+
+  recordAgentJoin(telemetry, {
+    id: "join-child-failed-before-launcher-failure",
+    spawnId: started.spawnId,
+    childAgentId: started.childAgentId,
+    childStatus: "failed",
+    joinStatus: "failed",
+    failurePropagated: true,
+    durationMs: 10,
+  });
+  assert.deepEqual(
+    failSubagentSpawn(telemetry, started.spawnId, {
+      childAgentId: started.childAgentId,
+      errorClass: "SpawnError",
+    }),
+    { ok: false, reason: "invalid_terminal_transition" },
+  );
+  assert.equal(telemetry.spans.activeSubagentSpawns.has(started.spawnId), true);
+  assert.equal(
+    telemetry.meter.records.filter(record => record.name === OBSERVME_COUNTER_METRIC_NAMES.CHILD_AGENT_FAILURES_TOTAL).length,
+    1,
+  );
+  assert.equal(
+    telemetry.meter.records.filter(record => record.name === OBSERVME_COUNTER_METRIC_NAMES.SUBAGENT_SPAWN_FAILURES_TOTAL).length,
+    0,
+  );
+
+  assert.deepEqual(
+    completeSubagentSpawn(telemetry, started.spawnId, {
+      childAgentId: started.childAgentId,
+      childStatus: "failed",
+      outcome: "failed",
+    }),
+    { ok: true },
+  );
+  assert.equal(
+    telemetry.meter.records.filter(record => record.name === OBSERVME_COUNTER_METRIC_NAMES.CHILD_AGENT_FAILURES_TOTAL).length,
+    1,
+  );
+  assert.equal(
+    telemetry.meter.records.filter(record => record.name === OBSERVME_COUNTER_METRIC_NAMES.SUBAGENT_SPAWN_FAILURES_TOTAL).length,
+    0,
+  );
+});
+
 test("subagent spawn completion and launcher failure record elapsed duration from injected clocks", () => {
   const telemetry = createFakeTelemetry();
   let nowMs = 100;
@@ -385,6 +548,11 @@ test("subagent spawn completion and launcher failure record elapsed duration fro
     now: () => nowMs,
   });
 
+  assert.equal(failed.span.status.code, SpanStatusCode.ERROR);
+  assert.equal(failed.span.attributes["pi.agent.spawn.outcome"], "failed");
+  assert.equal(failed.span.attributes["pi.agent.children.active"], 0);
+  assert.equal(telemetry.agentTree.getAgent(failed.childAgentId).status, "failed");
+  assert.ok(failed.span.events.some(event => event.name === LOG_EVENT_NAMES.AGENT_SPAWN_FAILED));
   assertHistogramRecorded(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.SUBAGENT_SPAWN_DURATION_MS, 250);
   assertHistogramRecorded(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.SUBAGENT_SPAWN_DURATION_MS, 75);
   const durationRecords = telemetry.meter.records.filter(

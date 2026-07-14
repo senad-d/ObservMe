@@ -23,6 +23,17 @@ const syntheticLongBearer = "abc123._-".repeat(4);
 const syntheticSlackBody = "T".repeat(12);
 const syntheticGitHubBody = "A".repeat(36);
 const syntheticGitHubPatBody = "B".repeat(30);
+const syntheticPemCases = [
+  { label: "PRIVATE KEY", body: "UEtDUzhfU1lOVEhFVElDX0JPRFk=" },
+  { label: "RSA PRIVATE KEY", body: "UlNBX1NZTlRIRVRJQ19CT0RZ" },
+  { label: "EC PRIVATE KEY", body: "RUNfU1lOVEhFVElDX0JPRFk=" },
+  { label: "ENCRYPTED PRIVATE KEY", body: "RU5DUllQVEVEX1NZTlRIRVRJQ19CT0RZ" },
+  { label: "OPENSSH PRIVATE KEY", body: "T1BFTlNTSF9TWU5USEVUSUNfQk9EWQ==" },
+];
+
+function buildSyntheticPemBlock(label, body) {
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----`;
+}
 
 const patternCases = [
   {
@@ -71,8 +82,8 @@ const patternCases = [
     name: "privateKeyBlock",
     type: SECRET_TYPES.PRIVATE_KEY_BLOCK,
     matcher: matchPrivateKeyBlocks,
-    positive: "-----BEGIN PRIVATE KEY-----\nbody omitted",
-    negative: "-----BEGIN PUBLIC KEY-----",
+    positive: buildSyntheticPemBlock(syntheticPemCases[0].label, syntheticPemCases[0].body),
+    negative: "-----BEGIN PUBLIC KEY-----\nUFVCTElDX0tFWV9CT0RZ\n-----END PUBLIC KEY-----",
   },
   {
     name: "passwordAssignment",
@@ -132,6 +143,43 @@ test("GitHub token matcher covers github_pat tokens", () => {
   const matches = matchGitHubTokens(`github_pat_${syntheticGitHubPatBody}`);
   assert.equal(matches.length, 1);
   assert.equal(matches[0].type, SECRET_TYPES.GITHUB_TOKEN);
+});
+
+test("private key matcher consumes complete supported PEM blocks", () => {
+  for (const pemCase of syntheticPemCases) {
+    const block = buildSyntheticPemBlock(pemCase.label, pemCase.body);
+    const input = `prefix\n${block}\nsuffix`;
+    const matches = matchPrivateKeyBlocks(input);
+
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0].value, block);
+    assert.equal(matches[0].start, "prefix\n".length);
+    assert.equal(matches[0].end, `prefix\n${block}`.length);
+  }
+});
+
+test("private key matcher fails closed through the end of truncated or mismatched PEM input", () => {
+  const malformedBlocks = [
+    "-----BEGIN PRIVATE KEY-----\nVFJVTkNBVEVEX1NZTlRIRVRJQ19CT0RZ",
+    "-----BEGIN RSA PRIVATE KEY-----\nTUlTTUFUQ0hFRF9TWU5USEVUSUNfQk9EWQ==\n-----END EC PRIVATE KEY-----\ntrailing text",
+  ];
+
+  for (const block of malformedBlocks) {
+    const input = `prefix\n${block}`;
+    const matches = matchPrivateKeyBlocks(input);
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0].value, block);
+    assert.equal(matches[0].end, input.length);
+  }
+});
+
+test("private key matcher leaves public-key PEM blocks unmatched", () => {
+  const publicBlocks = [
+    buildSyntheticPemBlock("PUBLIC KEY", "UFVCTElDX0tFWV9CT0RZ"),
+    buildSyntheticPemBlock("RSA PUBLIC KEY", "UlNBX1BVQkxJQ19LRVlfQk9EWQ=="),
+  ];
+
+  for (const block of publicBlocks) assert.deepEqual(matchPrivateKeyBlocks(block), []);
 });
 
 test("combined matcher returns structured metadata for redaction replacements", () => {

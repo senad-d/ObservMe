@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getObsRootCommandArgumentCompletions, registerObsCommand } from "../src/commands/obs.ts";
+import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import {
   clearObsSessionRuntimeState,
   handleObsSessionCommand,
@@ -68,11 +69,9 @@ test("/obs session reads in-memory runtime state and makes no network call", asy
     clearObsSessionRuntimeState();
   });
 
-  startObsSessionRuntimeState({
-    sessionId: "session-abc",
-    traceId,
-    traceUrlTemplate: "https://grafana.local/explore?trace={traceId}",
-  });
+  const config = structuredClone(defaultObservMeConfig);
+  config.query.links.traceUrlTemplate = "https://grafana.local/explore?trace={traceId}";
+  startObsSessionRuntimeState({ sessionId: "session-abc", traceId, config });
   recordObsSessionTurn(2);
   recordObsSessionLlmCall(3);
   recordObsSessionToolCall(5);

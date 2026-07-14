@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { defaultObservMeConfig } from "./defaults.ts";
 import { resolveProjectLocalFilePath } from "./project-paths.ts";
 import type { ConfigLogSink, ConfigRejectionDiagnostic } from "./validate.ts";
-import { ensureValidObservMeConfig, ensureValidObservMeConfigWithDiagnostics } from "./validate.ts";
+import {
+  ensureValidObservMeConfig,
+  ensureValidObservMeConfigWithDiagnostics,
+  normalizeConfigRejectionDiagnostic,
+  validateObservMeConfig,
+} from "./validate.ts";
 import type { ObservMeConfig } from "./schema.ts";
 import { registerTenantSaltEnvironment } from "../privacy/hash.ts";
 import { RESOURCE_ATTRIBUTES } from "../semconv/attributes.ts";
@@ -22,6 +27,19 @@ type ConfigValue = null | boolean | number | string | ConfigObject | ConfigValue
 type ConfigObject = { [key: string]: ConfigValue };
 
 type ReadConfigText = (path: string) => Promise<string | undefined>;
+type ConfigSourceIssueCode =
+  | "config_source_malformed"
+  | "config_source_rejected"
+  | "config_source_unreadable"
+  | "invalid_config_shape";
+
+type BaseSessionConfigSourceStatus = "loaded" | "malformed" | "missing" | "rejected" | "unreadable";
+
+interface ConfigSourceResult<T, TStatus extends string = BaseSessionConfigSourceStatus> {
+  readonly status: TStatus;
+  readonly value?: T;
+  readonly issueCode?: ConfigSourceIssueCode;
+}
 
 export interface ProjectTrustContext {
   isProjectTrusted?: () => boolean | Promise<boolean>;
@@ -45,12 +63,17 @@ export interface LoadSessionConfigOptions extends LoadConfigOptions {
   isProjectTrusted?: boolean | (() => boolean | Promise<boolean>);
 }
 
-export type SessionConfigProjectStatus = "loaded" | "missing" | "skipped_untrusted";
+export type SessionConfigProjectStatus = BaseSessionConfigSourceStatus | "skipped_untrusted";
+export type SessionConfigEnvFileStatus = BaseSessionConfigSourceStatus | "skipped_disabled" | "skipped_untrusted";
+export type SessionConfigEnvironmentStatus = "loaded" | "missing" | "rejected";
 export type SessionConfigEffectiveSource = "runtime_options" | "environment" | "trusted_project" | "global" | "defaults";
 
 export interface SessionConfigDiagnostics {
   readonly projectTrusted: boolean;
   readonly projectConfigStatus: SessionConfigProjectStatus;
+  readonly globalConfigStatus?: BaseSessionConfigSourceStatus;
+  readonly envFileStatus?: SessionConfigEnvFileStatus;
+  readonly environmentStatus?: SessionConfigEnvironmentStatus;
   readonly effectiveSource: SessionConfigEffectiveSource;
   readonly globalConfigLoaded: boolean;
   readonly environmentOverrides: boolean;
@@ -86,18 +109,22 @@ export async function loadSessionConfig(options: LoadSessionConfigOptions = {}):
 }
 
 export async function loadSessionConfigWithDiagnostics(options: LoadSessionConfigOptions = {}): Promise<LoadSessionConfigResult> {
-  const globalConfig = await readConfigFile(resolveGlobalConfigPath(options), options);
+  const globalSource = classifyConfigSource(
+    await readConfigSource(resolveGlobalConfigPath(options), options),
+  );
   const projectTrusted = await resolveProjectTrust(options);
-  const projectConfig = projectTrusted ? await readProjectConfigFile(options) : undefined;
-  const envFile = await readTrustedProjectEnvFile(projectTrusted, options);
+  const projectSource = classifyConfigSource(await readProjectConfigSource(projectTrusted, options));
+  const envFileSource = await readTrustedProjectEnvSource(projectTrusted, options);
   const environment = options.env ?? process.env;
-  const effectiveEnvironment = mergeEnvironment(envFile, environment);
-  const envFileConfig = envFile ? envToConfig(envFile) : undefined;
+  const envFileConfig = envFileSource.value ? envToConfig(envFileSource.value) : undefined;
+  const classifiedEnvFileSource = classifyConfigSource(envFileSource, envFileConfig);
   const environmentConfig = envToConfig(environment);
+  const environmentSource = classifyEnvironmentSource(environment, environmentConfig);
+  const effectiveEnvironment = mergeEnvironment(classifiedEnvFileSource.value, environment);
   const config = mergeConfigLayers([
     defaultObservMeConfig,
-    globalConfig,
-    projectConfig,
+    globalSource.value,
+    projectSource.value,
     envFileConfig,
     environmentConfig,
     options.runtimeOptions,
@@ -105,17 +132,25 @@ export async function loadSessionConfigWithDiagnostics(options: LoadSessionConfi
   const validation = ensureValidObservMeConfigWithDiagnostics(config, {
     env: effectiveEnvironment,
     isProjectTrusted: projectTrusted,
-    projectConfigWasRead: Boolean(projectConfig),
-    logger: options.logger,
+    projectConfigWasRead: projectSource.value !== undefined,
   });
+  const rejection = combineConfigRejections(validation.rejection, [
+    globalSource,
+    projectSource,
+    classifiedEnvFileSource,
+    environmentSource,
+  ]);
+  logSessionConfigRejection(rejection, options.logger);
   const diagnostics = createSessionConfigDiagnostics({
-    globalConfig,
-    projectConfig,
+    globalSource,
+    projectSource,
+    envFileSource: classifiedEnvFileSource,
+    environmentSource,
     projectTrusted,
     envFileConfig,
     environmentConfig,
     runtimeOptions: options.runtimeOptions,
-    rejection: validation.rejection,
+    rejection,
   });
 
   return {
@@ -140,18 +175,13 @@ export function envToConfig(env: NodeJS.ProcessEnv = process.env): DeepPartial<O
   setBoolean(config, ["enabled"], env.OBSERVME_ENABLED);
   setString(config, ["environment"], env.OBSERVME_ENVIRONMENT);
   setString(config, ["tenant"], env.OBSERVME_TENANT);
-  setBoolean(config, ["replayOnStart"], env.OBSERVME_REPLAY_ON_START);
   setString(config, ["otlp", "endpoint"], env.OBSERVME_OTLP_ENDPOINT);
   setString(config, ["otlp", "protocol"], env.OBSERVME_OTLP_PROTOCOL);
   setString(config, ["otlp", "signalEndpoints", "traces"], env.OBSERVME_OTLP_TRACES_ENDPOINT);
   setString(config, ["otlp", "signalEndpoints", "metrics"], env.OBSERVME_OTLP_METRICS_ENDPOINT);
   setString(config, ["otlp", "signalEndpoints", "logs"], env.OBSERVME_OTLP_LOGS_ENDPOINT);
   setNumber(config, ["otlp", "timeoutMs"], env.OBSERVME_OTLP_TIMEOUT_MS);
-  setNumberForValidation(
-    config,
-    ["metrics", "activeAgentLeaseDurationMillis"],
-    env.OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS,
-  );
+  setNumber(config, ["metrics", "activeAgentLeaseDurationMillis"], env.OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS);
   setAuthorizationHeader(config, env.OBSERVME_OTLP_TOKEN);
   setNumber(config, ["workflow", "maxDepthWarning"], env.OBSERVME_WORKFLOW_MAX_DEPTH_WARNING);
   setNumber(config, ["workflow", "maxFanoutWarning"], env.OBSERVME_WORKFLOW_MAX_FANOUT_WARNING);
@@ -191,41 +221,36 @@ export function envToConfig(env: NodeJS.ProcessEnv = process.env): DeepPartial<O
 }
 
 function createSessionConfigDiagnostics(options: {
-  readonly globalConfig?: DeepPartial<ObservMeConfig>;
-  readonly projectConfig?: DeepPartial<ObservMeConfig>;
+  readonly globalSource: ConfigSourceResult<DeepPartial<ObservMeConfig>>;
+  readonly projectSource: ConfigSourceResult<DeepPartial<ObservMeConfig>>;
+  readonly envFileSource: ConfigSourceResult<NodeJS.ProcessEnv, SessionConfigEnvFileStatus>;
+  readonly environmentSource: ConfigSourceResult<DeepPartial<ObservMeConfig>, SessionConfigEnvironmentStatus>;
   readonly projectTrusted: boolean;
   readonly envFileConfig?: DeepPartial<ObservMeConfig>;
   readonly environmentConfig: DeepPartial<ObservMeConfig>;
   readonly runtimeOptions?: DeepPartial<ObservMeConfig>;
   readonly rejection?: ConfigRejectionDiagnostic;
 }): SessionConfigDiagnostics {
-  const globalConfigLoaded = options.globalConfig !== undefined;
-  const projectConfigStatus = resolveSessionConfigProjectStatus(options.projectTrusted, options.projectConfig);
   const environmentOverrides = hasConfigLayer(options.envFileConfig) || hasConfigLayer(options.environmentConfig);
   const runtimeOptionsApplied = hasConfigLayer(options.runtimeOptions);
 
   return {
     projectTrusted: options.projectTrusted,
-    projectConfigStatus,
+    projectConfigStatus: options.projectTrusted ? options.projectSource.status : "skipped_untrusted",
+    globalConfigStatus: options.globalSource.status,
+    envFileStatus: options.envFileSource.status,
+    environmentStatus: options.environmentSource.status,
     effectiveSource: resolveSessionConfigEffectiveSource({
-      globalConfig: options.globalConfig,
-      projectConfig: options.projectConfig,
+      globalConfig: options.globalSource.value,
+      projectConfig: options.projectSource.value,
       environmentOverrides,
       runtimeOptionsApplied,
     }),
-    globalConfigLoaded,
+    globalConfigLoaded: options.globalSource.status === "loaded",
     environmentOverrides,
     runtimeOptionsApplied,
     rejection: options.rejection,
   };
-}
-
-function resolveSessionConfigProjectStatus(
-  projectTrusted: boolean,
-  projectConfig: DeepPartial<ObservMeConfig> | undefined,
-): SessionConfigProjectStatus {
-  if (!projectTrusted) return "skipped_untrusted";
-  return projectConfig === undefined ? "missing" : "loaded";
 }
 
 function resolveSessionConfigEffectiveSource(options: {
@@ -245,6 +270,92 @@ function hasConfigLayer(layer: DeepPartial<ObservMeConfig> | undefined): boolean
   return layer !== undefined && Object.keys(layer).length > 0;
 }
 
+function classifyConfigSource<T, TStatus extends string>(
+  source: ConfigSourceResult<T, TStatus>,
+  configLayer?: DeepPartial<ObservMeConfig>,
+): ConfigSourceResult<T, TStatus> {
+  if (source.status !== "loaded") return source;
+
+  const layer = configLayer ?? (source.value as DeepPartial<ObservMeConfig> | undefined);
+  if (!layer || !isConfigLayerStructurallyInvalid(layer)) return source;
+
+  return {
+    ...source,
+    status: "rejected" as TStatus,
+    issueCode: "invalid_config_shape",
+  };
+}
+
+function classifyEnvironmentSource(
+  environment: NodeJS.ProcessEnv,
+  config: DeepPartial<ObservMeConfig>,
+): ConfigSourceResult<DeepPartial<ObservMeConfig>, SessionConfigEnvironmentStatus> {
+  if (!hasObservMeEnvironmentInput(environment)) return { status: "missing", value: config };
+  if (isConfigLayerStructurallyInvalid(config)) {
+    return { status: "rejected", value: config, issueCode: "invalid_config_shape" };
+  }
+  return { status: "loaded", value: config };
+}
+
+function hasObservMeEnvironmentInput(environment: NodeJS.ProcessEnv): boolean {
+  return Object.keys(environment).some(name => name.startsWith("OBSERVME_"));
+}
+
+function isConfigLayerStructurallyInvalid(layer: DeepPartial<ObservMeConfig>): boolean {
+  try {
+    const candidate = mergeConfigLayers([defaultObservMeConfig, layer]);
+    return validateObservMeConfig(candidate, { env: {}, isProjectTrusted: true }).issues.some(
+      issue => issue.code === "invalid_config_shape",
+    );
+  } catch {
+    return true;
+  }
+}
+
+function combineConfigRejections(
+  validationRejection: ConfigRejectionDiagnostic | undefined,
+  sources: ReadonlyArray<ConfigSourceResult<unknown, string>>,
+): ConfigRejectionDiagnostic | undefined {
+  const sourceIssueCodes = sources.flatMap(source => (source.issueCode ? [source.issueCode] : []));
+  if (sourceIssueCodes.length === 0) return validationRejection;
+
+  const validationCodes = validationRejection?.issueCodes ?? [];
+  const additionalIssueCount = sourceIssueCodes.filter(code => !validationCodes.includes(code)).length;
+  return normalizeConfigRejectionDiagnostic({
+    issueCodes: [...validationCodes, ...sourceIssueCodes],
+    issueCount: (validationRejection?.issueCount ?? 0) + additionalIssueCount,
+  });
+}
+
+function logSessionConfigRejection(
+  rejection: ConfigRejectionDiagnostic | undefined,
+  logger: ConfigLogSink | undefined,
+): void {
+  if (!rejection || !logger?.warn) return;
+
+  try {
+    logger.warn(
+      `ObservMe config rejected (${rejection.issueCodes.join(", ")}); ${rejection.issueCount} issue(s), safe defaults applied.`,
+    );
+  } catch {
+    return;
+  }
+}
+
+function logConfigSourceFailure(
+  label: string,
+  source: ConfigSourceResult<unknown, string>,
+  logger: ConfigLogSink | undefined,
+): void {
+  if (!source.issueCode || !logger?.warn) return;
+
+  try {
+    logger.warn(`ObservMe ${label} source was ignored (${source.issueCode}); safe defaults applied.`);
+  } catch {
+    return;
+  }
+}
+
 export function parseObservMeConfigText(text: string): DeepPartial<ObservMeConfig> {
   const parsed = text.trimStart().startsWith("{") ? (JSON.parse(text) as ConfigObject) : parseSimpleYaml(text);
   const observmeConfig = parsed.observme;
@@ -257,49 +368,81 @@ async function readConfigFile(
   path: string,
   options: LoadConfigOptions,
 ): Promise<DeepPartial<ObservMeConfig> | undefined> {
+  const source = classifyConfigSource(await readConfigSource(path, options));
+  logConfigSourceFailure("global config", source, options.logger);
+  return source.value;
+}
+
+async function readConfigSource(
+  path: string,
+  options: LoadConfigOptions,
+): Promise<ConfigSourceResult<DeepPartial<ObservMeConfig>>> {
+  const textResult = await readConfigSourceText(path, options);
+  if (textResult.status !== "loaded") {
+    return { status: textResult.status, issueCode: textResult.issueCode };
+  }
+
   try {
-    const text = await readOptionalText(path, options.readText ?? defaultReadConfigText);
-    if (!text || text.trim() === "") return undefined;
-    return parseObservMeConfigText(text);
-  } catch (error) {
-    if (isMissingFileError(error)) return undefined;
-    options.logger?.warn?.(`ObservMe config file ${path} was ignored: ${formatError(error)}`);
-    return undefined;
+    return { status: "loaded", value: parseObservMeConfigText(textResult.value!) };
+  } catch {
+    return { status: "malformed", issueCode: "config_source_malformed" };
   }
 }
 
-async function readProjectConfigFile(options: LoadSessionConfigOptions): Promise<DeepPartial<ObservMeConfig> | undefined> {
-  try {
-    return await readConfigFile(resolveProjectConfigPath(options), options);
-  } catch (error) {
-    warnIgnoredProjectPath(options, "config", error);
-    return undefined;
-  }
-}
-
-async function readTrustedProjectEnvFile(
+async function readProjectConfigSource(
   projectTrusted: boolean,
   options: LoadSessionConfigOptions,
-): Promise<NodeJS.ProcessEnv | undefined> {
-  if (!projectTrusted || options.loadEnvFile === false) return undefined;
+): Promise<ConfigSourceResult<DeepPartial<ObservMeConfig>>> {
+  if (!projectTrusted) return { status: "missing" };
 
   try {
-    return await readEnvFile(resolveProjectEnvFilePath(options), options);
-  } catch (error) {
-    warnIgnoredProjectPath(options, "env", error);
-    return undefined;
+    return await readConfigSource(resolveProjectConfigPath(options), options);
+  } catch {
+    return { status: "rejected", issueCode: "config_source_rejected" };
   }
 }
 
-async function readEnvFile(path: string, options: LoadConfigOptions): Promise<NodeJS.ProcessEnv | undefined> {
+async function readTrustedProjectEnvSource(
+  projectTrusted: boolean,
+  options: LoadSessionConfigOptions,
+): Promise<ConfigSourceResult<NodeJS.ProcessEnv, SessionConfigEnvFileStatus>> {
+  if (!projectTrusted) return { status: "skipped_untrusted" };
+  if (options.loadEnvFile === false) return { status: "skipped_disabled" };
+
+  try {
+    return await readEnvSource(resolveProjectEnvFilePath(options), options);
+  } catch {
+    return { status: "rejected", issueCode: "config_source_rejected" };
+  }
+}
+
+async function readEnvSource(
+  path: string,
+  options: LoadConfigOptions,
+): Promise<ConfigSourceResult<NodeJS.ProcessEnv>> {
+  const textResult = await readConfigSourceText(path, options);
+  if (textResult.status !== "loaded") {
+    return { status: textResult.status, issueCode: textResult.issueCode };
+  }
+
+  try {
+    return { status: "loaded", value: parseEnvFileText(textResult.value!) };
+  } catch {
+    return { status: "malformed", issueCode: "config_source_malformed" };
+  }
+}
+
+async function readConfigSourceText(
+  path: string,
+  options: LoadConfigOptions,
+): Promise<ConfigSourceResult<string>> {
   try {
     const text = await readOptionalText(path, options.readText ?? defaultReadConfigText);
-    if (!text || text.trim() === "") return undefined;
-    return parseEnvFileText(text);
-  } catch (error) {
-    if (isMissingFileError(error)) return undefined;
-    options.logger?.warn?.(`ObservMe env file ${path} was ignored: ${formatError(error)}`);
-    return undefined;
+    if (text === undefined) return { status: "missing" };
+    if (text.trim() === "") return { status: "malformed", issueCode: "config_source_malformed" };
+    return { status: "loaded", value: text };
+  } catch {
+    return { status: "unreadable", issueCode: "config_source_unreadable" };
   }
 }
 
@@ -338,10 +481,6 @@ function resolveProjectEnvFilePath(options: LoadSessionConfigOptions): string {
     overridePath: options.envFilePath ?? defaultEnvFileName,
     inputLabel: "project env path",
   });
-}
-
-function warnIgnoredProjectPath(options: LoadSessionConfigOptions, source: "config" | "env", error: unknown) {
-  options.logger?.warn?.(`ObservMe project ${source} file was ignored: ${formatError(error)}`);
 }
 
 async function resolveProjectTrust(options: LoadSessionConfigOptions): Promise<boolean> {
@@ -417,7 +556,15 @@ function parseEnvValue(valueText: string): string {
 function parseQuotedEnvValue(valueText: string): string {
   const closingIndex = findClosingEnvQuote(valueText);
   if (closingIndex === -1) throw new Error("Invalid .env quoted value.");
+  if (!isValidQuotedEnvValueSuffix(valueText.slice(closingIndex + 1))) {
+    throw new Error("Invalid .env quoted value suffix.");
+  }
   return unquoteEnvValue(valueText.slice(0, closingIndex + 1));
+}
+
+function isValidQuotedEnvValueSuffix(suffix: string): boolean {
+  if (suffix.trim() === "") return true;
+  return /^\s+#/u.test(suffix);
 }
 
 function findClosingEnvQuote(valueText: string): number {
@@ -586,27 +733,22 @@ function setAuthorizationHeader(config: DeepPartial<ObservMeConfig>, token: stri
 }
 
 function setString(target: DeepPartial<ObservMeConfig>, path: string[], value: string | undefined) {
-  if (value === undefined || value === "") return;
+  if (value === undefined) return;
   setPathValue(target as Record<string, unknown>, path, value);
 }
 
 function setNumber(target: DeepPartial<ObservMeConfig>, path: string[], value: string | undefined) {
-  if (value === undefined || value === "") return;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return;
-  setPathValue(target as Record<string, unknown>, path, parsed);
-}
-
-function setNumberForValidation(target: DeepPartial<ObservMeConfig>, path: string[], value: string | undefined) {
-  if (value === undefined || value === "") return;
-  const parsed = Number(value);
-  setPathValue(target as Record<string, unknown>, path, Number.isFinite(parsed) ? parsed : value);
+  if (value === undefined) return;
+  const normalized = value.trim();
+  const parsed = Number(normalized);
+  const parsedValue = normalized !== "" && Number.isFinite(parsed) ? parsed : value;
+  setPathValue(target as Record<string, unknown>, path, parsedValue);
 }
 
 function setBoolean(target: DeepPartial<ObservMeConfig>, path: string[], value: string | undefined) {
+  if (value === undefined) return;
   const parsed = parseBooleanEnv(value);
-  if (parsed === undefined) return;
-  setPathValue(target as Record<string, unknown>, path, parsed);
+  setPathValue(target as Record<string, unknown>, path, parsed ?? value);
 }
 
 function setPathValue(target: Record<string, unknown>, path: string[], value: unknown) {
@@ -621,9 +763,8 @@ function setPathValue(target: Record<string, unknown>, path: string[], value: un
   current[path.at(-1)!] = value;
 }
 
-function parseBooleanEnv(value: string | undefined): boolean | undefined {
-  if (value === undefined || value === "") return undefined;
-  const normalized = value.toLowerCase();
+function parseBooleanEnv(value: string): boolean | undefined {
+  const normalized = value.trim().toLowerCase();
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   return undefined;
@@ -635,8 +776,4 @@ function isPlainObject(value: unknown): value is ConfigObject {
 
 function isMissingFileError(error: unknown): boolean {
   return isPlainObject(error) && error.code === "ENOENT";
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

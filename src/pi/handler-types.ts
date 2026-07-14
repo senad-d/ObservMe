@@ -1,5 +1,10 @@
 import type { Counter, Histogram, Meter, ObservableGauge, Span, Tracer, UpDownCounter } from "@opentelemetry/api";
 import type { Logger } from "@opentelemetry/api-logs";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ExtensionEvent,
+} from "@earendil-works/pi-coding-agent";
 import type { EnsureProjectConfig as BootstrapEnsureProjectConfig } from "../config/bootstrap-project-config.ts";
 import type {
   LoadSessionConfigOptions,
@@ -29,8 +34,18 @@ export type TelemetryMeter = Pick<
 >;
 export type TelemetryTracer = Pick<Tracer, "startSpan">;
 export type TelemetryLogger = Pick<Logger, "emit">;
-export type Handler = (event: unknown, ctx: ObservMeHandlerContext) => Promise<void> | void;
+export type PiEventName = ExtensionEvent["type"];
+export type PiEvent<Name extends PiEventName> = Extract<ExtensionEvent, { type: Name }>;
+export type Handler<Event = unknown, Context = ObservMeHandlerContext> = (
+  event: Event,
+  ctx: Context,
+) => Promise<void> | void;
+export type PiHandler<Name extends PiEventName> = Handler<PiEvent<Name>, ExtensionContext>;
+export type RuntimeHandler = Handler<unknown, ExtensionContext>;
 export type HandlerErrorRecorder = (name: string, error: unknown) => void;
+export type AppendEntry = ExtensionAPI["appendEntry"];
+export type GetThinkingLevel = ExtensionAPI["getThinkingLevel"];
+export type ObservMeSessionManager = ExtensionContext["sessionManager"];
 export type LoadSessionConfig = (
   options: LoadSessionConfigOptions,
 ) => Promise<ObservMeConfig | LoadSessionConfigResult>;
@@ -56,7 +71,6 @@ export interface SessionRecoveryHeader {
   readonly timestamp?: string;
   readonly cwd?: string;
   readonly parentSession?: string;
-  readonly correlation?: MinimalSessionCorrelation;
 }
 
 export interface StartupRecoveryState {
@@ -67,24 +81,21 @@ export interface StartupRecoveryState {
 }
 
 export interface ObservMeHandlerContext {
-  readonly cwd?: string;
-  readonly hasUI?: boolean;
-  readonly sessionFile?: string;
-  readonly session_file?: string;
-  readonly sessionId?: string;
-  readonly session_id?: string;
-  readonly model?: unknown;
-  readonly thinking?: unknown;
+  readonly cwd?: ExtensionContext["cwd"];
+  readonly hasUI?: ExtensionContext["hasUI"];
+  readonly sessionManager?: ObservMeSessionManager;
+  readonly model?: ExtensionContext["model"];
   readonly ui?: {
     notify?: (message: string, level?: "warning" | "info" | "error") => Promise<void> | void;
     setStatus?: (key: string, value: string | undefined) => Promise<void> | void;
   };
   readonly isProjectTrusted?: () => boolean | Promise<boolean>;
-  readonly [key: string]: unknown;
 }
 
 export interface ObservMePiApi {
-  on: (eventName: string, handler: Handler) => void;
+  on: <Name extends PiEventName>(eventName: Name, handler: PiHandler<Name>) => void;
+  appendEntry?: AppendEntry;
+  getThinkingLevel?: GetThinkingLevel;
 }
 
 export interface RegisterHandlersOptions {
@@ -99,6 +110,8 @@ export interface RegisterHandlersOptions {
   readonly readSessionHeader?: ReadSessionHeader;
   readonly ensureProjectConfig?: EnsureProjectConfig;
   readonly onHandlerError?: HandlerErrorRecorder;
+  readonly appendEntry?: AppendEntry;
+  readonly getThinkingLevel?: GetThinkingLevel;
 }
 
 export interface StartSessionTelemetryOptions {
@@ -249,7 +262,8 @@ export interface CompositeOtelSignalSdk {
   readonly traceSdk: ObservMeTraceSdk;
   readonly metricSdk: ObservMeMetricSdk;
   readonly logSdk: ObservMeLogSdk;
-  start: () => void;
+  readonly state: "idle" | "starting" | "started" | "failed" | "shutdown";
+  start: () => Promise<void>;
   forceFlush: () => Promise<void>;
   shutdown: () => Promise<void>;
 }
@@ -259,8 +273,8 @@ export interface HandlerSessionState {
 }
 
 export interface HandlerRegistration {
-  readonly eventName: string;
-  readonly handler: Handler;
+  readonly eventName: PiEventName;
+  readonly handler: RuntimeHandler;
 }
 
 export interface SessionConfigLoadResult {

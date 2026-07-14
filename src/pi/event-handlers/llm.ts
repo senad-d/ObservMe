@@ -1,4 +1,8 @@
 import { SpanStatusCode } from "@opentelemetry/api";
+import type {
+  BeforeProviderRequestEvent,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { recordObsSessionLlmCall } from "../../commands/obs-session.ts";
 import { LOG_EVENT_NAMES } from "../../semconv/metrics.ts";
 import { SPAN_NAMES } from "../../semconv/spans.ts";
@@ -26,7 +30,7 @@ import {
   startActiveChildSpan,
 } from "../handler-internals.ts";
 import type { HandlerRegistrar } from "../handler-runtime.ts";
-import type { Handler, HandlerSessionState, ObservMeHandlerContext } from "../handler-types.ts";
+import type { HandlerSessionState, PiEvent, PiHandler } from "../handler-types.ts";
 import { recordBashExecution } from "./tool-bash.ts";
 
 export function registerLlmHandlers(registrar: HandlerRegistrar, state: HandlerSessionState): void {
@@ -35,14 +39,14 @@ export function registerLlmHandlers(registrar: HandlerRegistrar, state: HandlerS
   registrar.add("message_end", createMessageEndHandler(state));
 }
 
-function createBeforeProviderRequestHandler(state: HandlerSessionState): Handler {
+function createBeforeProviderRequestHandler(state: HandlerSessionState): PiHandler<"before_provider_request"> {
   return handleBeforeProviderRequest.bind(undefined, state);
 }
 
 function handleBeforeProviderRequest(
   state: HandlerSessionState,
-  event: unknown,
-  ctx: ObservMeHandlerContext,
+  event: BeforeProviderRequestEvent,
+  ctx: ExtensionContext,
 ): void {
   const session = state.session;
   if (!session) return;
@@ -61,14 +65,14 @@ function handleBeforeProviderRequest(
   emitLifecycleLog(session.logger, LOG_EVENT_NAMES.LLM_REQUEST_STARTED, attributes);
 }
 
-function createAfterProviderResponseHandler(state: HandlerSessionState): Handler {
+function createAfterProviderResponseHandler(state: HandlerSessionState): PiHandler<"after_provider_response"> {
   return handleAfterProviderResponse.bind(undefined, state);
 }
 
 function handleAfterProviderResponse(
   state: HandlerSessionState,
-  event: unknown,
-  _ctx: ObservMeHandlerContext,
+  event: PiEvent<"after_provider_response">,
+  _ctx: ExtensionContext,
 ): void {
   const session = state.session;
   if (!session) return;
@@ -77,11 +81,15 @@ function handleAfterProviderResponse(
   span?.setAttributes(buildLlmResponseAttributes(event));
 }
 
-function createMessageEndHandler(state: HandlerSessionState): Handler {
+function createMessageEndHandler(state: HandlerSessionState): PiHandler<"message_end"> {
   return handleMessageEnd.bind(undefined, state);
 }
 
-function handleMessageEnd(state: HandlerSessionState, event: unknown, _ctx: ObservMeHandlerContext): void {
+function handleMessageEnd(
+  state: HandlerSessionState,
+  event: PiEvent<"message_end">,
+  _ctx: ExtensionContext,
+): void {
   const session = state.session;
   if (!session) return;
 

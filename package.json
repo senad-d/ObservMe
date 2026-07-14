@@ -67,11 +67,19 @@
     "smoke:handlers": "node scripts/smoke-handler-execution.mjs",
     "smoke:pi-lifecycle": "node scripts/smoke-pi-lifecycle.mjs",
     "smoke:pi-runtime": "node scripts/smoke-pi-runtime.mjs",
+    "validate:pi-compatibility": "npm run typecheck && npm run typecheck:test && node --test test/pi-compatibility.test.ts test/event-mapping.test.ts test/template.test.mjs && npm run smoke:packaged && npm run smoke:handlers && npm run smoke:pi-lifecycle && npm run smoke:pi-runtime",
     "validate:grafana-obs": "node scripts/validate-grafana-obs-flow.mjs",
     "check": "node --check scripts/check-package-contents.mjs && node --check scripts/test-coverage.mjs && node --check scripts/smoke-observability.mjs && node --check scripts/smoke-packaged-install.mjs && node --check scripts/smoke-handler-execution.mjs && node --check scripts/smoke-pi-lifecycle.mjs && node --check scripts/smoke-pi-runtime.mjs && node --check scripts/validate-grafana-obs-flow.mjs",
     "pack:dry-run": "npm pack --dry-run --json",
     "check:pack": "node scripts/check-package-contents.mjs",
     "validate": "npm run lint && npm run test && npm run check:pack && npm run smoke:packaged && npm run smoke:handlers && npm run smoke:pi-lifecycle && npm run smoke:pi-runtime"
+  },
+  "observmeCompatibility": {
+    "pi": {
+      "minimumVersion": "0.80.5",
+      "releaseTestedVersion": "0.80.6",
+      "supportedRange": ">=0.80.5 <0.81.0"
+    }
   },
   "pi": {
     "extensions": [
@@ -88,8 +96,8 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.80.2",
-    "@earendil-works/pi-coding-agent": "^0.80.2",
+    "@earendil-works/pi-ai": "0.80.6",
+    "@earendil-works/pi-coding-agent": "0.80.6",
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.1",
     "c8": "^11.0.0",
@@ -97,7 +105,7 @@
     "globals": "^17.7.0",
     "typebox": "^1.3.6",
     "typescript": "6.0.3",
-    "typescript-eslint": "^8.63.0"
+    "typescript-eslint": "8.63.0"
   },
   "dependencies": {
     "@opentelemetry/api": "1.9.1",

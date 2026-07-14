@@ -437,9 +437,9 @@ Add bounded registries for active agent and turn spans, derive turn IDs exactly 
 - Turn IDs are derived as `agent-run-XXXXXX-turn-XXXXXX` per `03-pi-event-and-session-model.md` §9, and are never used as a metric label.
 - `observme_agent_runs_total` and `observme_turns_started_total`/`observme_turns_completed_total` increment correctly.
 
-### 19. Implement startup recovery and replay semantics
+### 19. Implement startup recovery and explicit replay semantics
 
-- [x] Extend the `session_start` handler from task 17 to implement the startup recovery rules from `03-pi-event-and-session-model.md` §10–11: on an existing (resumed) session, read the session header only (not the full entry log), set `pi.session.id`/`pi.workflow.id`/`pi.agent.id`/resource attributes, reconstruct workflow/agent lineage only from trusted environment variables or an explicit minimal `custom` correlation entry, never continuously tail the session file, and never replay historical telemetry unless `replayOnStart: true` is explicitly configured — in which case mark all replayed spans/logs `observme.replayed=true`.
+- [x] Extend the `session_start` handler from task 17 to implement the startup recovery rules from `03-pi-event-and-session-model.md` §10–11: on an existing session, read the current header and latest validated active-branch `observme.correlation` custom entry, set `pi.session.id`/`pi.workflow.id`/`pi.agent.id`/resource attributes, never continuously tail the session file, and never replay historical telemetry automatically. Historical export is available only through the explicit, confirmed `/obs backfill` command and marks replayed records `observme.replayed=true`.
 
 #### Why
 
@@ -447,7 +447,7 @@ Recovery semantics prevent resumed sessions from duplicating history, leaking se
 
 #### How
 
-Add resume detection to session start, read only the minimal session header/correlation data, gate replay behind `replayOnStart`, and mark all replayed telemetry explicitly.
+Add resume detection to session start, read only the current header and branch-local minimal correlation state, and keep replay behind the explicit `/obs backfill` confirmation flow.
 
 #### Where
 
@@ -457,8 +457,8 @@ Add resume detection to session start, read only the minimal session header/corr
 
 #### Acceptance criteria
 
-- A test simulates resuming an existing session and asserts no historical telemetry is emitted unless `replayOnStart: true`.
-- When `replayOnStart: true`, replayed telemetry carries `observme.replayed=true`.
+- A test simulates resuming an existing session and asserts no historical telemetry is emitted automatically.
+- Explicit `/obs backfill` records carry `observme.replayed=true`.
 - A test asserts the extension never continuously tails the session file during normal operation.
 
 ### 20. Wire LLM request/response/usage handlers

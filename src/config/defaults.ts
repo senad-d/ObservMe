@@ -5,7 +5,6 @@ export const defaultObservMeConfig = {
   enabled: true,
   environment: "production",
   tenant: "platform",
-  replayOnStart: false,
   otlp: {
     endpoint: "https://otel-collector.example.com:4318",
     protocol: "http/protobuf",
@@ -14,7 +13,6 @@ export const defaultObservMeConfig = {
       Authorization: "Bearer ${OBSERVME_OTLP_TOKEN}",
     },
     tls: {
-      enabled: true,
       insecureSkipVerify: false,
     },
   },

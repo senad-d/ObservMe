@@ -10,6 +10,8 @@ export class SmokePiHarness {
       on: this.on.bind(this),
       registerCommand: this.registerCommand.bind(this),
       registerTool: this.registerTool.bind(this),
+      appendEntry: () => undefined,
+      getThinkingLevel: () => "medium",
     };
   }
 

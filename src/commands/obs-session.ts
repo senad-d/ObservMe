@@ -1,4 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ObservMeConfig } from "../config/schema.ts";
+import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
+import { buildGrafanaTraceLink } from "../query/trace-link.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 
 export interface ObsSessionCommandContext {
@@ -15,6 +18,7 @@ export interface ObsSessionSnapshot {
   readonly toolCalls: number;
   readonly costUsd: number;
   readonly traceLink?: string;
+  readonly traceLinkError?: string;
 }
 
 export interface ObsSessionRuntimeStatePatch {
@@ -25,12 +29,13 @@ export interface ObsSessionRuntimeStatePatch {
   readonly toolCalls?: number;
   readonly costUsd?: number;
   readonly traceLink?: string;
+  readonly traceLinkError?: string;
 }
 
 export interface StartObsSessionRuntimeStateOptions {
   readonly sessionId?: string;
   readonly traceId?: string;
-  readonly traceUrlTemplate?: string;
+  readonly config?: ObservMeConfig;
 }
 
 export type ObsSessionProvider = (ctx: ObsSessionCommandContext) => Promise<ObsSessionSnapshot> | ObsSessionSnapshot;
@@ -47,6 +52,12 @@ interface MutableObsSessionRuntimeState {
   toolCalls: number;
   costUsd: number;
   traceLink?: string;
+  traceLinkError?: string;
+}
+
+interface ObsSessionTraceLinkState {
+  readonly traceLink?: string;
+  readonly traceLinkError?: string;
 }
 
 const OBS_COMMAND_NAME = "obs";
@@ -77,7 +88,7 @@ export async function handleObsSessionCommand(
 
   try {
     const snapshot = await resolveObsSessionSnapshot(ctx, options);
-    await notifySession(ctx, renderObsSession(snapshot), "info");
+    await notifySession(ctx, renderObsSession(snapshot), snapshot.traceLinkError ? "warning" : "info");
   } catch (error) {
     await notifySession(ctx, `ObservMe session unavailable: ${formatError(error)}`, "error");
   }
@@ -103,12 +114,13 @@ export function renderObsSession(snapshot: ObsSessionSnapshot): string {
   ];
 
   if (normalized.traceLink) lines.push(`Open trace: ${normalized.traceLink}`);
+  else if (normalized.traceLinkError) lines.push(`Trace link unavailable: ${normalized.traceLinkError}`);
   return lines.join("\n");
 }
 
 export function startObsSessionRuntimeState(options: StartObsSessionRuntimeStateOptions): void {
   const traceId = normalizeTraceId(options.traceId);
-  const traceLink = buildObsSessionTraceLink(traceId, options.traceUrlTemplate);
+  const traceLinkState = createObsSessionTraceLinkState(options.config, traceId);
 
   replaceObsSessionRuntimeState({
     sessionId: normalizeString(options.sessionId),
@@ -117,8 +129,21 @@ export function startObsSessionRuntimeState(options: StartObsSessionRuntimeState
     llmCalls: 0,
     toolCalls: 0,
     costUsd: 0,
-    traceLink,
+    ...traceLinkState,
   });
+}
+
+function createObsSessionTraceLinkState(
+  config: ObservMeConfig | undefined,
+  traceId: string | undefined,
+): ObsSessionTraceLinkState {
+  if (!config || !traceId) return {};
+
+  try {
+    return { traceLink: buildGrafanaTraceLink(config, traceId) };
+  } catch (error) {
+    return { traceLinkError: sanitizeDiagnosticText(readDiagnosticMessage(error)) };
+  }
 }
 
 export function updateObsSessionRuntimeState(patch: ObsSessionRuntimeStatePatch): void {
@@ -129,6 +154,7 @@ export function updateObsSessionRuntimeState(patch: ObsSessionRuntimeStatePatch)
   if (patch.toolCalls !== undefined) runtimeSessionState.toolCalls = normalizeCount(patch.toolCalls);
   if (patch.costUsd !== undefined) runtimeSessionState.costUsd = normalizeCost(patch.costUsd);
   if (patch.traceLink !== undefined) runtimeSessionState.traceLink = normalizeString(patch.traceLink);
+  if (patch.traceLinkError !== undefined) runtimeSessionState.traceLinkError = normalizeString(patch.traceLinkError);
 }
 
 export function recordObsSessionTurn(count = 1): void {
@@ -150,20 +176,6 @@ export function recordObsSessionCost(costUsd: number | undefined): void {
 
 export function clearObsSessionRuntimeState(): void {
   replaceObsSessionRuntimeState(createEmptyObsSessionRuntimeState());
-}
-
-export function buildObsSessionTraceLink(traceId: string | undefined, traceUrlTemplate: string | undefined): string | undefined {
-  const template = normalizeString(traceUrlTemplate);
-  if (!traceId || !template) return undefined;
-
-  if (template.includes("{{traceId}}")) return template.replaceAll("{{traceId}}", encodeURIComponent(traceId));
-  if (template.includes("${traceId}")) return template.replaceAll("${traceId}", encodeURIComponent(traceId));
-  if (template.includes("{traceId}")) return template.replaceAll("{traceId}", encodeURIComponent(traceId));
-  if (template.includes("$traceId")) return template.replaceAll("$traceId", encodeURIComponent(traceId));
-  if (template.includes("%TRACE_ID%")) return template.replaceAll("%TRACE_ID%", encodeURIComponent(traceId));
-  if (template.includes("__TRACE_ID__")) return template.replaceAll("__TRACE_ID__", encodeURIComponent(traceId));
-  if (template.includes("...")) return template.replaceAll("...", encodeURIComponent(traceId));
-  return undefined;
 }
 
 class ObsSessionCommand {
@@ -194,6 +206,7 @@ function replaceObsSessionRuntimeState(state: MutableObsSessionRuntimeState): vo
   runtimeSessionState.toolCalls = state.toolCalls;
   runtimeSessionState.costUsd = state.costUsd;
   runtimeSessionState.traceLink = state.traceLink;
+  runtimeSessionState.traceLinkError = state.traceLinkError;
 }
 
 function createEmptyObsSessionRuntimeState(): MutableObsSessionRuntimeState {
@@ -214,6 +227,7 @@ function normalizeObsSessionSnapshot(snapshot: ObsSessionSnapshot): ObsSessionSn
     toolCalls: normalizeCount(snapshot.toolCalls),
     costUsd: normalizeCost(snapshot.costUsd),
     traceLink: normalizeString(snapshot.traceLink),
+    traceLinkError: normalizeString(snapshot.traceLinkError),
   };
 }
 

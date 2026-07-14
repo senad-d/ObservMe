@@ -345,7 +345,7 @@ export function buildLlmRequestAttributes(
     [LLM_ATTRIBUTES.GEN_AI_REQUEST_MODEL]: model,
     [LLM_ATTRIBUTES.GEN_AI_CONVERSATION_ID]: resolveCurrentSessionId(session),
     [LLM_ATTRIBUTES.PI_LLM_API]: readString(payload, "api") ?? readString(ctx.model, "api") ?? provider,
-    [LLM_ATTRIBUTES.PI_LLM_REQUEST_THINKING_LEVEL]: resolveSessionThinkingLevel(event, ctx, session),
+    [LLM_ATTRIBUTES.PI_LLM_REQUEST_THINKING_LEVEL]: resolveSessionThinkingLevel(event, session),
     [LLM_ATTRIBUTES.PI_LLM_REQUEST_MESSAGE_COUNT]: countPayloadItems(payload, ["messages", "contents", "input", "prompt"]),
     [LLM_ATTRIBUTES.PI_LLM_REQUEST_TOOL_SCHEMA_COUNT]: countPayloadItems(payload, ["tools", "toolSchemas"]),
     [LLM_ATTRIBUTES.PI_LLM_REQUEST_INPUT_CHARS]: safeJsonLength(payload),
@@ -1039,7 +1039,7 @@ export function buildModelChangeAttributes(event: unknown, ctx: ObservMeHandlerC
   });
 }
 
-export function buildThinkingLevelChangeAttributes(event: unknown, ctx: ObservMeHandlerContext, session: ObservMeTelemetrySession): AttributeMap {
+export function buildThinkingLevelChangeAttributes(event: unknown, session: ObservMeTelemetrySession): AttributeMap {
   return withoutUndefinedAttributes({
     ...buildLineageMetricSafeLogAttributes(session),
     [COMMON_SPAN_ATTRIBUTES.PI_AGENT_RUN_ID]: session.currentAgentRunId,
@@ -1047,7 +1047,7 @@ export function buildThinkingLevelChangeAttributes(event: unknown, ctx: ObservMe
     [COMMON_SPAN_ATTRIBUTES.PI_ENTRY_ID]: readChangeEntryId(event, "thinking_level_change"),
     [COMMON_SPAN_ATTRIBUTES.PI_ENTRY_PARENT_ID]: readChangeEntryParentId(event, "thinking_level_change"),
     [COMMON_SPAN_ATTRIBUTES.PI_ENTRY_TYPE]: readChangeEntryType(event, "thinking_level_change"),
-    [SESSION_ATTRIBUTES.PI_THINKING_LEVEL_CURRENT]: resolveSessionThinkingLevel(event, ctx, session),
+    [SESSION_ATTRIBUTES.PI_THINKING_LEVEL_CURRENT]: resolveSessionThinkingLevel(event, session),
   });
 }
 
@@ -1948,30 +1948,29 @@ export function extractThinkingText(value: unknown): string | undefined {
 }
 
 export function resolveSessionFilePath(event: unknown, ctx: ObservMeHandlerContext): string | undefined {
-  return readString(event, "sessionFile") ?? readString(event, "session_file") ?? readString(ctx, "sessionFile") ?? readString(ctx, "session_file");
+  return ctx.sessionManager?.getSessionFile() ?? readString(event, "sessionFile") ?? readString(event, "session_file");
 }
 
 export function resolveSessionId(event: unknown, ctx: ObservMeHandlerContext, lineage: AgentLineageContext): string {
   return (
+    ctx.sessionManager?.getSessionId() ??
     readString(event, "sessionId") ??
     readString(event, "session_id") ??
     readString(event, "id") ??
-    readString(ctx, "sessionId") ??
-    readString(ctx, "session_id") ??
     `session-${lineage.workflowId}`
   );
 }
 
-export function resolveModelProvider(event: unknown, ctx: ObservMeHandlerContext): string {
-  return readModelProvider(event, ctx) ?? "unknown";
+export function resolveModelProvider(ctx: ObservMeHandlerContext): string {
+  return readString(ctx.model, "provider") ?? "unknown";
 }
 
-export function resolveModelId(event: unknown, ctx: ObservMeHandlerContext): string {
-  return readModelId(event, ctx) ?? "unknown";
+export function resolveModelId(ctx: ObservMeHandlerContext): string {
+  return readString(ctx.model, "id") ?? "unknown";
 }
 
-export function resolveThinkingLevel(event: unknown, ctx: ObservMeHandlerContext): string {
-  return readThinkingLevel(event, ctx) ?? "unknown";
+export function resolveThinkingLevel(thinkingLevel: unknown): string {
+  return typeof thinkingLevel === "string" && thinkingLevel.trim() ? thinkingLevel.trim() : "unknown";
 }
 
 export function resolveSessionModelProvider(
@@ -1988,10 +1987,9 @@ export function resolveSessionModelId(event: unknown, ctx: ObservMeHandlerContex
 
 export function resolveSessionThinkingLevel(
   event: unknown,
-  ctx: ObservMeHandlerContext,
   session: ObservMeTelemetrySession,
 ): string {
-  return readThinkingLevel(event, ctx) ?? readString(session.sessionAttributes, SESSION_ATTRIBUTES.PI_THINKING_LEVEL_CURRENT) ?? "unknown";
+  return readThinkingLevel(event) ?? readString(session.sessionAttributes, SESSION_ATTRIBUTES.PI_THINKING_LEVEL_CURRENT) ?? "unknown";
 }
 
 export function readModelProvider(event: unknown, ctx: ObservMeHandlerContext): string | undefined {
@@ -2004,9 +2002,7 @@ export function readModelProvider(event: unknown, ctx: ObservMeHandlerContext): 
     readString(payload, "model_provider") ??
     readString(selectedModel, "provider") ??
     readString(selectedModel, "modelProvider") ??
-    readString(ctx.model, "provider") ??
-    readString(ctx, "modelProvider") ??
-    readString(ctx, "model_provider")
+    readString(ctx.model, "provider")
   );
 }
 
@@ -2022,14 +2018,11 @@ export function readModelId(event: unknown, ctx: ObservMeHandlerContext): string
     readString(payload, "selection") ??
     readString(payload, "model") ??
     readModelIdFromObject(selectedModel) ??
-    readString(ctx.model, "id") ??
-    readString(ctx.model, "model") ??
-    readString(ctx, "modelId") ??
-    readString(ctx, "model_id")
+    readString(ctx.model, "id")
   );
 }
 
-export function readThinkingLevel(event: unknown, ctx: ObservMeHandlerContext): string | undefined {
+export function readThinkingLevel(event: unknown): string | undefined {
   const payload = readChangePayload(event, "thinking_level_change");
   const selectedThinking = readUnknown(payload, "thinking") ?? readUnknown(payload, "selection");
 
@@ -2038,10 +2031,7 @@ export function readThinkingLevel(event: unknown, ctx: ObservMeHandlerContext): 
     readString(payload, "thinking_level") ??
     readString(payload, "level") ??
     readString(payload, "selection") ??
-    readString(selectedThinking, "level") ??
-    readString(ctx.thinking, "level") ??
-    readString(ctx, "thinkingLevel") ??
-    readString(ctx, "thinking_level")
+    readString(selectedThinking, "level")
   );
 }
 

@@ -3,6 +3,11 @@ import type { LoadSessionConfigOptions } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../query/prometheus.ts";
 import { createPrometheusQueryClient } from "../query/prometheus.ts";
+import {
+  boundObsCommandOutput,
+  normalizeObsBackendLabel,
+  selectObsCommandRows,
+} from "../safety/display-bounds.ts";
 import { completeObsSubcommand, parseObsSubcommandArgs } from "./obs-args.ts";
 import { loadObsCommandConfig, notifyObsCommand } from "./obs-command-support.ts";
 import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
@@ -114,15 +119,19 @@ export async function getObsCostSnapshot(
 
 export function renderObsCost(snapshot: ObsCostSnapshot): string {
   const rows = snapshot.rows.map(normalizeObsCostRow).filter(isObsCostRow);
-  const lines = [`Cost by model/provider (last ${snapshot.window})`];
+  const selection = selectObsCommandRows(rows);
+  const window = normalizeObsBackendLabel(snapshot.window) ?? OBS_COST_WINDOW;
+  const lines = [`Cost by model/provider (last ${window})`];
 
   if (rows.length === 0) {
     lines.push(appendObsRecoveryHint("No cost metrics found.", OBS_COST_NO_METRICS_NEXT_ACTION));
-    return lines.join("\n");
+    return boundObsCommandOutput(lines.join("\n"));
   }
 
-  lines.push(...rows.map(renderObsCostRow), `Total: ${formatUsd(sumObsCostRows(rows))}`);
-  return lines.join("\n");
+  lines.push(...selection.rows.map(renderObsCostRow));
+  if (selection.omittedCount > 0) lines.push(`… ${selection.omittedCount} cost row(s) omitted`);
+  lines.push(`Total: ${formatUsd(sumObsCostRows(rows))}`);
+  return boundObsCommandOutput(lines.join("\n"));
 }
 
 class ObsCostCommand {
@@ -187,12 +196,11 @@ function parseCostUsd(value: string | number | undefined): number | undefined {
 }
 
 function normalizeMetricLabel(value: string | undefined): string {
-  return normalizeOptionalString(value) ?? "unknown";
+  return normalizeObsBackendLabel(value) ?? "unknown";
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
+  return normalizeObsBackendLabel(value);
 }
 
 function renderObsCostRow(row: ObsCostRow): string {

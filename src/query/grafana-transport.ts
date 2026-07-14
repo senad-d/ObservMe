@@ -2,6 +2,7 @@ import type { ClientRequest, IncomingHttpHeaders, IncomingMessage, RequestOption
 import { request as requestHttp } from "node:http";
 import type { RequestOptions as HttpsRequestOptions } from "node:https";
 import { request as requestHttps } from "node:https";
+import { Readable } from "node:stream";
 import type { ObservMeConfig } from "../config/schema.ts";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
 import { hasUnresolvedEnvironmentPlaceholder } from "../safety/sensitive-input.ts";
@@ -47,6 +48,33 @@ const tlsErrorCodes = new Set<string>([
 ]);
 const dnsErrorCodes = new Set<string>(["ENOTFOUND", "EAI_AGAIN"]);
 const connectionTimeoutErrorCodes = new Set<string>(["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"]);
+
+type GrafanaResponseChunk = Uint8Array<ArrayBuffer>;
+
+class BufferedGrafanaResponseBodySource implements UnderlyingSource<GrafanaResponseChunk> {
+  #chunks: (GrafanaResponseChunk | undefined)[];
+  #index = 0;
+
+  constructor(chunks: GrafanaResponseChunk[]) {
+    this.#chunks = chunks;
+  }
+
+  pull(controller: ReadableStreamController<GrafanaResponseChunk>): void {
+    const chunk = this.#chunks[this.#index];
+    if (chunk === undefined) {
+      controller.close();
+      return;
+    }
+
+    this.#chunks[this.#index] = undefined;
+    this.#index += 1;
+    controller.enqueue(chunk);
+  }
+
+  cancel(): void {
+    this.#chunks = [];
+  }
+}
 
 export class GrafanaTransportClient {
   readonly #config: ObservMeConfig;
@@ -204,13 +232,119 @@ async function fetchGrafanaRequest(
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetcher(input, { ...init, signal: controller.signal });
+    const response = await fetcher(input, { ...init, signal: controller.signal });
+    return await readBoundedGrafanaResponse(response, MAX_GRAFANA_RESPONSE_BODY_BYTES, controller.signal);
   } catch (error) {
     throw normalizeGrafanaTransportError(error, timeoutMessage);
   } finally {
     clearTimeout(timeout);
   }
 }
+
+async function readBoundedGrafanaResponse(
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<Response> {
+  const declaredBytes = readDeclaredResponseBodyBytes(response.headers);
+  if (declaredBytes !== undefined && declaredBytes > maxBytes) {
+    const error = createGrafanaResponseBodyLimitError(maxBytes);
+    cancelGrafanaResponseBody(response.body, error);
+    throw error;
+  }
+
+  if (response.body === null) return response;
+
+  const chunks = await readBoundedResponseBody(response.body, maxBytes, signal);
+  return createBufferedGrafanaResponse(response, chunks);
+}
+
+async function readBoundedResponseBody(
+  body: ReadableStream<Uint8Array>,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<GrafanaResponseChunk[]> {
+  const reader = body.getReader();
+  const chunks: GrafanaResponseChunk[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const result = await readGrafanaResponseChunk(reader, signal);
+      if (result.done) return chunks;
+
+      totalBytes += result.value.byteLength;
+      if (totalBytes > maxBytes) throw createGrafanaResponseBodyLimitError(maxBytes);
+      chunks.push(normalizeGrafanaResponseChunk(result.value));
+    }
+  } catch (error) {
+    cancelGrafanaResponseReader(reader, error);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function readGrafanaResponseChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (signal.aborted) return Promise.reject(createAbortError());
+
+  return new Promise((resolve, reject) => {
+    const abortRead = () => {
+      const error = createAbortError();
+      cancelGrafanaResponseReader(reader, error);
+      reject(error);
+    };
+    const removeAbortListener = () => signal.removeEventListener("abort", abortRead);
+
+    signal.addEventListener("abort", abortRead, { once: true });
+    reader.read().then(
+      result => {
+        removeAbortListener();
+        resolve(result);
+      },
+      error => {
+        removeAbortListener();
+        reject(error);
+      },
+    );
+  });
+}
+
+function normalizeGrafanaResponseChunk(chunk: Uint8Array): GrafanaResponseChunk {
+  if (chunk.buffer instanceof ArrayBuffer) return chunk as GrafanaResponseChunk;
+  return new Uint8Array(chunk);
+}
+
+function readDeclaredResponseBodyBytes(headers: Headers): number | undefined {
+  const value = headers.get("content-length")?.trim();
+  if (!value || !/^\d+$/u.test(value)) return undefined;
+
+  const bytes = Number(value);
+  return Number.isSafeInteger(bytes) ? bytes : Number.POSITIVE_INFINITY;
+}
+
+function createBufferedGrafanaResponse(response: Response, chunks: GrafanaResponseChunk[]): Response {
+  const body = new ReadableStream<GrafanaResponseChunk>(new BufferedGrafanaResponseBodySource(chunks));
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+function cancelGrafanaResponseBody(body: ReadableStream<Uint8Array> | null, reason: unknown): void {
+  if (body === null) return;
+  void body.cancel(reason).catch(ignoreCancellationFailure);
+}
+
+function cancelGrafanaResponseReader(reader: ReadableStreamDefaultReader<Uint8Array>, reason: unknown): void {
+  void reader.cancel(reason).catch(ignoreCancellationFailure);
+}
+
+function ignoreCancellationFailure(): void {}
 
 function createGrafanaRequestInit(config: ObservMeConfig, options: GrafanaTransportFetchOptions): RequestInit {
   return {
@@ -239,7 +373,7 @@ export async function fetchGrafanaWithNode(
   const url = new URL(input);
   assertSupportedGrafanaUrl(url);
 
-  const requestOptions = createNodeRequestOptions(config, init);
+  const requestOptions = createGrafanaNodeRequestOptions(config, init);
   const body = normalizeRequestBody(init?.body);
   return requestNodeUrl(url, requestOptions, body, init?.signal);
 }
@@ -288,7 +422,10 @@ function describeMissingGrafanaAuth(config: ObservMeConfig): string {
   return "Grafana authentication is not configured. Configure query.grafana.token or query.grafana.username/password.";
 }
 
-function createNodeRequestOptions(config: ObservMeConfig, init: RequestInit | undefined): HttpRequestOptions | HttpsRequestOptions {
+export function createGrafanaNodeRequestOptions(
+  config: ObservMeConfig,
+  init?: RequestInit,
+): HttpRequestOptions | HttpsRequestOptions {
   const options: HttpRequestOptions | HttpsRequestOptions = {
     method: init?.method ?? "GET",
     headers: normalizeRequestHeaders(init?.headers),
@@ -345,7 +482,7 @@ async function requestNodeUrl(
   return new Promise((resolve, reject) => {
     const client = url.protocol === "https:" ? requestHttps : requestHttp;
     const request = client(url, options, response => {
-      readNodeResponse(response).then(resolve, reject);
+      resolve(createNodeResponse(response));
     });
     const removeAbortListener = attachAbortSignal(request, signal);
 
@@ -372,31 +509,11 @@ function attachAbortSignal(request: ClientRequest, signal: AbortSignal | null | 
   return () => signal.removeEventListener("abort", abortRequest);
 }
 
-async function readNodeResponse(response: IncomingMessage): Promise<Response> {
-  const body = await readNodeResponseBody(response, MAX_GRAFANA_RESPONSE_BODY_BYTES);
+function createNodeResponse(response: IncomingMessage): Response {
+  const body = Readable.toWeb(response) as ReadableStream<Uint8Array>;
   const status = normalizeResponseStatus(response.statusCode);
   const statusText = response.statusMessage ?? "";
-  return new Response(body.toString("utf8"), { status, statusText, headers: normalizeResponseHeaders(response.headers) });
-}
-
-async function readNodeResponseBody(response: IncomingMessage, maxBytes: number): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
-
-  for await (const chunk of response) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    totalBytes += buffer.byteLength;
-    if (totalBytes > maxBytes) throw destroyOversizedNodeResponse(response, maxBytes);
-    chunks.push(buffer);
-  }
-
-  return Buffer.concat(chunks, totalBytes);
-}
-
-function destroyOversizedNodeResponse(response: IncomingMessage, maxBytes: number): GrafanaResponseBodyLimitError {
-  const error = createGrafanaResponseBodyLimitError(maxBytes);
-  response.destroy(error);
-  return error;
+  return new Response(body, { status, statusText, headers: normalizeResponseHeaders(response.headers) });
 }
 
 function createGrafanaResponseBodyLimitError(maxBytes: number): GrafanaResponseBodyLimitError {

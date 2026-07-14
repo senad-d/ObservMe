@@ -13,7 +13,6 @@ const expectedDocumentedDefaults = {
   enabled: true,
   environment: "production",
   tenant: "platform",
-  replayOnStart: false,
   otlp: {
     endpoint: "https://otel-collector.example.com:4318",
     protocol: "http/protobuf",
@@ -22,7 +21,6 @@ const expectedDocumentedDefaults = {
       Authorization: "Bearer ${OBSERVME_OTLP_TOKEN}",
     },
     tls: {
-      enabled: true,
       insecureSkipVerify: false,
     },
   },
@@ -249,7 +247,6 @@ test("default config is privacy-preserving and capture-free", () => {
   assert.equal(defaultObservMeConfig.agent.propagateTraceContext, true);
   assert.equal(defaultObservMeConfig.agent.propagateToSubagents, true);
   assert.equal(defaultObservMeConfig.agent.writeCorrelationEntry, false);
-  assert.equal(defaultObservMeConfig.replayOnStart, false);
 });
 
 test("config schema exposes the documented top-level configuration shape", () => {

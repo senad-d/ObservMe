@@ -24,7 +24,7 @@ import {
 } from "../semconv/values.ts";
 import { BoundedMap } from "../util/bounded-map.ts";
 import type { AgentChildStatus, AgentTreeNode, AgentTreeSummary } from "./agent-tree-tracker.ts";
-import { AgentTreeTracker } from "./agent-tree-tracker.ts";
+import { AgentTreeTracker, isAgentStatusTransitionAllowed } from "./agent-tree-tracker.ts";
 import type { AgentLineageContext, AgentRole } from "./agent-lineage.ts";
 import { createAgentLineageContext, createPropagationEnvironment, sanitizePropagationEnvironment } from "./agent-lineage.ts";
 import { recordActiveSpanEnd, recordActiveSpanStart } from "./handler-internals.ts";
@@ -44,6 +44,7 @@ export type {
 
 export type SubagentSpawnType = "command" | "tool" | "extension" | "unknown";
 export type AgentJoinStatus = "completed" | "failed" | "cancelled" | "timeout" | "unknown" | "waiting";
+export type AgentTerminalStatus = Extract<AgentChildStatus, "completed" | "failed" | "cancelled">;
 export type AttributePrimitive = boolean | number | string | string[];
 export type AttributeMap = Record<string, AttributePrimitive>;
 
@@ -127,10 +128,27 @@ export interface StartedSubagentSpawn {
 
 export interface CompleteSubagentSpawnOptions {
   readonly childAgentId?: string;
-  readonly childStatus?: AgentChildStatus;
-  readonly outcome?: "completed" | "failed" | "cancelled";
+  readonly childStatus?: AgentTerminalStatus;
+  readonly outcome?: AgentTerminalStatus;
   readonly now?: () => number;
 }
+
+export type SubagentTransitionFailureReason =
+  | "spawn_not_found"
+  | "child_agent_mismatch"
+  | "invalid_terminal_transition";
+
+export type SubagentTransitionResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: SubagentTransitionFailureReason };
+
+interface ResolvedCompletionTransition {
+  readonly ok: true;
+  readonly childAgentId: string;
+  readonly status: AgentTerminalStatus;
+}
+
+type CompletionTransitionResult = ResolvedCompletionTransition | Extract<SubagentTransitionResult, { readonly ok: false }>;
 
 export interface FailSubagentSpawnOptions {
   readonly childAgentId?: string;
@@ -269,48 +287,55 @@ export function completeSubagentSpawn(
   session: SubagentTelemetrySession,
   spawnId: string,
   options: CompleteSubagentSpawnOptions = {},
-): void {
+): SubagentTransitionResult {
   const state = session.spans.activeSubagentSpawns.get(spawnId);
-  if (!state) return;
+  if (!state) return subagentTransitionFailure("spawn_not_found");
 
-  const childAgentId = options.childAgentId ?? state.childAgentId;
-  const childStatus = options.childStatus ?? "completed";
+  const transition = resolveCompletionTransition(session, state, options);
+  if (!transition.ok) return transition;
+
+  updateChildStatus(session, transition.childAgentId, transition.status);
+  recordChildFailureCompletion(session, transition.childAgentId, transition.status);
+  recordObsAgentsTreeState(session);
   const attributes = buildSubagentCompletionAttributes(
     session,
     spawnId,
-    childAgentId,
-    options.outcome ?? "completed",
+    transition.childAgentId,
+    transition.status,
     state.spawnReason,
   );
+  const eventName = terminalSpawnEventName(transition.status);
+  const severityText = transition.status === "completed" ? "INFO" : "ERROR";
 
-  updateChildStatus(session, childAgentId, childStatus);
-  recordChildFailureCompletion(session, childAgentId, childStatus);
-  recordObsAgentsTreeState(session);
   recordSubagentSpawnDuration(session, state, options);
   state.span.setAttributes(attributes);
-  state.span.setStatus({ code: SpanStatusCode.OK });
-  state.span.addEvent(LOG_EVENT_NAMES.AGENT_SPAWN_COMPLETED, attributes);
+  setTerminalSpawnStatus(state.span, transition.status);
+  state.span.addEvent(eventName, attributes);
   endSubagentSpan(session, state.span);
   session.spans.activeSubagentSpawns.delete(spawnId);
-  emitSubagentLog(session, LOG_EVENT_NAMES.AGENT_SPAWN_COMPLETED, attributes);
+  emitSubagentLog(session, eventName, attributes, severityText);
+  return subagentTransitionSuccess();
 }
 
 export function failSubagentSpawn(
   session: SubagentTelemetrySession,
   spawnId: string,
   options: FailSubagentSpawnOptions = {},
-): void {
+): SubagentTransitionResult {
   const state = session.spans.activeSubagentSpawns.get(spawnId);
-  if (!state) return;
+  if (!state) return subagentTransitionFailure("spawn_not_found");
 
   const childAgentId = options.childAgentId ?? state.childAgentId;
+  const transitionFailure = validateLauncherFailureTransition(session, state, childAgentId);
+  if (transitionFailure) return transitionFailure;
+
+  updateChildStatus(session, childAgentId, "failed");
+  recordObsAgentsTreeState(session);
   const attributes = {
     ...buildSubagentCompletionAttributes(session, spawnId, childAgentId, "failed", state.spawnReason),
     [LOG_ATTRIBUTES.ERROR_TYPE]: normalizeMetricLabel(options.errorClass ?? "subagent_spawn_error", "subagent_spawn_error"),
   };
 
-  updateChildStatus(session, childAgentId, "failed");
-  recordObsAgentsTreeState(session);
   recordSubagentSpawnDuration(session, state, options);
   state.span.setAttributes(attributes);
   state.span.setStatus({ code: SpanStatusCode.ERROR, message: String(attributes[LOG_ATTRIBUTES.ERROR_TYPE]) });
@@ -319,6 +344,7 @@ export function failSubagentSpawn(
   session.spans.activeSubagentSpawns.delete(spawnId);
   session.metrics.subagentSpawnFailures.add(1, subagentFailureMetricLabels(state.labels, attributes));
   emitSubagentLog(session, LOG_EVENT_NAMES.AGENT_SPAWN_FAILED, attributes, "ERROR");
+  return subagentTransitionSuccess();
 }
 
 export function buildSubagentPropagationEnvironment(
@@ -372,8 +398,8 @@ export function endAgentWait(
   session: SubagentTelemetrySession,
   waitId: string,
   options: AgentWaitJoinOptions = {},
-): void {
-  endWaitJoinSpan(session, waitId, options, "wait");
+): SubagentTransitionResult {
+  return endWaitJoinSpan(session, waitId, options, "wait");
 }
 
 export function recordAgentWait(session: SubagentTelemetrySession, options: AgentWaitJoinOptions = {}): StartedAgentWaitJoin {
@@ -393,8 +419,8 @@ export function endAgentJoin(
   session: SubagentTelemetrySession,
   joinId: string,
   options: AgentWaitJoinOptions = {},
-): void {
-  endWaitJoinSpan(session, joinId, options, "join");
+): SubagentTransitionResult {
+  return endWaitJoinSpan(session, joinId, options, "join");
 }
 
 export function recordAgentJoin(session: SubagentTelemetrySession, options: AgentWaitJoinOptions = {}): StartedAgentWaitJoin {
@@ -468,11 +494,13 @@ function endWaitJoinSpan(
   id: string,
   options: AgentWaitJoinOptions,
   kind: "wait" | "join",
-): void {
+): SubagentTransitionResult {
   const registry = waitJoinRegistry(session, kind);
   const state = registry.get(id);
-  if (!state) return;
+  if (!state) return subagentTransitionFailure("spawn_not_found");
 
+  const transition = validateWaitJoinTransition(session, options, kind);
+  if (!transition.ok) return transition;
   if (kind === "join" && options.childAgentId && options.childStatus) updateChildStatus(session, options.childAgentId, options.childStatus);
 
   const attributes = buildWaitJoinAttributes(session, options, state.reason);
@@ -489,6 +517,28 @@ function endWaitJoinSpan(
   recordWaitJoinDuration(session, durationMs, state.labels, kind);
   if (kind === "join") recordChildJoinAccounting(session, options);
   emitSubagentLog(session, eventName, attributes, waitJoinFailed(options) ? "ERROR" : "INFO");
+  return subagentTransitionSuccess();
+}
+
+function validateWaitJoinTransition(
+  session: SubagentTelemetrySession,
+  options: AgentWaitJoinOptions,
+  kind: "wait" | "join",
+): SubagentTransitionResult {
+  if (kind === "wait" || !options.childAgentId || !options.childStatus) return subagentTransitionSuccess();
+
+  if (options.spawnId) {
+    const spawn = session.spans.activeSubagentSpawns.get(options.spawnId);
+    if (spawn && spawn.childAgentId !== options.childAgentId) {
+      return subagentTransitionFailure("child_agent_mismatch");
+    }
+  }
+
+  const child = ensureAgentTree(session).getAgent(options.childAgentId);
+  if (child && !isAgentStatusTransitionAllowed(child.status, options.childStatus)) {
+    return subagentTransitionFailure("invalid_terminal_transition");
+  }
+  return subagentTransitionSuccess();
 }
 
 function waitJoinRegistry(
@@ -523,7 +573,7 @@ function recordSubagentSpawnDuration(
 function recordChildFailureCompletion(
   session: SubagentTelemetrySession,
   childAgentId: string,
-  childStatus: AgentChildStatus,
+  childStatus: AgentTerminalStatus,
 ): void {
   if (childStatus !== "failed") return;
   recordChildFailureAccounting(session, childAgentId, false);
@@ -644,11 +694,83 @@ function buildSubagentSpawnAttributes(
   });
 }
 
+function resolveCompletionTransition(
+  session: SubagentTelemetrySession,
+  state: SubagentSpawnState,
+  options: CompleteSubagentSpawnOptions,
+): CompletionTransitionResult {
+  const childAgentId = options.childAgentId ?? state.childAgentId;
+  const requestedStatus: unknown = options.childStatus ?? options.outcome ?? "completed";
+  if (!isAgentTerminalStatus(requestedStatus)) return subagentTransitionFailure("invalid_terminal_transition");
+  if (options.childStatus !== undefined && options.outcome !== undefined && options.childStatus !== options.outcome) {
+    return subagentTransitionFailure("invalid_terminal_transition");
+  }
+
+  const transitionFailure = validateSpawnChildTransition(session, state, childAgentId, requestedStatus);
+  if (transitionFailure) return transitionFailure;
+  return { ok: true, childAgentId, status: requestedStatus };
+}
+
+function validateSpawnChildTransition(
+  session: SubagentTelemetrySession,
+  state: SubagentSpawnState,
+  childAgentId: string,
+  status: AgentTerminalStatus,
+): Extract<SubagentTransitionResult, { readonly ok: false }> | undefined {
+  if (childAgentId !== state.childAgentId) return subagentTransitionFailure("child_agent_mismatch");
+
+  const child = ensureAgentTree(session).getAgent(childAgentId);
+  if (!child || !isAgentStatusTransitionAllowed(child.status, status)) {
+    return subagentTransitionFailure("invalid_terminal_transition");
+  }
+  return undefined;
+}
+
+function validateLauncherFailureTransition(
+  session: SubagentTelemetrySession,
+  state: SubagentSpawnState,
+  childAgentId: string,
+): Extract<SubagentTransitionResult, { readonly ok: false }> | undefined {
+  if (childAgentId !== state.childAgentId) return subagentTransitionFailure("child_agent_mismatch");
+
+  const child = ensureAgentTree(session).getAgent(childAgentId);
+  if (child?.status !== "starting") return subagentTransitionFailure("invalid_terminal_transition");
+  return undefined;
+}
+
+function isAgentTerminalStatus(value: unknown): value is AgentTerminalStatus {
+  return value === "completed" || value === "failed" || value === "cancelled";
+}
+
+function terminalSpawnEventName(status: AgentTerminalStatus): string {
+  if (status === "completed") return LOG_EVENT_NAMES.AGENT_SPAWN_COMPLETED;
+  if (status === "failed") return LOG_EVENT_NAMES.AGENT_SPAWN_FAILED;
+  return LOG_EVENT_NAMES.AGENT_SPAWN_CANCELLED;
+}
+
+function setTerminalSpawnStatus(span: Span, status: AgentTerminalStatus): void {
+  if (status === "completed") {
+    span.setStatus({ code: SpanStatusCode.OK });
+    return;
+  }
+  span.setStatus({ code: SpanStatusCode.ERROR, message: status });
+}
+
+function subagentTransitionSuccess(): SubagentTransitionResult {
+  return { ok: true };
+}
+
+function subagentTransitionFailure(
+  reason: SubagentTransitionFailureReason,
+): Extract<SubagentTransitionResult, { readonly ok: false }> {
+  return { ok: false, reason };
+}
+
 function buildSubagentCompletionAttributes(
   session: SubagentTelemetrySession,
   spawnId: string,
   childAgentId: string,
-  outcome: "completed" | "failed" | "cancelled",
+  outcome: AgentTerminalStatus,
   spawnReason: SubagentSpawnReason,
 ): AttributeMap {
   const summary = ensureAgentTree(session).summarize(session.lineage.rootAgentId);
@@ -736,8 +858,8 @@ function updateChildStatus(
   session: SubagentTelemetrySession,
   childAgentId: string,
   status: AgentChildStatus,
-): void {
-  ensureAgentTree(session).updateStatus(childAgentId, status);
+): AgentTreeNode | undefined {
+  return ensureAgentTree(session).updateStatus(childAgentId, status);
 }
 
 function recordOrphanAgent(session: SubagentTelemetrySession, node: AgentTreeNode): void {

@@ -1,11 +1,3 @@
 {
-  "start": {
-    "agentRunId": "fixture-agent-run",
-    "source": "user",
-    "prompt": "summarize fixture"
-  },
-  "end": {
-    "agentRunId": "fixture-agent-run",
-    "status": "ok"
-  }
+  "replacedBy": "test/support/pi-event-fixtures.ts"
 }

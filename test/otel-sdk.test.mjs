@@ -4,6 +4,7 @@ import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { createOtelSdkController, startOtelSdk } from "../src/otel/sdk.ts";
 import { runBoundedOtelOperation } from "../src/otel/shutdown.ts";
+import { createCompositeOtelSignalSdk } from "../src/pi/handlers.ts";
 
 let originalSetTimeout = globalThis.setTimeout;
 let timerCalls = 0;
@@ -65,6 +66,100 @@ test("startOtelSdk starts the session-scoped SDK exactly once", async () => {
   assert.equal(controller.state, "started");
 });
 
+test("multi-signal startup rolls back trace resources when metric startup fails", async () => {
+  await assertTransactionalSignalFailure("metric");
+});
+
+test("multi-signal startup rolls back trace and metric resources when log startup fails", async () => {
+  await assertTransactionalSignalFailure("log");
+});
+
+test("multi-signal startup cleans the attempted trace signal when trace startup fails", async () => {
+  await assertTransactionalSignalFailure("trace");
+});
+
+test("failed multi-signal startup bounds rollback timeout and leaves the controller non-retryable", async () => {
+  const signals = createSignalHarness("metric", { traceShutdown: neverResolve });
+  const config = structuredClone(defaultObservMeConfig);
+  config.shutdown.flushTimeoutMs = 20;
+  const composite = createCompositeOtelSignalSdk(signals.trace, signals.metric, signals.log, 20);
+  const controller = createOtelSdkController({
+    config,
+    sdkFactory: () => composite,
+  });
+
+  const failure = await measureRejection(() => controller.start());
+
+  assert.equal(failure.elapsedMs < 250, true);
+  assert.match(failure.error.message, /Cleanup exceeded its timeout; restart Pi before retrying/u);
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.sdk, undefined);
+  assert.equal(composite.state, "failed");
+  assert.deepEqual(signals.calls, {
+    trace: { starts: 1, shutdowns: 1 },
+    metric: { starts: 1, shutdowns: 1 },
+    log: { starts: 0, shutdowns: 0 },
+  });
+  await assert.rejects(() => controller.start(), /cannot be restarted after failed startup/u);
+});
+
+test("failed multi-signal startup attempts every rollback when one cleanup fails", async () => {
+  const signals = createSignalHarness("log", { metricShutdown: throwingCleanup });
+  const composite = createCompositeOtelSignalSdk(signals.trace, signals.metric, signals.log, 100);
+  const controller = createOtelSdkController({
+    config: defaultObservMeConfig,
+    sdkFactory: () => composite,
+  });
+
+  await assert.rejects(
+    () => controller.start(),
+    error => {
+      assert.match(error.message, /Cleanup also failed; restart Pi before retrying/u);
+      assert.doesNotMatch(error.message, /cleanup-token/u);
+      return true;
+    },
+  );
+
+  assert.equal(controller.state, "failed");
+  assert.equal(composite.state, "failed");
+  assert.deepEqual(signals.calls, {
+    trace: { starts: 1, shutdowns: 1 },
+    metric: { starts: 1, shutdowns: 1 },
+    log: { starts: 1, shutdowns: 1 },
+  });
+});
+
+test("controller sanitizes startup failures, cleans generic SDKs, and rejects reuse", async () => {
+  let shutdownCalls = 0;
+  const controller = createOtelSdkController({
+    config: defaultObservMeConfig,
+    sdkFactory: () => ({
+      start: () => {
+        throw new Error("Authorization: Bearer startup-token password=startup-password /tmp/private.env");
+      },
+      shutdown: () => {
+        shutdownCalls += 1;
+      },
+    }),
+  });
+
+  await assert.rejects(
+    () => controller.start(),
+    error => {
+      assert.match(error.message, /ObservMe OTEL startup failed/u);
+      assert.match(error.message, /Started providers were cleaned up/u);
+      assert.doesNotMatch(error.message, /startup-token|startup-password|private\.env/u);
+      return true;
+    },
+  );
+
+  assert.equal(shutdownCalls, 1);
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.sdk, undefined);
+  await assert.rejects(() => controller.start(), /cannot be restarted after failed startup/u);
+  assert.equal(shutdownCalls, 1);
+});
+
 test("bounded flush and shutdown complete within the configured timeout for unresponsive SDKs", async () => {
   const warnings = [];
   const controller = await startOtelSdk({
@@ -120,10 +215,69 @@ test("OTEL shutdown warnings sanitize exporter failure diagnostics", async () =>
   assert.doesNotMatch(warnings[0], /otel-token|otel-password|private\.env|bash export|env-secret/u);
 });
 
+async function assertTransactionalSignalFailure(failingSignal) {
+  const signals = createSignalHarness(failingSignal);
+  const composite = createCompositeOtelSignalSdk(signals.trace, signals.metric, signals.log, 100);
+  const controller = createOtelSdkController({
+    config: defaultObservMeConfig,
+    sdkFactory: () => composite,
+  });
+
+  await assert.rejects(() => controller.start(), new RegExp(`${failingSignal} startup failed`, "u"));
+
+  const failingIndex = ["trace", "metric", "log"].indexOf(failingSignal);
+  for (const [index, signal] of ["trace", "metric", "log"].entries()) {
+    assert.equal(signals.calls[signal].starts, index <= failingIndex ? 1 : 0);
+    assert.equal(signals.calls[signal].shutdowns, index <= failingIndex ? 1 : 0);
+  }
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.sdk, undefined);
+  assert.equal(composite.state, "failed");
+}
+
+function createSignalHarness(failingSignal, options = {}) {
+  const calls = {
+    trace: { starts: 0, shutdowns: 0 },
+    metric: { starts: 0, shutdowns: 0 },
+    log: { starts: 0, shutdowns: 0 },
+  };
+
+  return {
+    calls,
+    trace: createFakeSignalSdk("trace", calls.trace, failingSignal, options.traceShutdown),
+    metric: createFakeSignalSdk("metric", calls.metric, failingSignal, options.metricShutdown),
+    log: createFakeSignalSdk("log", calls.log, failingSignal, options.logShutdown),
+  };
+}
+
+function createFakeSignalSdk(name, calls, failingSignal, shutdownAction) {
+  return {
+    start: () => {
+      calls.starts += 1;
+      if (name === failingSignal) throw new Error(`${name} startup failed`);
+    },
+    forceFlush: async () => undefined,
+    shutdown: async () => {
+      calls.shutdowns += 1;
+      await shutdownAction?.();
+    },
+  };
+}
+
 async function measure(action) {
   const startedAt = performance.now();
   const result = await action();
   return { result, elapsedMs: performance.now() - startedAt };
+}
+
+async function measureRejection(action) {
+  const startedAt = performance.now();
+  try {
+    await action();
+    assert.fail("expected action to reject");
+  } catch (error) {
+    return { error, elapsedMs: performance.now() - startedAt };
+  }
 }
 
 function trackSetTimeout(...args) {
@@ -133,4 +287,12 @@ function trackSetTimeout(...args) {
 
 function throwingOperation() {
   throw new Error("exporter failed");
+}
+
+function throwingCleanup() {
+  throw new Error("cleanup failed Authorization: Bearer cleanup-token");
+}
+
+function neverResolve() {
+  return new Promise(() => undefined);
 }

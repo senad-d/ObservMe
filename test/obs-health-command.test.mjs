@@ -84,6 +84,8 @@ test("/obs health checks Collector, Grafana, and configured datasources with the
   });
 
   assert.equal(snapshot.timeoutMs, 1234);
+  assert.match(renderObsHealth(snapshot), /Collector transport security: plaintext HTTP/u);
+  assert.match(renderObsHealth(snapshot), /Grafana transport security: plaintext HTTP/u);
   assert.equal(renderObsHealth(snapshot).includes("Collector: reachable"), true);
   assert.deepEqual(
     calls.map(call => call.input),
@@ -97,6 +99,25 @@ test("/obs health checks Collector, Grafana, and configured datasources with the
   );
   assert.equal(calls[0].init.headers.Authorization, "Bearer otlp-token");
   assert.equal(calls[1].init.headers.Authorization, "Bearer grafana-token");
+});
+
+test("/obs health reports acknowledged TLS verification bypasses without credentials", async () => {
+  const config = cloneDefaultConfig();
+  config.otlp.tls.insecureSkipVerify = true;
+  config.query.grafana.tls.insecureSkipVerify = true;
+  config.privacy.allowInsecureTransport = true;
+  config.otlp.headers = { Authorization: "Bearer private-otlp-token" };
+  config.query.grafana.token = "private-grafana-token";
+
+  const snapshot = await getObsHealthSnapshot(createCommandContext([]), {
+    loadConfig: async () => config,
+    fetch: async () => createHealthyResponse(),
+  });
+  const output = renderObsHealth(snapshot);
+
+  assert.match(output, /Collector transport security: TLS certificate verification disabled \(explicitly acknowledged\)/u);
+  assert.match(output, /Grafana transport security: TLS certificate verification disabled \(explicitly acknowledged\)/u);
+  assert.doesNotMatch(output, /private-otlp-token|private-grafana-token/u);
 });
 
 test("/obs health reports unresolved Grafana auth before making Grafana calls", async () => {

@@ -6,9 +6,15 @@ import {
   OBS_TOOLS_CALLS_PROMQL,
   OBS_TOOLS_FAILURES_PROMQL,
   getObsToolsSnapshot,
+  handleObsToolsCommand,
   renderObsTools,
 } from "../src/commands/obs-tools.ts";
 import { findForbiddenPrometheusLabels } from "../src/query/prometheus.ts";
+import {
+  OBS_BACKEND_LABEL_MAX_CHARS,
+  OBS_COMMAND_OUTPUT_MAX_CHARS,
+  OBS_COMMAND_RENDER_ROW_LIMIT,
+} from "../src/safety/display-bounds.ts";
 
 function cloneDefaultConfig() {
   return structuredClone(defaultObservMeConfig);
@@ -108,6 +114,39 @@ test("renderObsTools reports tool call and failure rates", () => {
       "read / NotFound: 0.01/s",
     ].join("\n"),
   );
+});
+
+test("/obs tools bounds injected provider snapshots with maximum-size rows", async () => {
+  const notifications = [];
+  const rowCount = OBS_COMMAND_RENDER_ROW_LIMIT + 3;
+  const calls = Array.from({ length: rowCount }, () => ({
+    toolName: `tool\nname-${"界".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`,
+    ratePerSecond: 0.25,
+  }));
+  const failures = Array.from({ length: rowCount }, () => ({
+    toolName: `tool\u0007name-${"t".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`,
+    errorClass: `Timeout\u2028${"🙂".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`,
+    ratePerSecond: 0.05,
+  }));
+
+  await handleObsToolsCommand("tools", createCommandContext(notifications), {
+    getTools: () => ({
+      window: "1h",
+      callQuery: OBS_TOOLS_CALLS_PROMQL,
+      failureQuery: OBS_TOOLS_FAILURES_PROMQL,
+      calls,
+      failures,
+    }),
+  });
+
+  const output = notifications[0].message;
+  assert.equal(notifications[0].type, "info");
+  assert.ok(output.length <= OBS_COMMAND_OUTPUT_MAX_CHARS);
+  assert.match(output, /tool name-.*…: 0\.25\/s/u);
+  assert.match(output, /… 3 tool call row\(s\) omitted/u);
+  assert.match(output, /… 3 tool failure row\(s\) omitted/u);
+  assert.doesNotMatch(output, /tool\nname/u);
+  assert.doesNotMatch(output.replaceAll("\n", ""), /[\p{Cc}\p{Zl}\p{Zp}]/u);
 });
 
 test("/obs tools queries documented PromQL with configured timeout and result limit", async () => {

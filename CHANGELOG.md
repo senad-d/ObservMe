@@ -21,6 +21,7 @@
 
 ### Changed
 
+- Established a typed Pi event registration contract, removed non-event legacy registrations, pinned the release-resolved Pi API, and added minimum/release compatibility validation with pre-registration diagnostics.
 - Completed production active-agent lease documentation, raw-query migration guidance, GitHub Actions/self-hosted clock and cleanup runbooks, missing/expired-lease troubleshooting, Collector restart semantics, and sanitized release-validation evidence.
 - Reframed the Collector's five-minute Prometheus `metric_expiration` as exporter-wide stale-series/cardinality cleanup, longer than the default active-agent lease and independent of leased liveness.
 - Migrated active-agent dashboard totals, bounded breakdowns, aggregate topology inputs, and stuck-high alerts to leased activity, with raw/expired-claim diagnostics and a deployment-tunable stale-claim alert.
@@ -38,6 +39,19 @@
 
 ### Fixed
 
+- Validated OTLP endpoints as secret-free absolute HTTP(S) URLs and constructed signal exporter paths with deterministic URL pathname semantics.
+- Implemented opt-in, versioned, active-branch correlation persistence with bounded validation and idempotent reload recovery, and removed unsupported automatic replay configuration and synthetic duplicate startup telemetry.
+- Bound live telemetry, query commands, and backfill correlation to Pi's typed session manager, preserved identity across reload, adopted replacement-session identity, and refreshed active metadata on session rename.
+- Bounded and sanitized backend-derived `/obs cost`, `/obs tools`, and `/obs agents` labels, rows, and notification output with visible Unicode-safe truncation.
+- Unified `/obs session`, `/obs trace`, and `/obs link` on one validated trace-link builder with canonical placeholders, structured Grafana fallback URLs, and bounded configuration diagnostics.
+- Made multi-signal OpenTelemetry startup transactional with bounded rollback, a terminal failed controller state, sanitized Pi diagnostics, and clean later-session recovery.
+- Preserved malformed environment and file configuration as bounded rejection diagnostics, with source-specific `/obs status` reporting and strict trusted `.env` parsing.
+- Enforced coherent terminal subagent transitions across the integration API, agent tree, spans, events, metrics, runtime state, waits, and joins.
+- Enforced production acknowledgement for Grafana and OTLP certificate-verification bypasses, wired retained OTLP TLS behavior into every exporter, and exposed effective transport security in `/obs status` and `/obs health`.
+- Kept live-session and backfill OpenTelemetry providers scoped to ObservMe instead of replacing process-global providers.
+- Redacted complete supported PEM private-key blocks, including malformed/truncated input, across live and backfilled content capture.
+- Bounded all Grafana health and datasource response bodies before JSON parsing across default, custom Node, and injected fetch transports.
+- Enforced top-level ObservMe disablement across lifecycle startup, runtime state, integration availability, and all OpenTelemetry signal factories.
 - Restored clean npm dependency resolution by pinning TypeScript to the latest release supported by `typescript-eslint`.
 - Integrated active-agent lease activation and deactivation with clean shutdown, duplicate/reload replacement, resume, and failed-start cleanup so final flushes cannot renew stale activity.
 - Fixed session, workflow, agent, turn, LLM, tool, Bash, histogram, active-span, failure/recovery, and session-count telemetry accuracy.

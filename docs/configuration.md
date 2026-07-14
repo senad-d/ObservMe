@@ -18,12 +18,12 @@ The standard Pi distribution currently resolves this to `.pi/observme.yaml`. Obs
 
 Edit the project config file (`.pi/observme.yaml` in the standard distribution) where you run Pi:
 
-- `otlp.endpoint` and `otlp.signalEndpoints` — your OpenTelemetry Collector URLs.
+- `otlp.endpoint` and `otlp.signalEndpoints` — absolute HTTP(S) OpenTelemetry Collector URLs. Base endpoints may include an intentional path; ObservMe appends one `/v1/{signal}` suffix with URL pathname semantics. Signal-specific endpoints must already end in the matching signal path. Keep credentials in `otlp.headers`; endpoint userinfo, unresolved placeholders, queries, and fragments are rejected.
 - `resource.attributes` — service name, project name, tenant, and deployment environment labels.
 - `capture` — whether prompts, responses, thinking, tool data, bash data, and file paths are exported. For local debugging, set only the specific fields you need to `true`.
 - `privacy` — redaction, unsafe-capture acknowledgement, insecure transport, hash salt env var, and path handling. Keep `redactionEnabled: true`; set `allowUnsafeCapture: true` only when you intentionally accept unredacted sensitive-content export from this trusted project. Live telemetry and `/obs backfill` use the same policy: disabled capture omits content, enabled redaction redacts then truncates, redaction failures drop content, and `redactionEnabled: false` with `allowUnsafeCapture: true` exports raw truncated content.
 - `query.grafana` — Grafana URL, datasource UIDs, TLS, and IPv4 transport settings for `/obs` query commands.
-- `query.links.traceUrlTemplate` — the Grafana Explore trace-link template used by `/obs trace` and `/obs link`.
+- `query.links.traceUrlTemplate` — the canonical Grafana Explore trace-link template used by `/obs session`, `/obs trace`, and `/obs link`; use `{traceId}`, `{{traceId}}`, `${traceId}`, or `%TRACE_ID%`, or keep the generated `...` structured fallback.
 - `metrics.activeAgentLeaseDurationMillis` — how long the last exported active-agent lease remains valid. The default is `60000` ms, the supported range is `10000`–`300000` ms, and the value must be at least `(2 * metrics.exportIntervalMillis) + 5000` ms. `OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS` overrides YAML through the normal precedence rules.
 
 The shipped dashboards and alerts combine a positive `observme_active_agents` lifecycle claim with a current lease; raw active-claim sums are diagnostic only after an ungraceful exit. Clean shutdown reaches zero after normal export/scrape propagation. Crash, `SIGKILL`, forced GitHub Actions cancellation, or runner loss converges within the lease plus up to 5 seconds of supported clock skew and one Prometheus scrape/evaluation interval, without restarting the Collector. Keep producer and Prometheus clocks synchronized within 5 seconds; GitHub-hosted runners meet this expectation, while self-hosted runners require reliable NTP or an equivalent time service.

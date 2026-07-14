@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { Histogram, Span } from "@opentelemetry/api";
-import { trace } from "@opentelemetry/api";
 import type { ObservMeConfig } from "../config/schema.ts";
-import { ObservMeLogSdk } from "../otel/logs.ts";
-import { ObservMeMetricSdk } from "../otel/metrics.ts";
-import { startOtelSdk } from "../otel/sdk.ts";
-import { ObservMeTraceSdk } from "../otel/traces.ts";
+import { createLogSessionScopedOtelSdk, type ObservMeLogSdk } from "../otel/logs.ts";
+import { createMetricSessionScopedOtelSdk, type ObservMeMetricSdk } from "../otel/metrics.ts";
+import { startOtelSdk, toOtelStartupError, type SessionScopedOtelSdk } from "../otel/sdk.ts";
+import { runBoundedOtelOperation } from "../otel/shutdown.ts";
+import { createTraceSessionScopedOtelSdk, type ObservMeTraceSdk } from "../otel/traces.ts";
 import { inheritTenantSaltEnvironment } from "../privacy/hash.ts";
 import { LOG_ATTRIBUTES, RESOURCE_ATTRIBUTES } from "../semconv/attributes.ts";
 import {
@@ -49,9 +49,12 @@ import type {
   HandlerRegistration,
   HandlerSessionState,
   ObservMeHandlerContext,
+  PiEventName,
+  PiHandler,
   ObservMeMetrics,
   ObservMePiApi,
   ObservMeTelemetrySession,
+  RuntimeHandler,
   SpanRegistry,
   StartSessionTelemetryOptions,
   TelemetryMeter,
@@ -66,6 +69,7 @@ const piApiCompatibilityErrorMessage =
   "ObservMe/Pi API compatibility error: expected Pi ExtensionAPI with on(eventName, handler) before registering ObservMe handlers.";
 const eventRegistrationOrder = [
   "session_start",
+  "session_info_changed",
   "agent_start",
   "turn_start",
   "before_provider_request",
@@ -76,18 +80,15 @@ const eventRegistrationOrder = [
   "tool_result",
   "tool_execution_end",
   "user_bash",
-  "bashExecution",
   "model_select",
-  "model_change",
   "thinking_level_select",
-  "thinking_level_change",
   "session_before_tree",
   "session_tree",
   "session_compact",
   "turn_end",
   "agent_end",
   "session_shutdown",
-] as const;
+] as const satisfies readonly PiEventName[];
 const eventRegistrationIndexes = createEventRegistrationIndexes();
 
 let defaultHandlerErrorRecorder: HandlerErrorRecorder = recordInternalErrorFallback;
@@ -104,8 +105,8 @@ export class HandlerRegistrar {
     this.#errorRecorder = errorRecorder;
   }
 
-  add(eventName: string, handler: Handler): void {
-    this.#registrations.push({ eventName, handler });
+  add<Name extends PiEventName>(eventName: Name, handler: PiHandler<Name>): void {
+    this.#registrations.push({ eventName, handler: handler as unknown as RuntimeHandler });
   }
 
   commit(): void {
@@ -125,11 +126,12 @@ export class HandlerRegistrar {
 export class SerializedLifecycleQueue {
   #previous = Promise.resolve();
 
-  wrap(fn: Handler): Handler {
-    return runSerializedLifecycleHandler.bind(undefined, this, fn);
+  wrap<Name extends PiEventName>(fn: PiHandler<Name>): PiHandler<Name> {
+    const runtimeHandler = fn as unknown as RuntimeHandler;
+    return runSerializedLifecycleHandler.bind(undefined, this, runtimeHandler) as PiHandler<Name>;
   }
 
-  run(fn: Handler, event: unknown, ctx: ObservMeHandlerContext): Promise<void> {
+  run(fn: RuntimeHandler, event: unknown, ctx: Parameters<RuntimeHandler>[1]): Promise<void> {
     // Pi docs guarantee /new, /resume, and /fork emit session_shutdown before session_start;
     // ctx.reload() emits session_shutdown then session_start while the old command call frame can
     // continue. ObservMe queues both lifecycle handlers together so async startup, shutdown,
@@ -146,19 +148,30 @@ export function resolveObservMePiApi(pi: unknown): ObservMePiApi {
   const on = pi.on;
   if (typeof on !== "function") throw new TypeError(piApiCompatibilityErrorMessage);
 
-  return { on: callPiOn.bind(undefined, pi, on as ObservMePiApi["on"]) };
+  const appendEntry = typeof pi.appendEntry === "function"
+    ? (pi.appendEntry.bind(pi) as NonNullable<ObservMePiApi["appendEntry"]>)
+    : undefined;
+  const getThinkingLevel = typeof pi.getThinkingLevel === "function"
+    ? (pi.getThinkingLevel.bind(pi) as NonNullable<ObservMePiApi["getThinkingLevel"]>)
+    : undefined;
+
+  return {
+    on: on.bind(pi) as ObservMePiApi["on"],
+    appendEntry,
+    getThinkingLevel,
+  };
 }
 
 export function setDefaultHandlerErrorRecorder(recorder: HandlerErrorRecorder): void {
   defaultHandlerErrorRecorder = recorder;
 }
 
-export function safeHandler(
+export function safeHandler<Event = unknown, Context = ObservMeHandlerContext>(
   name: string,
-  fn: Handler,
+  fn: Handler<Event, Context>,
   recorder: HandlerErrorRecorder = defaultHandlerErrorRecorder,
-): Handler {
-  return runSafeHandler.bind(undefined, name, fn, recorder);
+): Handler<Event, Context> {
+  return (runSafeHandler<Event, Context>).bind(undefined, name, fn, recorder);
 }
 
 export function createStatefulHandlerErrorRecorder(
@@ -169,17 +182,24 @@ export function createStatefulHandlerErrorRecorder(
 }
 
 export async function startSessionTelemetry(options: StartSessionTelemetryOptions): Promise<ObservMeTelemetrySession> {
+  if (!options.config.enabled) throw new Error("ObservMe telemetry cannot start while ObservMe is disabled.");
+
   const config = withTelemetrySessionResourceAttributes(options.config, options.lineage);
-  const traceSdk = new ObservMeTraceSdk({ config });
-  const metricSdk = new ObservMeMetricSdk({ config });
-  const logSdk = new ObservMeLogSdk({ config });
-  const signalSdk = createCompositeOtelSignalSdk(traceSdk, metricSdk, logSdk);
+  const traceSdk = createTraceSessionScopedOtelSdk({ config, agent: options.lineage });
+  const metricSdk = createMetricSessionScopedOtelSdk({ config, agent: options.lineage });
+  const logSdk = createLogSessionScopedOtelSdk({ config, agent: options.lineage });
+  const signalSdk = createCompositeOtelSignalSdk(
+    traceSdk,
+    metricSdk,
+    logSdk,
+    config.shutdown.flushTimeoutMs,
+  );
   const controller = await startOtelSdk({
     config,
     agent: options.lineage,
     sdkFactory: returnCompositeSignalSdk.bind(undefined, signalSdk),
   });
-  const tracer = traceSdk.tracer ?? trace.getTracer("@senad-d/observme");
+  const tracer = traceSdk.tracer;
   const metrics = createObservMeMetrics(metricSdk.meter);
   const sessionReference: HandlerSessionState = {};
   const getTelemetryDropTarget = resolveSessionTelemetryDropTarget.bind(undefined, sessionReference, metrics);
@@ -220,8 +240,9 @@ export function createCompositeOtelSignalSdk(
   traceSdk: ObservMeTraceSdk,
   metricSdk: ObservMeMetricSdk,
   logSdk: ObservMeLogSdk,
+  cleanupTimeoutMs = 3_000,
 ): CompositeOtelSignalSdk {
-  return new ObservMeCompositeOtelSignalSdk(traceSdk, metricSdk, logSdk);
+  return new ObservMeCompositeOtelSignalSdk(traceSdk, metricSdk, logSdk, cleanupTimeoutMs);
 }
 
 export function createObservMeMetrics(meter: TelemetryMeter): ObservMeMetrics {
@@ -396,8 +417,8 @@ export function buildTelemetryInstanceResourceAttributes(instanceId: string): Re
   };
 }
 
-function createEventRegistrationIndexes(): Map<string, number> {
-  const indexes = new Map<string, number>();
+function createEventRegistrationIndexes(): Map<PiEventName, number> {
+  const indexes = new Map<PiEventName, number>();
   for (const [index, name] of eventRegistrationOrder.entries()) indexes.set(name, index);
   return indexes;
 }
@@ -410,30 +431,30 @@ function compareHandlerRegistrations(left: HandlerRegistration, right: HandlerRe
   return registrationIndex(left.eventName) - registrationIndex(right.eventName);
 }
 
-function registrationIndex(eventName: string): number {
+function registrationIndex(eventName: PiEventName): number {
   return eventRegistrationIndexes.get(eventName) ?? eventRegistrationOrder.length;
 }
 
 function registerObservedHandler(
   api: ObservMePiApi,
-  name: string,
-  handler: Handler,
+  name: PiEventName,
+  handler: RuntimeHandler,
   state: HandlerSessionState,
   errorRecorder: HandlerErrorRecorder,
 ): void {
   api.on(name, safeHandler(name, observeHandler(name, handler, state), errorRecorder));
 }
 
-function observeHandler(name: string, fn: Handler, state: HandlerSessionState): Handler {
+function observeHandler(name: string, fn: RuntimeHandler, state: HandlerSessionState): RuntimeHandler {
   return runObservedHandler.bind(undefined, name, fn, state);
 }
 
 async function runObservedHandler(
   name: string,
-  fn: Handler,
+  fn: RuntimeHandler,
   state: HandlerSessionState,
   event: unknown,
-  ctx: ObservMeHandlerContext,
+  ctx: Parameters<RuntimeHandler>[1],
 ): Promise<void> {
   const startedAtMs = Date.now();
   const sessionBefore = state.session;
@@ -471,12 +492,12 @@ function recordHandlerObservation(
   session.metrics.handlerDurationMs.record(Math.max(0, Date.now() - startedAtMs), { operation, status });
 }
 
-async function runSafeHandler(
+async function runSafeHandler<Event, Context>(
   name: string,
-  fn: Handler,
+  fn: Handler<Event, Context>,
   recorder: HandlerErrorRecorder,
-  event: unknown,
-  ctx: ObservMeHandlerContext,
+  event: Event,
+  ctx: Context,
 ): Promise<void> {
   try {
     await fn(event, ctx);
@@ -487,23 +508,23 @@ async function runSafeHandler(
 
 async function runSerializedLifecycleHandler(
   queue: SerializedLifecycleQueue,
-  fn: Handler,
+  fn: RuntimeHandler,
   event: unknown,
-  ctx: ObservMeHandlerContext,
+  ctx: Parameters<RuntimeHandler>[1],
 ): Promise<void> {
   await queue.run(fn, event, ctx);
 }
 
-async function invokeHandler(fn: Handler, event: unknown, ctx: ObservMeHandlerContext): Promise<void> {
+async function invokeHandler(
+  fn: RuntimeHandler,
+  event: unknown,
+  ctx: Parameters<RuntimeHandler>[1],
+): Promise<void> {
   await fn(event, ctx);
 }
 
 function ignoreLifecycleQueueError(): undefined {
   return undefined;
-}
-
-function callPiOn(pi: Record<string, unknown>, on: ObservMePiApi["on"], eventName: string, handler: Handler): void {
-  on.call(pi, eventName, handler);
 }
 
 function returnCompositeSignalSdk(signalSdk: CompositeOtelSignalSdk): CompositeOtelSignalSdk {
@@ -628,17 +649,46 @@ class ObservMeCompositeOtelSignalSdk implements CompositeOtelSignalSdk {
   readonly traceSdk: ObservMeTraceSdk;
   readonly metricSdk: ObservMeMetricSdk;
   readonly logSdk: ObservMeLogSdk;
+  readonly #cleanupTimeoutMs: number;
+  readonly #startedSignalSdks: SessionScopedOtelSdk[] = [];
+  #startingSignalSdk?: SessionScopedOtelSdk;
+  #state: CompositeOtelSignalSdk["state"] = "idle";
 
-  constructor(traceSdk: ObservMeTraceSdk, metricSdk: ObservMeMetricSdk, logSdk: ObservMeLogSdk) {
+  constructor(
+    traceSdk: ObservMeTraceSdk,
+    metricSdk: ObservMeMetricSdk,
+    logSdk: ObservMeLogSdk,
+    cleanupTimeoutMs: number,
+  ) {
     this.traceSdk = traceSdk;
     this.metricSdk = metricSdk;
     this.logSdk = logSdk;
+    this.#cleanupTimeoutMs = cleanupTimeoutMs;
   }
 
-  start(): void {
-    this.traceSdk.start();
-    this.metricSdk.start();
-    this.logSdk.start();
+  get state(): CompositeOtelSignalSdk["state"] {
+    return this.#state;
+  }
+
+  async start(): Promise<void> {
+    if (this.#state === "started") return;
+    if (this.#state !== "idle") throw new Error(`ObservMe OTEL signal SDK cannot start from ${this.#state}.`);
+
+    this.#state = "starting";
+    try {
+      await this.startSignalSdk(this.traceSdk);
+      await this.startSignalSdk(this.metricSdk);
+      await this.startSignalSdk(this.logSdk);
+      this.#state = "started";
+    } catch (error) {
+      const cleanup = await runBoundedOtelOperation(
+        "shutdown",
+        this.shutdownStartedSignalSdks.bind(this),
+        this.#cleanupTimeoutMs,
+      );
+      this.#state = "failed";
+      throw toOtelStartupError(error, cleanup);
+    }
   }
 
   async forceFlush(): Promise<void> {
@@ -646,6 +696,43 @@ class ObservMeCompositeOtelSignalSdk implements CompositeOtelSignalSdk {
   }
 
   async shutdown(): Promise<void> {
-    await Promise.all([this.traceSdk.shutdown(), this.metricSdk.shutdown(), this.logSdk.shutdown()]);
+    if (this.#state === "shutdown") return;
+
+    try {
+      await this.shutdownStartedSignalSdks();
+    } finally {
+      this.#state = "shutdown";
+    }
   }
+
+  private async startSignalSdk(sdk: SessionScopedOtelSdk): Promise<void> {
+    this.#startingSignalSdk = sdk;
+    await sdk.start?.();
+    this.#startedSignalSdks.push(sdk);
+    this.#startingSignalSdk = undefined;
+  }
+
+  private async shutdownStartedSignalSdks(): Promise<void> {
+    const signalSdks = this.takeStartedSignalSdks();
+    const results = await Promise.allSettled(signalSdks.map(shutdownCompositeSignalSdk));
+
+    for (const result of results) {
+      if (result.status === "rejected") throw result.reason;
+    }
+  }
+
+  private takeStartedSignalSdks(): SessionScopedOtelSdk[] {
+    const signalSdks = [...this.#startedSignalSdks];
+    if (this.#startingSignalSdk && !signalSdks.includes(this.#startingSignalSdk)) {
+      signalSdks.push(this.#startingSignalSdk);
+    }
+
+    this.#startedSignalSdks.length = 0;
+    this.#startingSignalSdk = undefined;
+    return signalSdks.reverse();
+  }
+}
+
+async function shutdownCompositeSignalSdk(sdk: SessionScopedOtelSdk): Promise<void> {
+  await sdk.shutdown?.();
 }

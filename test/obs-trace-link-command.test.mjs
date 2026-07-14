@@ -61,7 +61,7 @@ test("/obs trace builds current-session links with the configured Grafana URL te
   const config = cloneDefaultConfig();
   config.query.links.traceUrlTemplate = "https://grafana.local/explore?trace={traceId}&ds={tempoDatasourceUid}";
   config.query.grafana.datasourceUids.tempo = "tempo/main";
-  startObsSessionRuntimeState({ sessionId: "session-1", traceId, traceUrlTemplate: config.query.links.traceUrlTemplate });
+  startObsSessionRuntimeState({ sessionId: "session-1", traceId, config });
 
   let fetchCalls = 0;
   const snapshot = await getObsTraceSnapshot(createCommandContext([]), { scope: "current-session" }, {
@@ -97,7 +97,7 @@ test("/obs trace --last-turn returns the current trace once a turn has been obse
 
   const config = cloneDefaultConfig();
   config.query.links.traceUrlTemplate = "https://grafana.local/explore?trace=%TRACE_ID%";
-  startObsSessionRuntimeState({ sessionId: "session-turn", traceId, traceUrlTemplate: config.query.links.traceUrlTemplate });
+  startObsSessionRuntimeState({ sessionId: "session-turn", traceId, config });
   recordObsSessionTurn();
 
   const notifications = [];

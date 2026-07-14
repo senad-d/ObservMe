@@ -1,5 +1,10 @@
 import { open } from "node:fs/promises";
 import { SpanStatusCode } from "@opentelemetry/api";
+import type {
+  ExtensionContext,
+  SessionShutdownEvent,
+  SessionStartEvent,
+} from "@earendil-works/pi-coding-agent";
 import {
   clearObsAgentsRuntimeState,
   startObsAgentsRuntimeState,
@@ -25,10 +30,10 @@ import {
 import type { ObservMeConfig } from "../../config/schema.ts";
 import { emitUnsafeCaptureWarning, normalizeConfigRejectionDiagnostic } from "../../config/validate.ts";
 import { EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE } from "../../constants.ts";
+import { ObservMeOtelStartupError } from "../../otel/sdk.ts";
 import type { BoundedOtelOperationResult } from "../../otel/shutdown.ts";
 import {
   AGENT_LINEAGE_ATTRIBUTES,
-  COMMON_SPAN_ATTRIBUTES,
   CONFIG_ATTRIBUTES,
   LOG_ATTRIBUTES,
   SESSION_ATTRIBUTES,
@@ -55,7 +60,6 @@ import {
   readSpanId,
   readSpanTraceId,
   readString,
-  readUnknown,
   resolveModelId,
   resolveModelProvider,
   resolveSessionFilePath,
@@ -71,15 +75,19 @@ import {
   startSessionTelemetry,
   workflowFailed,
 } from "../handler-runtime.ts";
+import {
+  appendSessionCorrelationEntry,
+  readLatestSessionCorrelation,
+} from "../session-correlation.ts";
 import type { HandlerRegistrar, SerializedLifecycleQueue } from "../handler-runtime.ts";
 import type {
   AttributeMap,
-  Handler,
   HandlerSessionState,
   LoadSessionConfig,
   MinimalSessionCorrelation,
   ObservMeHandlerContext,
   ObservMeTelemetrySession,
+  PiHandler,
   RegisterHandlersOptions,
   SessionConfigLoadResult,
   SessionRecoveryHeader,
@@ -108,23 +116,33 @@ export function buildSessionAttributes(
   config: ObservMeConfig,
   lineage: ObservMeTelemetrySession["lineage"],
   recovery?: StartupRecoveryState,
+  initialThinkingLevel?: unknown,
 ): AttributeMap {
-  const cwd = recovery?.header?.cwd ?? readString(ctx, "cwd") ?? process.cwd();
-  const sessionId = recovery?.header?.id ?? resolveSessionId(event, ctx, lineage);
-  const parentSessionId = recovery?.header?.parentSession ?? readString(event, "parentSessionId") ?? lineage.parentSessionId;
-  const sessionFile = recovery?.sessionFile ?? resolveSessionFilePath(event, ctx);
+  const sessionManager = ctx.sessionManager;
+  const managerHeader = normalizeSessionHeader(sessionManager?.getHeader());
+  const header = managerHeader ?? recovery?.header;
+  const cwd = sessionManager?.getCwd() ?? header?.cwd ?? ctx.cwd ?? process.cwd();
+  const sessionId = sessionManager?.getSessionId() ?? header?.id ?? resolveSessionId(event, ctx, lineage);
+  const parentSessionId = header?.parentSession ?? lineage.parentSessionId;
+  const sessionFile = sessionManager?.getSessionFile() ?? recovery?.sessionFile ?? resolveSessionFilePath(event, ctx);
+  const sessionName = sessionManager
+    ? sessionManager.getSessionName() ?? "unknown"
+    : readString(event, "sessionName") ?? readString(event, "name") ?? "unknown";
+  const persisted = sessionManager
+    ? sessionFile !== undefined
+    : readBoolean(event, "persisted") ?? recovery?.resumed ?? false;
 
   return withoutUndefinedAttributes({
     [SESSION_ATTRIBUTES.PI_SESSION_ID]: sessionId,
-    [SESSION_ATTRIBUTES.PI_SESSION_NAME]: readString(event, "sessionName") ?? readString(event, "name") ?? "unknown",
+    [SESSION_ATTRIBUTES.PI_SESSION_NAME]: sessionName,
     [SESSION_ATTRIBUTES.PI_SESSION_CWD_HASH]: hashValue(cwd, config),
     [SESSION_ATTRIBUTES.PI_SESSION_PARENT_SESSION_HASH]: parentSessionId ? hashValue(parentSessionId, config) : "",
-    [SESSION_ATTRIBUTES.PI_SESSION_PERSISTED]: readBoolean(event, "persisted") ?? recovery?.resumed ?? false,
+    [SESSION_ATTRIBUTES.PI_SESSION_PERSISTED]: persisted,
     [SESSION_ATTRIBUTES.PI_SESSION_FILE_HASH]: sessionFile ? hashValue(sessionFile, config) : "",
-    [SESSION_ATTRIBUTES.PI_SESSION_VERSION]: readString(recovery?.header, "version") ?? readString(event, "sessionVersion") ?? readString(event, "version") ?? "unknown",
-    [SESSION_ATTRIBUTES.PI_MODEL_PROVIDER_CURRENT]: resolveModelProvider(event, ctx),
-    [SESSION_ATTRIBUTES.PI_MODEL_ID_CURRENT]: resolveModelId(event, ctx),
-    [SESSION_ATTRIBUTES.PI_THINKING_LEVEL_CURRENT]: resolveThinkingLevel(event, ctx),
+    [SESSION_ATTRIBUTES.PI_SESSION_VERSION]: readString(header, "version") ?? "unknown",
+    [SESSION_ATTRIBUTES.PI_MODEL_PROVIDER_CURRENT]: resolveModelProvider(ctx),
+    [SESSION_ATTRIBUTES.PI_MODEL_ID_CURRENT]: resolveModelId(ctx),
+    [SESSION_ATTRIBUTES.PI_THINKING_LEVEL_CURRENT]: resolveThinkingLevel(initialThinkingLevel),
     ...buildCommonSessionSpanAttributes(sessionId, config, lineage),
   });
 }
@@ -153,7 +171,7 @@ function createSessionStartHandler(
   loadConfigFn: LoadSessionConfig,
   startTelemetryFn: StartSessionTelemetry,
   options: RegisterHandlersOptions,
-): Handler {
+): PiHandler<"session_start"> {
   return handleSessionStart.bind(undefined, state, loadConfigFn, startTelemetryFn, options);
 }
 
@@ -162,8 +180,8 @@ async function handleSessionStart(
   loadConfigFn: LoadSessionConfig,
   startTelemetryFn: StartSessionTelemetry,
   options: RegisterHandlersOptions,
-  event: unknown,
-  ctx: ObservMeHandlerContext,
+  event: SessionStartEvent,
+  ctx: ExtensionContext,
 ): Promise<void> {
   const previousSession = state.session;
   if (previousSession) await shutDownPreviousSessionBeforeDuplicateStart(previousSession, ctx, state);
@@ -171,10 +189,18 @@ async function handleSessionStart(
   await ensureProjectConfigForHandler(options, ctx);
   const loadedConfig = await loadSessionConfigForHandler(loadConfigFn, options, ctx);
   const config = loadedConfig.config;
-  await emitUnsafeCaptureWarning(config, ctx);
+  updateObsStatusRuntimeState({ config, configDiagnostics: loadedConfig.diagnostics });
+  clearObsStatusExportError();
 
+  if (!config.enabled) {
+    clearDisabledTelemetryRuntimeState(state);
+    await clearExtensionStatus(ctx);
+    return;
+  }
+
+  await emitUnsafeCaptureWarning(config, ctx);
   const recovery = await resolveStartupRecovery(event, ctx, config, options);
-  const recoveryCorrelation = recovery.customCorrelation ?? recovery.header?.correlation;
+  const recoveryCorrelation = recovery.customCorrelation;
   const lineage = createAgentLineageContext({
     config,
     env: buildRecoveryLineageEnv(config, recoveryCorrelation, options.env),
@@ -183,19 +209,31 @@ async function handleSessionStart(
       options.requireCompleteParentEnvelope ?? (options.trustedParentContext === true && recoveryCorrelation === undefined),
     failOpenInvalidPropagation: true,
   });
-  const session = await startTelemetryFn({
-    config,
-    lineage,
-    now: options.now,
-    wallClockNow: options.wallClockNow,
-  });
+  let session: ObservMeTelemetrySession;
+  try {
+    session = await startTelemetryFn({
+      config,
+      lineage,
+      now: options.now,
+      wallClockNow: options.wallClockNow,
+    });
+  } catch (error) {
+    await handleTelemetryStartupFailure(state, ctx, error);
+    return;
+  }
+
   session.now = options.now ?? session.now ?? monotonicNowMs;
   state.session = session;
 
   try {
-    updateObsStatusRuntimeState({ config: session.config, configDiagnostics: loadedConfig.diagnostics });
-    clearObsStatusExportError();
-    const attributes = buildSessionAttributes(event, ctx, session.config, lineage, recovery);
+    const attributes = buildSessionAttributes(
+      event,
+      ctx,
+      session.config,
+      lineage,
+      recovery,
+      options.getThinkingLevel?.(),
+    );
     const labels = metricLabels(session.config, lineage);
 
     session.sessionAttributes = attributes;
@@ -206,7 +244,7 @@ async function handleSessionStart(
     startObsSessionRuntimeState({
       sessionId: readString(attributes, SESSION_ATTRIBUTES.PI_SESSION_ID),
       traceId: readSpanTraceId(session.sessionSpan),
-      traceUrlTemplate: session.config.query.links.traceUrlTemplate,
+      config: session.config,
     });
     startObsAgentsRuntimeState({
       lineage,
@@ -218,7 +256,6 @@ async function handleSessionStart(
     session.metrics.sessionsStarted.add(1, labels);
     session.sessionSpan.addEvent(LOG_EVENT_NAMES.SESSION_STARTED, attributes);
     emitLifecycleLog(session.logger, LOG_EVENT_NAMES.SESSION_STARTED, attributes);
-    if (recovery.resumed && session.config.replayOnStart) emitStartupReplayTelemetry(session, attributes);
 
     if (isRootWorkflow(lineage)) {
       session.metrics.workflowsStarted.add(1, labels);
@@ -227,20 +264,23 @@ async function handleSessionStart(
 
     await ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE);
     activateSessionActiveAgent(session, labels);
+    if (session.config.agent.writeCorrelationEntry) {
+      appendSessionCorrelationEntry(options.appendEntry, lineage, recovery.customCorrelation);
+    }
   } catch (error) {
     await cleanUpFailedSessionStart(session, ctx, state);
     throw error;
   }
 }
 
-function createSessionShutdownHandler(state: HandlerSessionState): Handler {
+function createSessionShutdownHandler(state: HandlerSessionState): PiHandler<"session_shutdown"> {
   return handleSessionShutdown.bind(undefined, state);
 }
 
 async function handleSessionShutdown(
   state: HandlerSessionState,
-  event: unknown,
-  ctx: ObservMeHandlerContext,
+  event: SessionShutdownEvent,
+  ctx: ExtensionContext,
 ): Promise<void> {
   const session = state.session;
   if (!session) return;
@@ -256,8 +296,12 @@ async function resolveStartupRecovery(
 ): Promise<StartupRecoveryState> {
   const sessionFile = resolveSessionFilePath(event, ctx);
   const readHeader = options.readSessionHeader ?? readSessionHeaderFromFile;
-  const header = sessionFile ? await readHeader(sessionFile) : undefined;
-  const customCorrelation = config.agent.writeCorrelationEntry ? readExplicitCustomCorrelation(event) : undefined;
+  const header = ctx.sessionManager
+    ? normalizeSessionHeader(ctx.sessionManager.getHeader())
+    : sessionFile
+      ? await readHeader(sessionFile)
+      : undefined;
+  const customCorrelation = config.agent.writeCorrelationEntry ? readActiveBranchCorrelation(ctx) : undefined;
 
   return {
     resumed: isExistingSessionStart(event),
@@ -265,16 +309,6 @@ async function resolveStartupRecovery(
     header,
     customCorrelation,
   };
-}
-
-function emitStartupReplayTelemetry(session: ObservMeTelemetrySession, attributes: AttributeMap): void {
-  const replayAttributes = {
-    ...attributes,
-    [COMMON_SPAN_ATTRIBUTES.OBSERVME_REPLAYED]: true,
-  };
-
-  session.sessionSpan?.addEvent(LOG_EVENT_NAMES.SESSION_STARTED, replayAttributes);
-  emitLifecycleLog(session.logger, LOG_EVENT_NAMES.SESSION_STARTED, replayAttributes);
 }
 
 function buildRecoveryLineageEnv(
@@ -291,19 +325,28 @@ function buildRecoveryLineageEnv(
     ...definedEnvValue(config.agent.parentIdEnv, correlation.parentAgentId),
     ...definedEnvValue(config.agent.rootIdEnv, correlation.rootAgentId),
     ...definedEnvValue(config.agent.parentSessionIdEnv, correlation.parentSessionId),
-    ...definedEnvValue(config.agent.depthEnv, correlation.depth === undefined ? undefined : String(correlation.depth)),
+    ...definedEnvValue(config.agent.depthEnv, recoveryPropagationDepth(correlation)),
     ...definedEnvValue(config.agent.spawnIdEnv, correlation.spawnId),
     ...definedEnvValue(config.agent.capabilityEnv, correlation.capability),
   };
+}
+
+function recoveryPropagationDepth(correlation: MinimalSessionCorrelation): string | undefined {
+  if (correlation.depth === undefined) return undefined;
+  const parentDepth = correlation.parentAgentId ? Math.max(0, correlation.depth - 1) : correlation.depth;
+  return String(parentDepth);
 }
 
 function definedEnvValue(name: string, value: string | undefined): NodeJS.ProcessEnv {
   return value === undefined || value === "" ? {} : { [name]: value };
 }
 
-function readExplicitCustomCorrelation(event: unknown): MinimalSessionCorrelation | undefined {
-  const value = readUnknown(event, "customCorrelation") ?? readUnknown(event, "observmeCorrelation");
-  return normalizeMinimalCorrelation(value);
+function readActiveBranchCorrelation(ctx: ObservMeHandlerContext): StartupRecoveryState["customCorrelation"] {
+  try {
+    return readLatestSessionCorrelation(ctx.sessionManager?.getBranch());
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeSessionHeader(value: unknown): SessionRecoveryHeader | undefined {
@@ -316,25 +359,7 @@ function normalizeSessionHeader(value: unknown): SessionRecoveryHeader | undefin
     timestamp: readString(value, "timestamp"),
     cwd: readString(value, "cwd"),
     parentSession: readString(value, "parentSession"),
-    correlation: normalizeMinimalCorrelation(readUnknown(value, "observmeCorrelation") ?? readUnknown(value, "correlation")),
   });
-}
-
-function normalizeMinimalCorrelation(value: unknown): MinimalSessionCorrelation | undefined {
-  if (!isRecord(value)) return undefined;
-
-  const correlation = withoutUndefinedObjectValues({
-    workflowId: readString(value, "workflowId"),
-    agentId: readString(value, "agentId"),
-    parentAgentId: readString(value, "parentAgentId"),
-    rootAgentId: readString(value, "rootAgentId"),
-    parentSessionId: readString(value, "parentSessionId"),
-    depth: readInteger(value, "depth"),
-    spawnId: readString(value, "spawnId"),
-    capability: readString(value, "capability"),
-  });
-
-  return Object.keys(correlation).length === 0 ? undefined : correlation;
 }
 
 function withoutUndefinedObjectValues<T extends Record<string, unknown>>(value: T): T {
@@ -518,6 +543,39 @@ function clearTelemetrySessionRuntimeState(
   clearObsSessionRuntimeState();
   clearObsAgentsRuntimeState();
   if (state.session === session) state.session = undefined;
+}
+
+function clearDisabledTelemetryRuntimeState(state: HandlerSessionState): void {
+  state.session = undefined;
+  clearObsSessionRuntimeState();
+  clearObsAgentsRuntimeState();
+}
+
+async function handleTelemetryStartupFailure(
+  state: HandlerSessionState,
+  ctx: ObservMeHandlerContext,
+  error: unknown,
+): Promise<void> {
+  clearDisabledTelemetryRuntimeState(state);
+  if (!(error instanceof ObservMeOtelStartupError)) throw error;
+
+  recordObsStatusExportResult({ operation: "startup", error });
+  await clearExtensionStatus(ctx);
+  notifyTelemetryStartupFailure(ctx, error.message);
+}
+
+function notifyTelemetryStartupFailure(ctx: ObservMeHandlerContext, message: string): void {
+  if (ctx.hasUI === false || !ctx.ui?.notify) return;
+
+  try {
+    void Promise.resolve(ctx.ui.notify(message, "error")).catch(ignoreStartupDiagnosticError);
+  } catch {
+    return;
+  }
+}
+
+function ignoreStartupDiagnosticError(): undefined {
+  return undefined;
 }
 
 async function clearExtensionStatus(ctx: ObservMeHandlerContext): Promise<void> {

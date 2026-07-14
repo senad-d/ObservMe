@@ -9,11 +9,21 @@ const syntheticGitHubToken = `ghp_${"A".repeat(36)}`;
 const syntheticOpenAiKey = `sk-${"abc123_ABC".repeat(4)}`;
 const syntheticAnthropicKey = `sk-ant-${"abc123_ABC".repeat(4)}`;
 const syntheticSlackToken = `xoxb-${"T".repeat(12)}`;
+const syntheticPemCases = [
+  { label: "PRIVATE KEY", body: "UEtDUzhfU1lOVEhFVElDX0JPRFk=" },
+  { label: "RSA PRIVATE KEY", body: "UlNBX1NZTlRIRVRJQ19CT0RZ" },
+  { label: "EC PRIVATE KEY", body: "RUNfU1lOVEhFVElDX0JPRFk=" },
+  { label: "ENCRYPTED PRIVATE KEY", body: "RU5DUllQVEVEX1NZTlRIRVRJQ19CT0RZ" },
+];
 const tenantSaltSource = {
   secureRuntimeConfig: {
     tenantSalt: "redaction-test-salt",
   },
 };
+
+function buildSyntheticPemBlock(label: string, body: string): string {
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----`;
+}
 
 const secretCategoryCases = [
   {
@@ -51,11 +61,11 @@ const secretCategoryCases = [
     input: "database password: synthetic-password-value",
     sensitiveValues: ["synthetic-password-value"],
   },
-  {
-    name: "private key blocks",
-    input: "-----BEGIN PRIVATE KEY-----\nprivate-key-body\n-----END PRIVATE KEY-----",
-    sensitiveValues: ["-----BEGIN PRIVATE KEY-----"],
-  },
+  ...syntheticPemCases.map(pemCase => ({
+    name: `${pemCase.label} blocks`,
+    input: buildSyntheticPemBlock(pemCase.label, pemCase.body),
+    sensitiveValues: [`-----BEGIN ${pemCase.label}-----`, pemCase.body, `-----END ${pemCase.label}-----`],
+  })),
   {
     name: "URL credentials",
     input: "remote https://deploy:synthetic-pass@example.invalid/repo.git",
@@ -90,6 +100,50 @@ test("redaction pipeline covers every documented secret category without exporti
     assert.equal(result.failureMetrics.redactionFailures, 0, `${redactionCase.name} should not fail redaction`);
     assertNoSensitiveValuesExported(result.value, redactionCase.sensitiveValues);
   }
+});
+
+test("redaction pipeline replaces complete private-key blocks with bounded metadata", () => {
+  for (const pemCase of syntheticPemCases) {
+    const result = redactValue(buildSyntheticPemBlock(pemCase.label, pemCase.body), defaultOptions());
+
+    assert.equal(result.dropped, false);
+    assert.match(result.value ?? "", /^\[REDACTED:private_key_block:[a-f0-9]{12}\]$/u);
+  }
+});
+
+test("redaction pipeline fails closed for truncated or mismatched private-key blocks", () => {
+  const malformedCases = [
+    {
+      input: "prefix\n-----BEGIN PRIVATE KEY-----\nVFJVTkNBVEVEX1NZTlRIRVRJQ19CT0RZ",
+      sensitiveValues: ["-----BEGIN PRIVATE KEY-----", "VFJVTkNBVEVEX1NZTlRIRVRJQ19CT0RZ"],
+    },
+    {
+      input:
+        "prefix\n-----BEGIN RSA PRIVATE KEY-----\nTUlTTUFUQ0hFRF9TWU5USEVUSUNfQk9EWQ==\n-----END EC PRIVATE KEY-----\ntrailing text",
+      sensitiveValues: [
+        "-----BEGIN RSA PRIVATE KEY-----",
+        "TUlTTUFUQ0hFRF9TWU5USEVUSUNfQk9EWQ==",
+        "-----END EC PRIVATE KEY-----",
+        "trailing text",
+      ],
+    },
+  ];
+
+  for (const malformedCase of malformedCases) {
+    const result = redactValue(malformedCase.input, defaultOptions());
+
+    assert.equal(result.dropped, false);
+    assert.match(result.value ?? "", /^prefix\n\[REDACTED:private_key_block:[a-f0-9]{12}\]$/u);
+    assertNoSensitiveValuesExported(result.value, malformedCase.sensitiveValues);
+  }
+});
+
+test("redaction pipeline does not classify public-key PEM blocks as private keys", () => {
+  const publicKey = "-----BEGIN PUBLIC KEY-----\nUFVCTElDX0tFWV9CT0RZ\n-----END PUBLIC KEY-----";
+  const result = redactValue(publicKey, defaultOptions());
+
+  assert.equal(result.dropped, false);
+  assert.equal(result.value, publicKey);
 });
 
 test("redaction pipeline sanitizes environment variable dumps", () => {

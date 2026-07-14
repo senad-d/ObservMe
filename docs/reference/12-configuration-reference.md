@@ -15,8 +15,9 @@ observme:
     headers:
       Authorization: "Bearer ${OBSERVME_OTLP_TOKEN}"
     tls:
-      enabled: true
       insecureSkipVerify: false
+    # The endpoint scheme selects HTTP or HTTPS. HTTPS certificate verification
+    # stays enabled unless insecureSkipVerify is explicitly acknowledged.
     # Derived SDK URLs for OTLP/HTTP exporters:
     # traces:  https://otel-collector.example.com:4318/v1/traces
     # metrics: https://otel-collector.example.com:4318/v1/metrics
@@ -135,6 +136,12 @@ observme:
     flushTimeoutMs: 3000
 ```
 
+`otlp.endpoint` and every `otlp.signalEndpoints` value must be an absolute HTTP(S) URL without userinfo, unresolved placeholders, a query, or a fragment; credentials belong in `otlp.headers`. The base endpoint may contain an intentional path, to which ObservMe appends exactly one `/v1/{signal}` suffix using URL pathname semantics. Explicit signal endpoints must already end in their matching `/v1/traces`, `/v1/metrics`, or `/v1/logs` path.
+
+`otlp.tls.enabled` is intentionally unsupported and rejected as an unknown setting: the `http://` or `https://` endpoint scheme is the single source of truth for whether TLS is used. The retained `otlp.tls.insecureSkipVerify` option is passed to every OTLP HTTP exporter as its certificate-verification behavior.
+
+`query.links.traceUrlTemplate` is shared by `/obs session`, `/obs trace`, and `/obs link`. Absolute HTTP(S) templates support `{traceId}`, `{{traceId}}` (with optional inner whitespace), `${traceId}`, and `%TRACE_ID%`; optional Tempo UID placeholders use the matching `{tempoDatasourceUid}`, `{{tempoDatasourceUid}}`, `${tempoDatasourceUid}`, and `%TEMPO_DATASOURCE_UID%` forms. An empty template or one containing `...` selects the structured Grafana Explore fallback built from `query.grafana.url` and `query.grafana.datasourceUids.tempo`. Unsupported placeholders and invalid URLs fail with a bounded diagnostic.
+
 ## 2. Environment Variables
 
 ```text
@@ -211,7 +218,8 @@ Rules:
 - Continue a valid W3C parent context explicitly on the child `pi.session` span. If trusted lineage has no usable continuation, start a new trace and add a validated parent span link when metadata exists, otherwise emit the documented propagation-failure log/counter fallback.
 - When `propagateTraceContext` is true, propagate W3C `traceparent`/`tracestate` to child processes launched by ObservMe-aware subagent wrappers.
 - When `workflow.enabled` is true, propagate `OBSERVME_WORKFLOW_ID` to child processes and report depth/fan-out/orphan metrics.
-- `writeCorrelationEntry` may append a minimal `custom` session entry for recovery, but it must remain disabled by default and must never use `custom_message`.
+- `writeCorrelationEntry` defaults to `false`. When enabled, successful startup appends at most one versioned `observme.correlation` `custom` entry to the active branch. Reload/resume/fork recovery scans only `ctx.sessionManager.getBranch()`, accepts the latest valid bounded lineage entry, ignores corrupt or abandoned-branch data, and does not duplicate an unchanged entry. ObservMe never uses `custom_message`, so this state cannot enter LLM context.
+- Historical telemetry is never replayed automatically. Use the explicit, confirmed `/obs backfill` command. The removed `replayOnStart` YAML field is rejected as unknown, and `OBSERVME_REPLAY_ON_START` is no longer recognized; neither can emit a synthetic duplicate startup record.
 
 ## 4. Config Precedence
 
@@ -307,7 +315,7 @@ Rules:
 - When the token is blank or an unresolved placeholder, a resolved `query.grafana.username` and `query.grafana.password` are sent as Basic auth for local development.
 - Query-backed commands and `/obs health` must fail fast before Grafana calls when Grafana auth is unresolved/missing/incomplete, `query.grafana.url` is invalid, or a required datasource UID is blank.
 - `/obs health` must report Grafana `401`/`403` responses as authentication failures and must not print token or password values.
-- `tls.insecureSkipVerify=true` is only for local self-signed certificates; production should trust the CA instead.
+- `query.grafana.tls.insecureSkipVerify=true` is only for local self-signed certificates; production requires `privacy.allowInsecureTransport=true` as an explicit acknowledgement and should trust the CA instead.
 - `transport.preferIPv4=true` uses Node's local HTTP(S) transport with IPv4 DNS lookup for Grafana calls.
 - Provisioned datasource UIDs are `tempo`, `loki`, and `prometheus`; Loki selectors use normalized labels such as `service_name`, `pi_session_id`, `event_name`, and `event_category` for ObservMe data.
 
@@ -335,7 +343,8 @@ ObservMe must display a warning when unsafe capture is active. Redacted capture 
 Reject config when:
 
 - `allowUnsafeCapture=false` and `redactionEnabled=false` while any content capture is true.
-- Production endpoint uses `http://` and `allowInsecureTransport` is not true.
+- A production OTLP or Grafana endpoint uses `http://` and `privacy.allowInsecureTransport` is not true.
+- Production sets `otlp.tls.insecureSkipVerify=true` or `query.grafana.tls.insecureSkipVerify=true` and `privacy.allowInsecureTransport` is not true.
 - `otlp.protocol=http/protobuf` but a signal-specific exporter URL omits the required `/v1/traces`, `/v1/metrics`, or `/v1/logs` path.
 - `metrics.activeAgentLeaseDurationMillis` is fractional, non-numeric, below `10000`, above `300000`, or less than `(2 * metrics.exportIntervalMillis) + 5000`.
 - Metric labels include high-cardinality fields such as workflow IDs, session IDs, agent IDs, parent/child agent IDs, trace IDs, span IDs, entry IDs, spawn IDs, or spawn tool-call IDs. The generated `observme.instance.id` / `service.instance.id` remains a resource identity used by the Collector for the `observme_instance_id` lease join; it must not be configured as an execution-derived label.

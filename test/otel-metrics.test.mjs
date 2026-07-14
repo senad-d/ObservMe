@@ -40,7 +40,6 @@ function createHarness(config) {
   const provider = createFakeMetricProvider(calls, meter);
   const sdk = new ObservMeMetricSdk({
     config,
-    registerGlobal: false,
     exporterFactory: options => {
       calls.exporterOptions = options;
       return { export: () => undefined, forceFlush: () => undefined, shutdown: () => undefined };
@@ -93,6 +92,7 @@ test("metric exporter wiring matches documented OTLP endpoint and export default
     url: "http://collector:4318/v1/metrics",
     headers: { Authorization: "Bearer test-token" },
     timeoutMillis: 3000,
+    httpAgentOptions: { rejectUnauthorized: true },
   });
 });
 
@@ -107,7 +107,15 @@ test("explicit metric signal endpoint overrides the base OTLP endpoint", () => {
   assert.equal(resolveMetricEndpoint(config), "https://otel.example.test/custom/v1/metrics");
 });
 
-test("meter provider and exporter are created only during enabled session startup", async () => {
+test("metric exporter maps the retained OTLP TLS verification setting to its HTTP agent", () => {
+  const config = cloneDefault({ otlp: { tls: { insecureSkipVerify: true } } });
+
+  assert.deepEqual(buildMetricExporterWiring(config).exporter.httpAgentOptions, {
+    rejectUnauthorized: false,
+  });
+});
+
+test("meter provider and exporter are created only during enabled direct session startup", async () => {
   const { sdk, calls, meter } = createHarness(defaultObservMeConfig);
 
   assert.equal(calls.exporterOptions, undefined);
@@ -126,6 +134,31 @@ test("meter provider and exporter are created only during enabled session startu
   assert.equal(calls.providerOptions.resource.attributes["observme.tenant.id"], "platform");
 });
 
+test("metric startup failure releases a reader created before provider construction fails", async () => {
+  let readerShutdowns = 0;
+  const sdk = new ObservMeMetricSdk({
+    config: defaultObservMeConfig,
+    exporterFactory: () => ({ export: () => undefined, forceFlush: () => undefined, shutdown: () => undefined }),
+    readerFactory: () => ({
+      forceFlush: async () => undefined,
+      shutdown: async () => {
+        readerShutdowns += 1;
+      },
+    }),
+    meterProviderFactory: () => {
+      throw new Error("metric provider construction failed");
+    },
+  });
+
+  await assert.rejects(
+    () => startOtelSdk({ config: defaultObservMeConfig, sdkFactory: () => sdk }),
+    /metric provider construction failed/u,
+  );
+
+  assert.equal(readerShutdowns, 1);
+  assert.equal(sdk.state, "shutdown");
+});
+
 test("disabled metrics keep pre-start instruments safe and avoid exporter or provider factories", async () => {
   const config = cloneDefault({ metrics: { enabled: false } });
   const { sdk, calls } = createHarness(config);
@@ -134,6 +167,19 @@ test("disabled metrics keep pre-start instruments safe and avoid exporter or pro
   await sdk.start();
   assert.doesNotThrow(() => sdk.meter.createCounter("observme_still_disabled_total").add(1));
 
+  assert.equal(sdk.state, "disabled");
+  assert.equal(calls.exporterOptions, undefined);
+  assert.equal(calls.readerOptions, undefined);
+  assert.equal(calls.providerOptions, undefined);
+});
+
+test("top-level disablement keeps enabled metric settings from creating exporters or providers", async () => {
+  const config = cloneDefault({ enabled: false, metrics: { enabled: true } });
+  const { sdk, calls } = createHarness(config);
+
+  await sdk.start();
+
+  assert.equal(buildMetricExporterWiring(config).enabled, false);
   assert.equal(sdk.state, "disabled");
   assert.equal(calls.exporterOptions, undefined);
   assert.equal(calls.readerOptions, undefined);

@@ -1,16 +1,26 @@
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
+import { metrics, trace } from "@opentelemetry/api";
+import { logs } from "@opentelemetry/api-logs";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { getObsRootCommandArgumentCompletions, registerObsCommand } from "../src/commands/obs.ts";
 import {
   buildObsBackfillRecords,
+  createObsBackfillLogExporter,
   handleObsBackfillCommand,
   runObsBackfill,
 } from "../src/commands/obs-backfill.ts";
+import {
+  emitUnrelatedGlobalTelemetry,
+  installSentinelGlobalProviders,
+  resetGlobalProviders,
+} from "./otel-global-isolation-helpers.mjs";
 
 const now = new Date("2026-07-07T12:00:00.000Z");
 const bearerToken = `Authorization: Bearer ${"abc123._-".repeat(4)}`;
+const backfillPrivateKeyBody = "QkFDS0ZJTExfU1lOVEhFVElDX1BSSVZBVEVfS0VZX0JPRFk=";
+const backfillPrivateKeyBlock = `-----BEGIN ENCRYPTED PRIVATE KEY-----\n${backfillPrivateKeyBody}\n-----END ENCRYPTED PRIVATE KEY-----`;
 process.env.OBSERVME_HASH_SALT = "obs-backfill-test-salt";
 
 function cloneDefaultConfig() {
@@ -167,6 +177,35 @@ function bashEntry(id, parentId, timestamp, output) {
   };
 }
 
+test("backfill keeps pre-existing process-global providers untouched", { concurrency: false }, async t => {
+  const sentinel = installSentinelGlobalProviders();
+  const config = cloneDefaultConfig();
+  config.otlp.timeoutMs = 10;
+  let exporter;
+
+  t.after(async () => {
+    await exporter?.shutdown();
+    resetGlobalProviders();
+  });
+
+  exporter = createObsBackfillLogExporter(config, { timeoutMs: 100 });
+
+  assert.equal(trace.getTracer("unrelated-during-backfill"), sentinel.tracer);
+  assert.equal(metrics.getMeter("unrelated-during-backfill"), sentinel.meter);
+  assert.equal(logs.getLogger("unrelated-during-backfill"), sentinel.logger);
+
+  emitUnrelatedGlobalTelemetry();
+  assert.deepEqual(sentinel.records, {
+    spans: [{ name: "unrelated.span" }],
+    metrics: [{ name: "unrelated.counter", value: 1 }],
+    logs: [{ body: "unrelated.log" }],
+  });
+
+  await exporter.shutdown();
+  exporter = undefined;
+  assert.equal(logs.getLogger("unrelated-after-backfill"), sentinel.logger);
+});
+
 test("/obs backfill requires confirmation before exporting replayed telemetry", async () => {
   const notifications = [];
   const records = [];
@@ -276,6 +315,34 @@ test("/obs backfill marks exported records as replayed and redacts captured cont
   assert.equal(exported[0].attributes["observme.replayed"], true);
   assert.match(exported[0].attributes["pi.llm.prompt.redacted"], /\[REDACTED:/u);
   assert.doesNotMatch(exported[0].attributes["pi.llm.prompt.redacted"], /abc123/u);
+});
+
+test("/obs backfill redacts complete private-key headers, bodies, and footers", async () => {
+  const records = [];
+  const config = cloneDefaultConfig();
+  config.capture.prompts = true;
+
+  const summary = await runObsBackfill(createContext([
+    userEntry("a1", "2026-07-07T11:30:00.000Z", backfillPrivateKeyBlock),
+  ], []), {
+    currentSession: true,
+    since: "1h",
+    sinceMs: 60 * 60 * 1000,
+  }, {
+    loadConfig: async () => config,
+    createExporter: () => createExporter(records),
+    now: () => now,
+    maxRecords: 10,
+  });
+  const exportedPrompt = records.find(record => record.attributes?.["pi.llm.prompt.redacted"] !== undefined)?.attributes[
+    "pi.llm.prompt.redacted"
+  ];
+
+  assert.equal(summary.status, "completed");
+  assert.match(exportedPrompt, /^\[REDACTED:private_key_block:[a-f0-9]{12}\]$/u);
+  assert.doesNotMatch(exportedPrompt, /-----BEGIN ENCRYPTED PRIVATE KEY-----/u);
+  assert.doesNotMatch(exportedPrompt, new RegExp(backfillPrivateKeyBody, "u"));
+  assert.doesNotMatch(exportedPrompt, /-----END ENCRYPTED PRIVATE KEY-----/u);
 });
 
 test("/obs backfill omits historical content when capture flags are disabled", async () => {

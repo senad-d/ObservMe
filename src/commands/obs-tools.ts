@@ -3,6 +3,11 @@ import type { LoadSessionConfigOptions } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../query/prometheus.ts";
 import { createPrometheusQueryClient } from "../query/prometheus.ts";
+import {
+  boundObsCommandOutput,
+  normalizeObsBackendLabel,
+  selectObsCommandRows,
+} from "../safety/display-bounds.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { loadObsCommandConfig, notifyObsCommand } from "./obs-command-support.ts";
 import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
@@ -126,22 +131,29 @@ export async function getObsToolsSnapshot(
 export function renderObsTools(snapshot: ObsToolsSnapshot): string {
   const calls = snapshot.calls.map(normalizeObsToolCallRow).filter(isObsToolCallRow);
   const failures = snapshot.failures.map(normalizeObsToolFailureRow).filter(isObsToolFailureRow);
-  const lines = [`Tool calls by tool (last ${snapshot.window})`];
+  const callSelection = selectObsCommandRows(calls);
+  const failureSelection = selectObsCommandRows(failures);
+  const window = normalizeObsBackendLabel(snapshot.window) ?? OBS_TOOLS_WINDOW;
+  const lines = [`Tool calls by tool (last ${window})`];
 
   if (calls.length === 0) {
     lines.push(appendObsRecoveryHint("No tool call metrics found.", OBS_TOOLS_NO_CALLS_NEXT_ACTION));
   } else {
-    lines.push(...calls.map(renderObsToolCallRow));
+    lines.push(...callSelection.rows.map(renderObsToolCallRow));
+    if (callSelection.omittedCount > 0) lines.push(`… ${callSelection.omittedCount} tool call row(s) omitted`);
   }
 
-  lines.push(`Tool failures by tool/error (last ${snapshot.window})`);
+  lines.push(`Tool failures by tool/error (last ${window})`);
   if (failures.length === 0) {
     lines.push(appendObsRecoveryHint("No tool failure metrics found.", OBS_TOOLS_NO_FAILURES_NEXT_ACTION));
   } else {
-    lines.push(...failures.map(renderObsToolFailureRow));
+    lines.push(...failureSelection.rows.map(renderObsToolFailureRow));
+    if (failureSelection.omittedCount > 0) {
+      lines.push(`… ${failureSelection.omittedCount} tool failure row(s) omitted`);
+    }
   }
 
-  return lines.join("\n");
+  return boundObsCommandOutput(lines.join("\n"));
 }
 
 class ObsToolsCommand {
@@ -231,12 +243,11 @@ function parseRatePerSecond(value: string | number | undefined): number | undefi
 }
 
 function normalizeMetricLabel(value: string | undefined): string {
-  return normalizeOptionalString(value) ?? "unknown";
+  return normalizeObsBackendLabel(value) ?? "unknown";
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
+  return normalizeObsBackendLabel(value);
 }
 
 function renderObsToolCallRow(row: ObsToolCallRow): string {

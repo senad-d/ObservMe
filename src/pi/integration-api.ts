@@ -121,10 +121,8 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
       if (!isValidIntegrationIdentifier(spawnId) || !isValidCompleteSubagentOptions(options)) {
         return integrationFailure("invalid_request");
       }
-      if (!session.spans.activeSubagentSpawns.has(spawnId)) return integrationFailure("spawn_not_found");
-
-      completeSubagentSpawn(session, spawnId, options);
-      return integrationSuccess();
+      const result = completeSubagentSpawn(session, spawnId, options);
+      return result.ok ? integrationSuccess() : integrationFailure(result.reason);
     } catch {
       return integrationFailure("operation_failed");
     }
@@ -140,10 +138,8 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
       if (!isValidIntegrationIdentifier(spawnId) || !isValidFailSubagentOptions(options)) {
         return integrationFailure("invalid_request");
       }
-      if (!session.spans.activeSubagentSpawns.has(spawnId)) return integrationFailure("spawn_not_found");
-
-      failSubagentSpawn(session, spawnId, options);
-      return integrationSuccess();
+      const result = failSubagentSpawn(session, spawnId, options);
+      return result.ok ? integrationSuccess() : integrationFailure(result.reason);
     } catch {
       return integrationFailure("operation_failed");
     }
@@ -207,9 +203,8 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
       const registry = kind === "wait" ? session.spans.activeAgentWaits : session.spans.activeAgentJoins;
       if (!registry.has(id)) return integrationFailure(kind === "wait" ? "wait_not_found" : "join_not_found");
 
-      if (kind === "wait") endAgentWait(session, id, options);
-      else endAgentJoin(session, id, options);
-      return integrationSuccess();
+      const result = kind === "wait" ? endAgentWait(session, id, options) : endAgentJoin(session, id, options);
+      return result.ok ? integrationSuccess() : integrationFailure(result.reason);
     } catch {
       return integrationFailure("operation_failed");
     }
@@ -256,8 +251,8 @@ function isValidCompleteSubagentOptions(value: unknown): value is ObservMeComple
   const options = value as Partial<ObservMeCompleteSubagentOptions>;
   return (
     isOptionalIntegrationIdentifier(options.childAgentId) &&
-    isOptionalChildStatus(options.childStatus) &&
-    (options.outcome === undefined || options.outcome === "completed" || options.outcome === "failed" || options.outcome === "cancelled")
+    isOptionalTerminalChildStatus(options.childStatus) &&
+    isOptionalTerminalChildStatus(options.outcome)
   );
 }
 
@@ -347,6 +342,10 @@ function isOptionalChildStatus(value: unknown): boolean {
     value === "cancelled" ||
     value === "orphaned"
   );
+}
+
+function isOptionalTerminalChildStatus(value: unknown): boolean {
+  return value === undefined || value === "completed" || value === "failed" || value === "cancelled";
 }
 
 function isOptionalJoinStatus(value: unknown): boolean {

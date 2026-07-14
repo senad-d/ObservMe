@@ -6,6 +6,11 @@ import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../qu
 import { createPrometheusQueryClient } from "../query/prometheus.ts";
 import type { TimeRange, TraceSummary } from "../query/tempo.ts";
 import { createTempoQueryClient } from "../query/tempo.ts";
+import {
+  boundObsCommandOutput,
+  normalizeObsBackendLabel,
+  normalizeObsBackendLabelRecord,
+} from "../safety/display-bounds.ts";
 import { COMMON_SPAN_ATTRIBUTES } from "../semconv/attributes.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { loadObsCommandConfig, notifyObsCommand } from "./obs-command-support.ts";
@@ -187,8 +192,8 @@ export function renderObsAgents(snapshot: ObsAgentsSnapshot): string {
   const latestChild = readLatestChild(snapshot.children);
   const lines = [
     `Workflow: ${formatUnknown(snapshot.workflowId)} root=${formatUnknown(snapshot.workflowRootAgentId ?? snapshot.rootAgentId)}`,
-    `Agent: ${formatUnknown(snapshot.agentId)} (${snapshot.role} depth=${snapshot.depth})`,
-    `Session: ${formatUnknown(normalizeOptionalString(snapshot.sessionId))}`,
+    `Agent: ${formatUnknown(snapshot.agentId)} (${formatUnknown(snapshot.role)} depth=${snapshot.depth})`,
+    `Session: ${formatUnknown(snapshot.sessionId)}`,
     `Subagents spawned in current trace: ${snapshot.fanoutCount}`,
     `Current tree: depth=${snapshot.treeDepth} width=${snapshot.treeWidth} active=${snapshot.activeChildren} orphaned=${snapshot.orphanCount}`,
     `Recent children: ${renderRecentChildren(snapshot.children, snapshot.recentChildrenLimit)}`,
@@ -200,7 +205,7 @@ export function renderObsAgents(snapshot: ObsAgentsSnapshot): string {
     `Aggregate agent metrics (last ${OBS_AGENTS_WINDOW}): ${renderAggregateRows(snapshot.aggregateRows)}`,
     `Lineage drill-down: ${renderLineageDrilldown(snapshot)}`,
   );
-  return lines.join("\n");
+  return boundObsCommandOutput(lines.join("\n"));
 }
 
 class ObsAgentsCommand {
@@ -322,9 +327,9 @@ function toObsAgentAggregateRow(series: PrometheusMetricSeries): ObsAgentAggrega
   if (value === undefined) return undefined;
 
   return {
-    labels: { ...series.metric },
+    labels: normalizeObsBackendLabelRecord(series.metric),
     value,
-    timestampUnixSeconds: series.value?.timestampUnixSeconds,
+    timestampUnixSeconds: normalizeObsBackendLabel(series.value?.timestampUnixSeconds),
   };
 }
 
@@ -379,12 +384,12 @@ function selectRecentChildrenForRender(
 
 function renderRecentChild(child: ObsAgentChildRow): string {
   const orphan = child.orphaned ? " orphaned" : "";
-  return `${child.agentId} status=${child.status} depth=${child.depth}${orphan}`;
+  return `${formatUnknown(child.agentId)} status=${formatUnknown(child.status)} depth=${child.depth}${orphan}`;
 }
 
 function renderLatestChild(child: ObsAgentChildRow, hints: readonly ObsAgentWaitJoinHint[]): string {
   const joinHint = readLatestHintForChild(child.agentId, hints, "join");
-  return `${child.agentId} status=${child.status} active=${child.activeChildren} join=${formatDuration(joinHint?.durationMs)}`;
+  return `${formatUnknown(child.agentId)} status=${formatUnknown(child.status)} active=${child.activeChildren} join=${formatDuration(joinHint?.durationMs)}`;
 }
 
 function readLatestHintForChild(
@@ -408,7 +413,8 @@ function renderWaitJoinHint(hint: ObsAgentWaitJoinHint | undefined): string {
   if (!hint) return "none";
 
   const status = hint.joinStatus ?? hint.childStatus ?? (hint.active ? "waiting" : "complete");
-  return `${hint.kind}:${hint.childAgentId ?? hint.spawnId ?? hint.id} status=${status} duration=${formatDuration(hint.durationMs)}`;
+  const target = hint.childAgentId ?? hint.spawnId ?? hint.id;
+  return `${formatUnknown(hint.kind)}:${formatUnknown(target)} status=${formatUnknown(status)} duration=${formatDuration(hint.durationMs)}`;
 }
 
 function renderAggregateRows(rows: ObsAgentsAggregateRows): string {
@@ -416,7 +422,7 @@ function renderAggregateRows(rows: ObsAgentsAggregateRows): string {
 }
 
 function renderLineageDrilldown(snapshot: ObsAgentsSnapshot): string {
-  const attrs = Object.keys(snapshot.tempoSearchAttributes).join(", ") || "none";
+  const attrs = Object.keys(snapshot.tempoSearchAttributes).map(formatUnknown).join(", ") || "none";
   const traceCount = snapshot.traces.length;
   const latestTrace = normalizeOptionalString(snapshot.traces[0]?.traceId) ?? normalizeOptionalString(snapshot.traceId);
   const traceSuffix = latestTrace ? ` latest_trace=${latestTrace}` : "";
@@ -454,8 +460,7 @@ function normalizeRecentChildrenLimit(value: number | undefined): number {
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
+  return normalizeObsBackendLabel(value);
 }
 
 function isObsAgentsRequest(args: string): boolean {
@@ -463,7 +468,7 @@ function isObsAgentsRequest(args: string): boolean {
 }
 
 function formatUnknown(value: string | undefined): string {
-  return value ?? "unknown";
+  return normalizeObsBackendLabel(value) ?? "unknown";
 }
 
 function formatDuration(value: number | undefined): string {

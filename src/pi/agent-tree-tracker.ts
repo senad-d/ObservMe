@@ -48,6 +48,7 @@ interface MutableAgentTreeNode {
 }
 
 const activeChildStatuses = new Set<AgentChildStatus>(["starting", "active"]);
+const terminalChildStatuses = new Set<AgentChildStatus>(["completed", "failed", "cancelled", "orphaned"]);
 const agentStatusOrder: AgentChildStatus[] = ["starting", "active", "completed", "failed", "cancelled", "orphaned"];
 
 export class AgentTreeTracker {
@@ -68,6 +69,11 @@ export class AgentTreeTracker {
   }
 
   registerAgent(lineage: AgentLineageContext, status: AgentChildStatus = "active"): AgentTreeNode {
+    const existingNode = this.#nodes.get(lineage.agentId);
+    if (existingNode && !isAgentStatusTransitionAllowed(existingNode.status, status)) {
+      return snapshotNode(existingNode, this.#nodes);
+    }
+
     const node = createMutableNode(lineage, status, this.isOrphan(lineage));
     this.retainParentForInsertion(node.parentAgentId);
     this.#nodes.set(lineage.agentId, node);
@@ -77,7 +83,7 @@ export class AgentTreeTracker {
 
   updateStatus(agentId: string, status: AgentChildStatus): AgentTreeNode | undefined {
     const node = this.#nodes.get(agentId);
-    if (!node) return undefined;
+    if (!node || !isAgentStatusTransitionAllowed(node.status, status)) return undefined;
 
     node.status = status;
     if (status === "orphaned") node.orphaned = true;
@@ -175,6 +181,13 @@ export class AgentTreeTracker {
     if (!rootAgentId) return nodes;
     return nodes.filter(node => node.rootAgentId === rootAgentId || node.agentId === rootAgentId);
   }
+}
+
+export function isAgentStatusTransitionAllowed(current: AgentChildStatus, next: AgentChildStatus): boolean {
+  if (current === next) return true;
+  if (terminalChildStatuses.has(current)) return false;
+  if (current === "starting") return true;
+  return next !== "starting";
 }
 
 export function assertNoHighCardinalityMetricLabels(labels: Record<string, string>): void {

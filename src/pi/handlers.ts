@@ -31,11 +31,13 @@ export {
   workflowFailed,
 } from "./handler-runtime.ts";
 export type {
+  AppendEntry,
   AttributeMap,
   AttributePrimitive,
   BranchPreparationState,
   CompositeOtelSignalSdk,
   EnsureProjectConfig,
+  GetThinkingLevel,
   Handler,
   HandlerErrorRecorder,
   LoadSessionConfig,
@@ -43,8 +45,12 @@ export type {
   ObservMeHandlerContext,
   ObservMeMetrics,
   ObservMePiApi,
+  ObservMeSessionManager,
   ObservMeTelemetrySession,
   PendingBashOperationState,
+  PiEvent,
+  PiEventName,
+  PiHandler,
   ReadSessionHeader,
   RegisterHandlersOptions,
   SessionRecoveryHeader,
@@ -65,9 +71,14 @@ export function registerHandlers(pi: unknown, options: RegisterHandlersOptions =
   const errorRecorder = createStatefulHandlerErrorRecorder(state, options.onHandlerError);
   const registrar = new HandlerRegistrar(api, state, errorRecorder);
   const lifecycleQueue = new SerializedLifecycleQueue();
+  const runtimeOptions = {
+    ...options,
+    appendEntry: options.appendEntry ?? api.appendEntry,
+    getThinkingLevel: options.getThinkingLevel ?? api.getThinkingLevel,
+  };
 
   setDefaultHandlerErrorRecorder(errorRecorder);
-  registerLifecycleHandlers(registrar, state, options, lifecycleQueue);
+  registerLifecycleHandlers(registrar, state, runtimeOptions, lifecycleQueue);
   registerAgentTurnHandlers(registrar, state);
   registerLlmHandlers(registrar, state);
   registerToolBashHandlers(registrar, state);

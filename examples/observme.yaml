@@ -6,7 +6,6 @@ observme:
   enabled: true
   environment: development
   tenant: local-dev
-  replayOnStart: false
 
   otlp:
     endpoint: http://localhost:4318
@@ -14,7 +13,6 @@ observme:
     timeoutMs: 3000
     headers: {}
     tls:
-      enabled: false
       insecureSkipVerify: false
     signalEndpoints:
       traces: http://localhost:4318/v1/traces
@@ -46,6 +44,8 @@ observme:
     propagateTraceContext: true
     propagateToSubagents: true
     capabilityEnv: OBSERVME_AGENT_CAPABILITY
+    # Opt in to one validated, branch-local custom entry for reload/resume recovery.
+    # This entry never participates in LLM context.
     writeCorrelationEntry: false
 
   traces:

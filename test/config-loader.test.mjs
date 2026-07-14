@@ -106,6 +106,7 @@ const rejectionDiagnosticCases = [
       otlp: { endpoint: "http://private-user:private-endpoint-password@collector.test/private-path?token=private-token" },
     },
     expectedCode: "insecure_production_transport",
+    expectedCodes: ["insecure_production_transport", "invalid_otlp_endpoint"],
     sensitiveFragments: ["private-user", "private-endpoint-password", "private-path", "private-token"],
   },
   {
@@ -146,11 +147,12 @@ for (const diagnosticCase of rejectionDiagnosticCases) {
       logger: { warn: message => warnings.push(message) },
     });
 
+    const expectedCodes = diagnosticCase.expectedCodes ?? [diagnosticCase.expectedCode];
     assert.deepEqual(loaded.config, defaultObservMeConfig);
-    assert.deepEqual(loaded.diagnostics.rejection?.issueCodes, [diagnosticCase.expectedCode]);
-    assert.equal(loaded.diagnostics.rejection?.issueCount, 1);
+    assert.deepEqual(loaded.diagnostics.rejection?.issueCodes, expectedCodes);
+    assert.equal(loaded.diagnostics.rejection?.issueCount, expectedCodes.length);
     assert.equal(warnings.length, 1);
-    assert.match(warnings[0], new RegExp(diagnosticCase.expectedCode, "u"));
+    for (const expectedCode of expectedCodes) assert.match(warnings[0], new RegExp(expectedCode, "u"));
 
     const serializedDiagnostics = JSON.stringify({ diagnostics: loaded.diagnostics, warnings });
     for (const fragment of diagnosticCase.sensitiveFragments) {
@@ -188,6 +190,134 @@ for (const invalidLease of invalidActiveAgentLeaseEnvironmentCases) {
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], new RegExp(invalidLease.expectedCode, "u"));
     assert.doesNotMatch(JSON.stringify({ diagnostics: loaded.diagnostics, warnings }), /private-lease-value/u);
+  });
+}
+
+const malformedTypedEnvironmentCases = [
+  ["top-level enablement", "OBSERVME_ENABLED", "private-enabled-typo"],
+  ["empty tenant", "OBSERVME_TENANT", ""],
+  ["OTLP protocol", "OBSERVME_OTLP_PROTOCOL", "private-protocol-typo"],
+  ["capture flag", "OBSERVME_CAPTURE_PROMPTS", "private-capture-typo"],
+  ["privacy flag", "OBSERVME_REDACTION_ENABLED", "private-redaction-typo"],
+  ["trace propagation flag", "OBSERVME_PROPAGATE_TRACE_CONTEXT", "private-trace-propagation-typo"],
+  ["subagent propagation flag", "OBSERVME_PROPAGATE_TO_SUBAGENTS", "private-subagent-propagation-typo"],
+  ["OTLP timeout", "OBSERVME_OTLP_TIMEOUT_MS", "private-timeout-value"],
+  ["workflow depth", "OBSERVME_WORKFLOW_MAX_DEPTH_WARNING", "1.5"],
+  ["workflow fanout", "OBSERVME_WORKFLOW_MAX_FANOUT_WARNING", "private-fanout-value"],
+  ["Grafana TLS flag", "OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY", "private-tls-typo"],
+  ["empty boolean", "OBSERVME_WRITE_CORRELATION_ENTRY", ""],
+];
+
+for (const [name, environmentName, value] of malformedTypedEnvironmentCases) {
+  test(`session loader rejects malformed ${name} environment overrides`, async () => {
+    const warnings = [];
+    const loaded = await loadSessionConfigWithDiagnostics({
+      globalConfigPath: "missing-global.yaml",
+      isProjectTrusted: false,
+      readText: createReader({}),
+      env: { [environmentName]: value },
+      logger: { warn: message => warnings.push(message) },
+    });
+
+    assert.deepEqual(loaded.config, defaultObservMeConfig);
+    assert.equal(loaded.diagnostics.environmentStatus, "rejected");
+    assert.equal(loaded.diagnostics.environmentOverrides, true);
+    assert.deepEqual(loaded.diagnostics.rejection?.issueCodes, ["invalid_config_shape"]);
+    assert.equal(warnings.length, 1);
+    assert.doesNotMatch(JSON.stringify({ diagnostics: loaded.diagnostics, warnings }), /private-|1\.5/u);
+  });
+}
+
+test("session diagnostics distinguish malformed, structurally rejected, and malformed .env sources", async () => {
+  const warnings = [];
+  const loaded = await loadSessionConfigWithDiagnostics({
+    globalConfigPath: "global.yaml",
+    projectConfigPath: "project.yaml",
+    envFilePath: "project.env",
+    isProjectTrusted: true,
+    readText: createReader({
+      "global.yaml": "{",
+      "project.yaml": "observme:\n  query: bad\n",
+      "project.env": 'OBSERVME_ENABLED="true" private-trailing-garbage\n',
+    }),
+    env: {},
+    logger: { warn: message => warnings.push(message) },
+  });
+
+  assert.deepEqual(loaded.config, defaultObservMeConfig);
+  assert.equal(loaded.diagnostics.globalConfigStatus, "malformed");
+  assert.equal(loaded.diagnostics.projectConfigStatus, "rejected");
+  assert.equal(loaded.diagnostics.envFileStatus, "malformed");
+  assert.equal(loaded.diagnostics.environmentStatus, "missing");
+  assert.deepEqual(loaded.diagnostics.rejection?.issueCodes, ["invalid_config_shape", "config_source_malformed"]);
+  assert.equal(warnings.length, 1);
+  assert.doesNotMatch(JSON.stringify({ diagnostics: loaded.diagnostics, warnings }), /trailing-garbage|global\.yaml|project\.yaml|project\.env/u);
+});
+
+test("session diagnostics distinguish unreadable config and .env sources without exposing paths", async () => {
+  const warnings = [];
+  const privateReadError = new Error("EACCES /workspace/private-project/.env");
+  privateReadError.code = "EACCES";
+  const loaded = await loadSessionConfigWithDiagnostics({
+    globalConfigPath: "private-global.yaml",
+    projectConfigPath: "private-project.yaml",
+    envFilePath: "private-project.env",
+    isProjectTrusted: true,
+    readText: async () => {
+      throw privateReadError;
+    },
+    env: {},
+    logger: { warn: message => warnings.push(message) },
+  });
+
+  assert.deepEqual(loaded.config, defaultObservMeConfig);
+  assert.equal(loaded.diagnostics.globalConfigStatus, "unreadable");
+  assert.equal(loaded.diagnostics.projectConfigStatus, "unreadable");
+  assert.equal(loaded.diagnostics.envFileStatus, "unreadable");
+  assert.equal(loaded.diagnostics.environmentStatus, "missing");
+  assert.deepEqual(loaded.diagnostics.rejection, {
+    issueCodes: ["config_source_unreadable"],
+    issueCount: 3,
+  });
+  assert.equal(warnings.length, 1);
+  assert.doesNotMatch(JSON.stringify({ diagnostics: loaded.diagnostics, warnings }), /EACCES|private|workspace|\.env/u);
+});
+
+test("session diagnostics classify malformed YAML separately from a missing source", async () => {
+  const loaded = await loadSessionConfigWithDiagnostics({
+    globalConfigPath: "missing-global.yaml",
+    projectConfigPath: "project.yaml",
+    isProjectTrusted: true,
+    loadEnvFile: false,
+    readText: createReader({ "project.yaml": "observme:\n  capture\n" }),
+    env: {},
+  });
+
+  assert.equal(loaded.diagnostics.globalConfigStatus, "missing");
+  assert.equal(loaded.diagnostics.projectConfigStatus, "malformed");
+  assert.equal(loaded.diagnostics.envFileStatus, "skipped_disabled");
+  assert.deepEqual(loaded.diagnostics.rejection?.issueCodes, ["config_source_malformed"]);
+});
+
+const malformedEnvFileSyntaxCases = [
+  ["quoted trailing garbage", 'OBSERVME_ENABLED="true" trailing\n'],
+  ["unsupported non-assignment syntax", "export OBSERVME_ENABLED true\n"],
+];
+
+for (const [name, text] of malformedEnvFileSyntaxCases) {
+  test(`session loader rejects ${name} in trusted project .env`, async () => {
+    const loaded = await loadSessionConfigWithDiagnostics({
+      globalConfigPath: "missing-global.yaml",
+      projectConfigPath: "missing-project.yaml",
+      envFilePath: "project.env",
+      isProjectTrusted: true,
+      readText: createReader({ "project.env": text }),
+      env: {},
+    });
+
+    assert.equal(loaded.diagnostics.envFileStatus, "malformed");
+    assert.deepEqual(loaded.diagnostics.rejection?.issueCodes, ["config_source_malformed"]);
+    assert.doesNotMatch(JSON.stringify(loaded.diagnostics), /trailing|OBSERVME_ENABLED/u);
   });
 }
 
@@ -302,8 +432,9 @@ test("session loader rejects outside explicit project config and env overrides",
 
   assert.deepEqual(config, defaultObservMeConfig);
   assert.deepEqual(calls, ["missing-global.yaml"]);
-  assert.equal(warnings.length, 2);
-  assert.ok(warnings.every(message => message.includes("Unsafe ObservMe project")));
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /config_source_rejected/u);
+  assert.match(warnings[0], /2 issue\(s\)/u);
   assert.doesNotMatch(warnings.join("\n"), /private-demo|outside|private\.env|workspace/u);
 });
 
@@ -326,7 +457,7 @@ async function assertSessionConfigDirectoryRejected(configDirName) {
   assert.deepEqual(config, defaultObservMeConfig);
   assert.deepEqual(calls, ["missing-global.yaml"]);
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /Unsafe ObservMe project config path/u);
+  assert.match(warnings[0], /config_source_rejected/u);
   assert.doesNotMatch(warnings[0], /private-demo|outside|tmp|workspace/u);
 }
 
@@ -411,6 +542,7 @@ test("session loader maps Grafana auth and local transport environment variables
       OBSERVME_GRAFANA_PROMETHEUS_DATASOURCE_UID: "prometheus-custom",
       OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY: "true",
       OBSERVME_GRAFANA_PREFER_IPV4: "true",
+      OBSERVME_ALLOW_INSECURE_TRANSPORT: "true",
     },
   });
 
@@ -424,6 +556,7 @@ test("session loader maps Grafana auth and local transport environment variables
   });
   assert.equal(config.query.grafana.tls.insecureSkipVerify, true);
   assert.equal(config.query.grafana.transport.preferIPv4, true);
+  assert.equal(config.privacy.allowInsecureTransport, true);
 });
 
 const envFileText = `
@@ -436,6 +569,7 @@ OBSERVME_GRAFANA_LOKI_DATASOURCE_UID=loki-file
 OBSERVME_GRAFANA_PROMETHEUS_DATASOURCE_UID=prometheus-file
 OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY=true
 OBSERVME_GRAFANA_PREFER_IPV4=true
+OBSERVME_ALLOW_INSECURE_TRANSPORT=true
 OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS=50000
 `;
 
@@ -464,6 +598,7 @@ test("session loader reads trusted project .env and lets system env override it"
   });
   assert.equal(config.query.grafana.tls.insecureSkipVerify, true);
   assert.equal(config.query.grafana.transport.preferIPv4, true);
+  assert.equal(config.privacy.allowInsecureTransport, true);
   assert.equal(config.metrics.activeAgentLeaseDurationMillis, 55000);
 });
 

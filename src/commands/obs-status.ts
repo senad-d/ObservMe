@@ -1,7 +1,18 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { LoadSessionConfigOptions, SessionConfigDiagnostics, SessionConfigEffectiveSource } from "../config/load-config.ts";
+import type {
+  LoadSessionConfigOptions,
+  SessionConfigDiagnostics,
+  SessionConfigEffectiveSource,
+  SessionConfigEnvFileStatus,
+  SessionConfigEnvironmentStatus,
+  SessionConfigProjectStatus,
+} from "../config/load-config.ts";
 import { loadSessionConfigWithDiagnostics } from "../config/load-config.ts";
 import type { CaptureConfig, ObservMeConfig } from "../config/schema.ts";
+import {
+  describeGrafanaTransportSecurity,
+  describeOtlpTransportSecurity,
+} from "../config/transport-security.ts";
 import { getGrafanaQueryReadiness } from "../query/grafana-readiness.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { sanitizeObsDiagnosticText } from "./obs-diagnostics.ts";
@@ -129,8 +140,10 @@ export function renderObsStatus(snapshot: ObsStatusSnapshot): string {
   const lines = [
     `ObservMe: ${formatEnabled(config.enabled)}`,
     `OTLP endpoint: ${formatSafeConfiguredEndpoint(config.otlp.endpoint)}`,
+    `OTLP transport security: ${describeOtlpTransportSecurity(config)}`,
     ...formatConfigDiagnosticsLines(snapshot.configDiagnostics),
     `Grafana URL: ${formatSafeConfiguredUrl(config.query.grafana.url)}`,
+    `Grafana transport security: ${describeGrafanaTransportSecurity(config)}`,
     `Grafana query readiness: ${formatGrafanaQueryReadiness(config)}`,
     `Traces: ${formatEnabled(signalEnabled(config, config.traces.enabled))}`,
     `Metrics: ${formatEnabled(signalEnabled(config, config.metrics.enabled))}`,
@@ -259,7 +272,10 @@ function formatConfigDiagnosticsLines(diagnostics: SessionConfigDiagnostics | un
 
   return [
     `Config source: ${formatConfigEffectiveSource(diagnostics.effectiveSource)}`,
-    `Project config: ${formatProjectConfigStatus(diagnostics)}`,
+    ...formatGlobalConfigStatus(diagnostics),
+    `Project config: ${formatProjectConfigStatus(diagnostics.projectConfigStatus)}`,
+    ...formatEnvFileStatus(diagnostics.envFileStatus),
+    ...formatEnvironmentStatus(diagnostics.environmentStatus),
     ...formatConfigRejectionLines(diagnostics),
   ];
 }
@@ -281,13 +297,43 @@ function formatConfigEffectiveSource(source: SessionConfigEffectiveSource): stri
   return "defaults";
 }
 
-function formatProjectConfigStatus(diagnostics: SessionConfigDiagnostics): string {
-  if (diagnostics.projectConfigStatus === "loaded") return "loaded (trusted .pi/observme.yaml)";
-  if (diagnostics.projectConfigStatus === "skipped_untrusted") {
+function formatGlobalConfigStatus(diagnostics: SessionConfigDiagnostics): string[] {
+  if (!diagnostics.globalConfigStatus) return [];
+  return [`Global config: ${formatFileSourceStatus(diagnostics.globalConfigStatus, "global config")}`];
+}
+
+function formatProjectConfigStatus(status: SessionConfigProjectStatus): string {
+  if (status === "loaded") return "loaded (trusted .pi/observme.yaml)";
+  if (status === "skipped_untrusted") {
     return "skipped (project is untrusted; safe defaults/global/env only)";
   }
+  if (status === "missing") return "missing (trusted project has no .pi/observme.yaml)";
+  return formatFileSourceStatus(status, "trusted .pi/observme.yaml");
+}
 
-  return "missing (trusted project has no .pi/observme.yaml)";
+function formatEnvFileStatus(status: SessionConfigEnvFileStatus | undefined): string[] {
+  if (!status) return [];
+  if (status === "skipped_untrusted") return ["Project .env: skipped (project is untrusted)"];
+  if (status === "skipped_disabled") return ["Project .env: skipped (loading is disabled)"];
+  return [`Project .env: ${formatFileSourceStatus(status, "trusted project .env")}`];
+}
+
+function formatEnvironmentStatus(status: SessionConfigEnvironmentStatus | undefined): string[] {
+  if (!status) return [];
+  if (status === "loaded") return ["Process environment: loaded"];
+  if (status === "rejected") return ["Process environment: rejected (malformed supported override)"];
+  return ["Process environment: no ObservMe values"];
+}
+
+function formatFileSourceStatus(
+  status: Exclude<SessionConfigProjectStatus, "skipped_untrusted">,
+  label: string,
+): string {
+  if (status === "loaded") return "loaded";
+  if (status === "missing") return "missing";
+  if (status === "malformed") return `ignored (${label} is malformed)`;
+  if (status === "unreadable") return `ignored (${label} is unreadable)`;
+  return `ignored (${label} was structurally rejected)`;
 }
 
 function formatGrafanaQueryReadiness(config: ObservMeConfig): string {

@@ -1,4 +1,10 @@
 import { SpanStatusCode } from "@opentelemetry/api";
+import type {
+  ExtensionContext,
+  ToolCallEvent,
+  ToolResultEvent,
+  UserBashEvent,
+} from "@earendil-works/pi-coding-agent";
 import { TOOL_ATTRIBUTES } from "../../semconv/attributes.ts";
 import { LOG_EVENT_NAMES } from "../../semconv/metrics.ts";
 import { SPAN_NAMES } from "../../semconv/spans.ts";
@@ -42,11 +48,11 @@ import {
 import { monotonicNowMs } from "../handler-runtime.ts";
 import type { HandlerRegistrar } from "../handler-runtime.ts";
 import type {
-  Handler,
   HandlerSessionState,
-  ObservMeHandlerContext,
   ObservMeTelemetrySession,
   PendingBashOperationState,
+  PiEvent,
+  PiHandler,
   ToolCallState,
 } from "../handler-types.ts";
 
@@ -56,7 +62,6 @@ export function registerToolBashHandlers(registrar: HandlerRegistrar, state: Han
   registrar.add("tool_result", createToolResultHandler(state));
   registrar.add("tool_execution_end", createToolExecutionEndHandler(state));
   registrar.add("user_bash", createUserBashPreExecutionHandler(state));
-  registrar.add("bashExecution", createBashExecutionHandler(state));
 }
 
 export function recordBashExecution(session: ObservMeTelemetrySession, event: unknown): void {
@@ -97,14 +102,14 @@ export function recordBashExecution(session: ObservMeTelemetrySession, event: un
   emitLifecycleLog(session.logger, LOG_EVENT_NAMES.BASH_COMPLETED, attributes, failed ? "ERROR" : "INFO");
 }
 
-function createToolExecutionStartHandler(state: HandlerSessionState): Handler {
+function createToolExecutionStartHandler(state: HandlerSessionState): PiHandler<"tool_execution_start"> {
   return handleToolExecutionStart.bind(undefined, state);
 }
 
 function handleToolExecutionStart(
   state: HandlerSessionState,
-  event: unknown,
-  _ctx: ObservMeHandlerContext,
+  event: PiEvent<"tool_execution_start">,
+  _ctx: ExtensionContext,
 ): void {
   const session = state.session;
   if (!session) return;
@@ -114,11 +119,11 @@ function handleToolExecutionStart(
   recordOptionalToolArguments(session, toolState.span, event);
 }
 
-function createToolCallHandler(state: HandlerSessionState): Handler {
+function createToolCallHandler(state: HandlerSessionState): PiHandler<"tool_call"> {
   return handleToolCall.bind(undefined, state);
 }
 
-function handleToolCall(state: HandlerSessionState, event: unknown, _ctx: ObservMeHandlerContext): void {
+function handleToolCall(state: HandlerSessionState, event: ToolCallEvent, _ctx: ExtensionContext): void {
   const session = state.session;
   if (!session) return;
   if (dropAmbiguousToolLifecycleEvent(session, event, "tool_call")) return;
@@ -132,11 +137,11 @@ function handleToolCall(state: HandlerSessionState, event: unknown, _ctx: Observ
   recordOptionalToolArguments(session, toolState.span, event);
 }
 
-function createToolResultHandler(state: HandlerSessionState): Handler {
+function createToolResultHandler(state: HandlerSessionState): PiHandler<"tool_result"> {
   return handleToolResult.bind(undefined, state);
 }
 
-function handleToolResult(state: HandlerSessionState, event: unknown, _ctx: ObservMeHandlerContext): void {
+function handleToolResult(state: HandlerSessionState, event: ToolResultEvent, _ctx: ExtensionContext): void {
   const session = state.session;
   if (!session) return;
   if (dropAmbiguousToolLifecycleEvent(session, event, "tool_result")) return;
@@ -155,14 +160,14 @@ function captureToolResult(session: ObservMeTelemetrySession, toolState: ToolCal
   if (capturedResult) toolState.capturedResult = capturedResult;
 }
 
-function createToolExecutionEndHandler(state: HandlerSessionState): Handler {
+function createToolExecutionEndHandler(state: HandlerSessionState): PiHandler<"tool_execution_end"> {
   return handleToolExecutionEnd.bind(undefined, state);
 }
 
 function handleToolExecutionEnd(
   state: HandlerSessionState,
-  event: unknown,
-  _ctx: ObservMeHandlerContext,
+  event: PiEvent<"tool_execution_end">,
+  _ctx: ExtensionContext,
 ): void {
   const session = state.session;
   if (!session) return;
@@ -202,30 +207,19 @@ function handleToolExecutionEnd(
   deleteCurrentToolCall(session, toolCallId);
 }
 
-function createUserBashPreExecutionHandler(state: HandlerSessionState): Handler {
+function createUserBashPreExecutionHandler(state: HandlerSessionState): PiHandler<"user_bash"> {
   return handleUserBashPreExecution.bind(undefined, state);
 }
 
 function handleUserBashPreExecution(
   state: HandlerSessionState,
-  event: unknown,
-  _ctx: ObservMeHandlerContext,
+  event: UserBashEvent,
+  _ctx: ExtensionContext,
 ): void {
   const session = state.session;
   if (!session) return;
 
   startPendingUserBashOperation(session, event);
-}
-
-function createBashExecutionHandler(state: HandlerSessionState): Handler {
-  return handleBashExecution.bind(undefined, state);
-}
-
-function handleBashExecution(state: HandlerSessionState, event: unknown, _ctx: ObservMeHandlerContext): void {
-  const session = state.session;
-  if (!session) return;
-
-  recordBashExecution(session, event);
 }
 
 function dropAmbiguousToolLifecycleEvent(

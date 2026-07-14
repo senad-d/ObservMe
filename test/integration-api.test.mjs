@@ -48,11 +48,15 @@ function createFakeSpan(name, attributes, parentSpan) {
     setAttributes(values) {
       Object.assign(this.attributes, values);
     },
-    setStatus() {},
+    setStatus(status) {
+      this.status = status;
+    },
     spanContext() {
       return validSpanContext;
     },
-    end() {},
+    end() {
+      this.ended = true;
+    },
   };
 }
 
@@ -154,7 +158,38 @@ test("integration API rejects unsafe requests and duplicate active lifecycle ide
   assert.equal(session.spans.activeSubagentSpawns.size, 1);
   assert.equal(session.spans.activeSubagentSpawns.get("spawn-duplicate"), activeSpawn);
   assert.deepEqual(api.completeSubagent("", {}), { ok: false, reason: "invalid_request" });
-  assert.deepEqual(api.completeSubagent(started.spawnId, { childStatus: "active" }), { ok: true });
+  assert.deepEqual(api.completeSubagent(started.spawnId, { childStatus: "starting" }), {
+    ok: false,
+    reason: "invalid_request",
+  });
+  assert.deepEqual(api.completeSubagent(started.spawnId, { childStatus: "active" }), {
+    ok: false,
+    reason: "invalid_request",
+  });
+  assert.deepEqual(api.completeSubagent(started.spawnId, { childAgentId: "different-child", childStatus: "completed" }), {
+    ok: false,
+    reason: "child_agent_mismatch",
+  });
+  assert.deepEqual(api.completeSubagent(started.spawnId, { childStatus: "failed", outcome: "completed" }), {
+    ok: false,
+    reason: "invalid_terminal_transition",
+  });
+  assert.equal(session.spans.activeSubagentSpawns.get(started.spawnId), activeSpawn);
+  assert.equal(session.agentTree.getAgent(started.childAgentId).status, "starting");
+  assert.deepEqual(api.completeSubagent(started.spawnId, { childStatus: "completed", outcome: "completed" }), { ok: true });
+  assert.deepEqual(api.completeSubagent(started.spawnId, { childStatus: "completed" }), {
+    ok: false,
+    reason: "spawn_not_found",
+  });
+
+  const launcherFailure = api.startSubagent({ spawnId: "spawn-launcher-failure", env: {} });
+  assert.equal(launcherFailure.ok, true);
+  assert.deepEqual(api.failSubagent(launcherFailure.spawnId, { childAgentId: "different-child" }), {
+    ok: false,
+    reason: "child_agent_mismatch",
+  });
+  assert.equal(session.agentTree.getAgent(launcherFailure.childAgentId).status, "starting");
+  assert.deepEqual(api.failSubagent(launcherFailure.spawnId, { childAgentId: launcherFailure.childAgentId }), { ok: true });
 
   assert.deepEqual(api.startWait({ durationMs: Number.POSITIVE_INFINITY }), {
     ok: false,
@@ -210,7 +245,10 @@ test("integration API propagates child context and records spawn, wait, and join
   assert.equal(started.env.OBSERVME_SPAWN_ID, "spawn-integration");
   assert.equal(started.env.traceparent, `00-${validSpanContext.traceId}-${validSpanContext.spanId}-01`);
 
-  assert.deepEqual(api.completeSubagent(started.spawnId, { childStatus: "active" }), { ok: true });
+  assert.deepEqual(api.completeSubagent(started.spawnId, { childStatus: "active" }), {
+    ok: false,
+    reason: "invalid_request",
+  });
 
   const wait = api.startWait({
     spawnId: started.spawnId,
@@ -229,6 +267,14 @@ test("integration API propagates child context and records spawn, wait, and join
     }),
     { ok: true },
   );
+  assert.deepEqual(
+    api.completeSubagent(started.spawnId, {
+      childAgentId: started.childAgentId,
+      childStatus: "completed",
+      outcome: "completed",
+    }),
+    { ok: true },
+  );
 
   const join = api.startJoin({
     spawnId: started.spawnId,
@@ -238,6 +284,19 @@ test("integration API propagates child context and records spawn, wait, and join
     reason: "dependency",
   });
   assert.equal(join.ok, true);
+  assert.deepEqual(
+    api.endJoin(join.id, {
+      spawnId: started.spawnId,
+      childAgentId: started.childAgentId,
+      childStatus: "failed",
+      joinStatus: "failed",
+      reason: "dependency",
+      failurePropagated: true,
+    }),
+    { ok: false, reason: "invalid_terminal_transition" },
+  );
+  assert.equal(state.session.spans.activeAgentJoins.has(join.id), true);
+  assert.equal(state.session.agentTree.getAgent(started.childAgentId).status, "completed");
   assert.deepEqual(
     api.endJoin(join.id, {
       spawnId: started.spawnId,

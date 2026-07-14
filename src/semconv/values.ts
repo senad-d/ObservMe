@@ -1,3 +1,5 @@
+export const OBSERVME_CORRELATION_ENTRY_TYPE = "observme.correlation";
+
 export const SUBAGENT_SPAWN_REASON_VALUES = [
   "delegated_task",
   "parallel_search",

@@ -565,6 +565,7 @@ agent.run.failed
 agent.spawn.started
 agent.spawn.completed
 agent.spawn.failed
+agent.spawn.cancelled
 agent.wait.started
 agent.wait.completed
 agent.join.started
@@ -833,9 +834,9 @@ Minimum adapter behavior:
 1. Request the API with `requestObservMeIntegration(pi)`.
 2. Before spawning child Pi, call `startSubagent` with spawn type/reason and safe command metadata.
 3. Pass the returned `env` into `child_process.spawn`.
-4. On launcher success, call `completeSubagent` with child status `active`.
-5. On launcher error/abort/failure, call `failSubagent` or complete with cancelled status.
-6. Around blocking waits, call `startWait` and `endWait`.
+4. On launcher error before the child runs, call `failSubagent`.
+5. Around blocking waits, call `startWait` and `endWait`.
+6. When the child reaches a terminal state, call `completeSubagent` once with matching `completed`, `failed`, or `cancelled` status/outcome fields.
 7. When child output is collected, call `startJoin` and `endJoin` with child status.
 8. Ensure the child command loads ObservMe as an extension/package.
 9. Ensure the child ObservMe runtime receives the complete propagated parent context.

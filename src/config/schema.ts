@@ -13,7 +13,6 @@ export const ACTIVE_AGENT_LEASE_DURATION_MILLIS_MAXIMUM = 300_000;
 export const ACTIVE_AGENT_LEASE_EXPORT_SAFETY_MARGIN_MILLIS = 5_000;
 
 export interface OtlpTlsConfig {
-  enabled: boolean;
   insecureSkipVerify: boolean;
 }
 
@@ -178,7 +177,6 @@ export interface ObservMeConfig {
   enabled: boolean;
   environment: ObservMeEnvironment;
   tenant: string;
-  replayOnStart: boolean;
   otlp: OtlpConfig;
   resource: ResourceConfig;
   workflow: WorkflowConfig;
@@ -213,7 +211,6 @@ export const observMeConfigSchema = Type.Object(
     enabled: Type.Boolean(),
     environment: environmentSchema,
     tenant: Type.String({ minLength: 1 }),
-    replayOnStart: Type.Boolean(),
     otlp: Type.Object(
       {
         endpoint: Type.String({ minLength: 1 }),
@@ -222,7 +219,6 @@ export const observMeConfigSchema = Type.Object(
         headers: stringRecordSchema,
         tls: Type.Object(
           {
-            enabled: Type.Boolean(),
             insecureSkipVerify: Type.Boolean(),
           },
           { additionalProperties: false },

@@ -1,30 +1,3 @@
 {
-  "modelSelect": {
-    "provider": "openai",
-    "modelId": "gpt-fixture",
-    "prompt": "do not export model prompt"
-  },
-  "modelChange": {
-    "entry": {
-      "type": "model_change",
-      "id": "model-entry-1",
-      "parentId": "entry-user-1",
-      "provider": "anthropic",
-      "modelId": "claude-updated",
-      "content": "do not export model change content"
-    }
-  },
-  "thinkingSelect": {
-    "thinkingLevel": "high",
-    "message": "do not export thinking message"
-  },
-  "thinkingChange": {
-    "entry": {
-      "type": "thinking_level_change",
-      "id": "thinking-entry-1",
-      "parentId": "model-entry-1",
-      "thinkingLevel": "medium",
-      "content": "do not export thinking change content"
-    }
-  }
+  "replacedBy": "test/support/pi-event-fixtures.ts"
 }

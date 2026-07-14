@@ -7,6 +7,7 @@ export type ObservMeSpawnType = "command" | "tool" | "extension" | "unknown";
 export type ObservMeSpawnReason = "delegated_task" | "parallel_search" | "review" | "tool_wrapper" | "unknown";
 export type ObservMeAgentWaitReason = "dependency" | "rate_limit" | "child_running" | "unknown";
 export type ObservMeChildStatus = "starting" | "active" | "completed" | "failed" | "cancelled" | "orphaned";
+export type ObservMeTerminalChildStatus = Extract<ObservMeChildStatus, "completed" | "failed" | "cancelled">;
 export type ObservMeJoinStatus = "completed" | "failed" | "cancelled" | "timeout" | "unknown" | "waiting";
 export type ObservMeIntegrationFailureReason =
   | "session_unavailable"
@@ -15,6 +16,8 @@ export type ObservMeIntegrationFailureReason =
   | "wait_already_exists"
   | "join_already_exists"
   | "spawn_not_found"
+  | "child_agent_mismatch"
+  | "invalid_terminal_transition"
   | "wait_not_found"
   | "join_not_found"
   | "operation_failed";
@@ -63,8 +66,8 @@ export interface ObservMeStartedSubagent {
 
 export interface ObservMeCompleteSubagentOptions {
   readonly childAgentId?: string;
-  readonly childStatus?: ObservMeChildStatus;
-  readonly outcome?: "completed" | "failed" | "cancelled";
+  readonly childStatus?: ObservMeTerminalChildStatus;
+  readonly outcome?: ObservMeTerminalChildStatus;
 }
 
 export interface ObservMeFailSubagentOptions {

@@ -774,7 +774,7 @@ observme:
     headers:
       Authorization: ""
     tls:
-      enabled: false
+      insecureSkipVerify: false
   resource:
     attributes:
       service.name: ${serviceName}

@@ -17,6 +17,7 @@ import {
 } from "../src/commands/obs-agents-runtime.ts";
 import { AgentTreeTracker } from "../src/pi/agent-tree-tracker.ts";
 import { findForbiddenPrometheusLabels } from "../src/query/prometheus.ts";
+import { OBS_BACKEND_LABEL_MAX_CHARS, OBS_COMMAND_OUTPUT_MAX_CHARS } from "../src/safety/display-bounds.ts";
 
 const traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
 const remoteTraceId = "11111111111111111111111111111111";
@@ -312,6 +313,29 @@ test("renderObsAgents bounds recent child rows while preserving useful agent fie
   assert.match(largeOutput, /Wait\/join hints: active_waits=0 active_joins=0 latest=join:agent-child-60 status=completed duration=1\.2s/u);
   assert.match(largeOutput, /Aggregate agent metrics \(last 1h\): spawn_series=1 fanout_series=1 orphan_series=1/u);
   assert.match(largeOutput, new RegExp(`Lineage drill-down: .*latest_trace=${remoteTraceId}`, "u"));
+});
+
+test("renderObsAgents bounds injected display fields and strips label controls", () => {
+  const children = createChildRows(60).map((child, index) => ({
+    ...child,
+    agentId: `agent\n${index}-${"🙂".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`,
+  }));
+  const snapshot = createRenderSnapshot(children, 10);
+  snapshot.workflowId = `workflow\u0000-${"w".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`;
+  snapshot.tempoSearchAttributes = {
+    [`pi.agent\n${"x".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`]: "agent-root",
+  };
+  snapshot.traces = [{ traceId: `trace\u2028${"界".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}` }];
+
+  const output = renderObsAgents(snapshot);
+
+  assert.ok(output.length <= OBS_COMMAND_OUTPUT_MAX_CHARS);
+  assert.match(output, /Workflow: workflow -w+… root=agent-root/u);
+  assert.match(output, /Recent children: agent 0-.*… status=/u);
+  assert.match(output, /omitted 50 child row\(s\)/u);
+  assert.match(output, /latest_trace=trace .*…/u);
+  assert.doesNotMatch(output, /agent\n0/u);
+  assert.doesNotMatch(output.replaceAll("\n", ""), /[\p{Cc}\p{Zl}\p{Zp}]/u);
 });
 
 test("/obs agents queries low-cardinality PromQL and Tempo lineage attributes", async () => {

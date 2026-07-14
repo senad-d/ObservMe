@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import { MAX_GRAFANA_RESPONSE_BODY_BYTES } from "../src/query/grafana-transport.ts";
 import { TempoQueryClient, searchTempo } from "../src/query/tempo.ts";
+import { createOversizedGrafanaStreamResponse } from "./grafana-response-limit-helpers.mjs";
 
 const defaultRange = {
   from: new Date("2026-07-07T10:00:00.250Z"),
@@ -100,6 +102,23 @@ test("TempoQueryClient searches traces through the Grafana Tempo datasource prox
   );
   assert.equal(traces[0].rootServiceName, "observme-pi-extension");
   assert.equal(traces[0].durationMs, 125);
+});
+
+test("searchTempo cancels injected responses whose declared Content-Length exceeds the limit", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const oversized = createOversizedGrafanaStreamResponse({
+    "content-length": String(MAX_GRAFANA_RESPONSE_BODY_BYTES + 1),
+  });
+
+  await assert.rejects(
+    searchTempo(config, { "pi.session.id": "session-1" }, defaultRange, {
+      fetch: async () => oversized.response,
+    }),
+    /Grafana response body exceeded maximum size/u,
+  );
+  assert.equal(oversized.state.cancelled, true);
 });
 
 test("searchTempo accepts hashed fields and caps results by query.maxTraces", async () => {

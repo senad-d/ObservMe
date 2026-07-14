@@ -95,6 +95,7 @@ export const LOG_EVENT_NAMES = {
   AGENT_SPAWN_STARTED: "agent.spawn.started",
   AGENT_SPAWN_COMPLETED: "agent.spawn.completed",
   AGENT_SPAWN_FAILED: "agent.spawn.failed",
+  AGENT_SPAWN_CANCELLED: "agent.spawn.cancelled",
   AGENT_WAIT_STARTED: "agent.wait.started",
   AGENT_WAIT_COMPLETED: "agent.wait.completed",
   AGENT_JOIN_STARTED: "agent.join.started",
