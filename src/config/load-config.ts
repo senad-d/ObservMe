@@ -147,6 +147,11 @@ export function envToConfig(env: NodeJS.ProcessEnv = process.env): DeepPartial<O
   setString(config, ["otlp", "signalEndpoints", "metrics"], env.OBSERVME_OTLP_METRICS_ENDPOINT);
   setString(config, ["otlp", "signalEndpoints", "logs"], env.OBSERVME_OTLP_LOGS_ENDPOINT);
   setNumber(config, ["otlp", "timeoutMs"], env.OBSERVME_OTLP_TIMEOUT_MS);
+  setNumberForValidation(
+    config,
+    ["metrics", "activeAgentLeaseDurationMillis"],
+    env.OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS,
+  );
   setAuthorizationHeader(config, env.OBSERVME_OTLP_TOKEN);
   setNumber(config, ["workflow", "maxDepthWarning"], env.OBSERVME_WORKFLOW_MAX_DEPTH_WARNING);
   setNumber(config, ["workflow", "maxFanoutWarning"], env.OBSERVME_WORKFLOW_MAX_FANOUT_WARNING);
@@ -590,6 +595,12 @@ function setNumber(target: DeepPartial<ObservMeConfig>, path: string[], value: s
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return;
   setPathValue(target as Record<string, unknown>, path, parsed);
+}
+
+function setNumberForValidation(target: DeepPartial<ObservMeConfig>, path: string[], value: string | undefined) {
+  if (value === undefined || value === "") return;
+  const parsed = Number(value);
+  setPathValue(target as Record<string, unknown>, path, Number.isFinite(parsed) ? parsed : value);
 }
 
 function setBoolean(target: DeepPartial<ObservMeConfig>, path: string[], value: string | undefined) {

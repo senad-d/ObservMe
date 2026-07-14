@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
+import {
+  CANONICAL_ACTIVE_AGENT_BY_DEPTH_PROMQL,
+  CANONICAL_ACTIVE_AGENT_BY_ENVIRONMENT_PROMQL,
+  CANONICAL_ACTIVE_AGENT_BY_ROLE_PROMQL,
+  CANONICAL_ACTIVE_AGENT_TOTAL_PROMQL,
+  CANONICAL_EXPIRED_ACTIVE_AGENT_CLAIMS_PROMQL,
+  CANONICAL_RAW_ACTIVE_AGENT_CLAIMS_PROMQL,
+  evaluateCanonicalActiveAgentBreakdown,
+  evaluateCanonicalActiveAgentTotal,
+} from "./support/active-agent-promql.mjs";
 
 const dashboardsDirectory = "dashboards";
 const overviewDashboardFile = "dashboards/observme-overview.json";
@@ -49,6 +59,10 @@ const incorrectErrorCategoryPattern = /event_category\s*=\s*"error"/u;
 const lokiLabelsHintPattern = /key: loki\.(?:attribute|resource)\.labels\s*\n\s*value: ([^\n]+)/gu;
 const localServiceNameInsertPattern = /key: service\.name\s*\n\s*value: observme-pi-extension\s*\n\s*action: insert/u;
 const zeroVectorFallbackPattern = /\bor\s+(?:on\(\)\s+)?vector\(0\)/u;
+const rawActiveAgentSumPattern = /sum\s*\(\s*observme_active_agents(?:\s*>\s*0)?\s*\)/u;
+const activeAgentMetricName = "observme_active_agents";
+const activeAgentLeaseMetricName = "observme_agent_lease_expires_unixtime_seconds";
+const activeAgentDiagnosticPanelPattern = /(?:raw active claims|expired active claims)/iu;
 const sessionLifecycleMetricPattern = /\bobservme_sessions_(?:started|shutdown)_total\b/u;
 const emptyFailureLogsDescriptionPattern = /empty means no matching failure logs in the selected time range/i;
 const exportHealthZeroStatePanels = [
@@ -293,6 +307,50 @@ const provisionedDatasourceUidsByType = new Map([
   ["prometheus", "prometheus"],
   ["tempo", "tempo"],
 ]);
+const canonicalActiveAgentFixtures = [
+  {
+    title: "live claim with valid lease",
+    claims: [{ observmeInstanceId: "runtime-a", value: 1 }],
+    leases: [{ observmeInstanceId: "runtime-a", value: 1_060 }],
+    expected: 1,
+  },
+  {
+    title: "clean shutdown claim",
+    claims: [{ observmeInstanceId: "runtime-a", value: 0 }],
+    leases: [{ observmeInstanceId: "runtime-a", value: 1_060 }],
+    expected: 0,
+  },
+  {
+    title: "expired positive claim",
+    claims: [{ observmeInstanceId: "runtime-a", value: 1 }],
+    leases: [{ observmeInstanceId: "runtime-a", value: 1_000 }],
+    expected: 0,
+  },
+  {
+    title: "positive claim without lease",
+    claims: [{ observmeInstanceId: "runtime-a", value: 1 }],
+    leases: [],
+    expected: 0,
+  },
+  {
+    title: "positive claim with pathological future lease",
+    claims: [{ observmeInstanceId: "runtime-a", value: 1 }],
+    leases: [{ observmeInstanceId: "runtime-a", value: 1_306 }],
+    expected: 0,
+  },
+  {
+    title: "duplicate exporter replicas",
+    claims: [
+      { observmeInstanceId: "runtime-a", value: 1, replica: "collector-a" },
+      { observmeInstanceId: "runtime-a", value: 1, replica: "collector-b" },
+    ],
+    leases: [
+      { observmeInstanceId: "runtime-a", value: 1_060, replica: "collector-a" },
+      { observmeInstanceId: "runtime-a", value: 1_060, replica: "collector-b" },
+    ],
+    expected: 1,
+  },
+];
 
 async function readJsonFile(path) {
   return JSON.parse(await readFile(path, "utf8"));
@@ -631,6 +689,181 @@ function lokiMatcherLabels(selector) {
   for (const match of matches) labels.push(match[1]);
 
   return labels;
+}
+
+function compactPromql(expression) {
+  return expression.replace(/\s+/gu, "");
+}
+
+function assertCanonicalActiveAgentQuery(expression, context) {
+  assert.ok(expression.includes(activeAgentMetricName), `${context} must query ${activeAgentMetricName}`);
+  assert.ok(expression.includes(activeAgentLeaseMetricName), `${context} must query ${activeAgentLeaseMetricName}`);
+  assert.match(expression, /and\s+on\s*\(observme_instance_id\)/u, `${context} must join by observme_instance_id`);
+  assert.match(expression, /max\s+by\s*\([^)]*observme_instance_id/u, `${context} must deduplicate observme_instance_id`);
+  assert.match(expression, />\s*time\(\)/u, `${context} must require an unexpired lease`);
+  assert.match(expression, /<=\s*time\(\)\s*\+\s*305/u, `${context} must reject pathological future leases`);
+  assert.doesNotMatch(expression, rawActiveAgentSumPattern, `${context} must not sum raw active-agent claims`);
+}
+
+async function canonicalActiveAgentPromqlIsDocumentedAndEvaluatesFailureCases() {
+  const documentation = await readFile("docs/reference/09-dashboards-alerts-slos.md", "utf8");
+  const compactDocumentation = compactPromql(documentation);
+  const documentedQueries = [
+    CANONICAL_ACTIVE_AGENT_TOTAL_PROMQL,
+    CANONICAL_ACTIVE_AGENT_BY_ROLE_PROMQL,
+    CANONICAL_ACTIVE_AGENT_BY_ENVIRONMENT_PROMQL,
+    CANONICAL_ACTIVE_AGENT_BY_DEPTH_PROMQL,
+    CANONICAL_RAW_ACTIVE_AGENT_CLAIMS_PROMQL,
+    CANONICAL_EXPIRED_ACTIVE_AGENT_CLAIMS_PROMQL,
+  ];
+
+  for (const query of documentedQueries) {
+    assert.ok(compactDocumentation.includes(compactPromql(query)), `dashboard reference must document ${query}`);
+  }
+
+  for (const query of [
+    CANONICAL_ACTIVE_AGENT_TOTAL_PROMQL,
+    CANONICAL_ACTIVE_AGENT_BY_ROLE_PROMQL,
+    CANONICAL_ACTIVE_AGENT_BY_ENVIRONMENT_PROMQL,
+    CANONICAL_ACTIVE_AGENT_BY_DEPTH_PROMQL,
+  ]) {
+    assertCanonicalActiveAgentQuery(query, "canonical active-agent query");
+    assert.ok(hasZeroVectorFallback(query), "canonical active-agent queries must return zero when no series qualify");
+  }
+
+  assert.match(
+    documentation,
+    /do not emit the metric label `subagent_depth`/u,
+    "dashboard reference must distinguish the conditional depth shape from currently emitted active labels",
+  );
+  for (const fixture of canonicalActiveAgentFixtures) {
+    assert.equal(
+      evaluateCanonicalActiveAgentTotal(fixture, 1_000),
+      fixture.expected,
+      `canonical active-agent total: ${fixture.title}`,
+    );
+  }
+}
+
+function canonicalActiveAgentBreakdownsRetainEmittedDimensions() {
+  const fixture = {
+    claims: [
+      { observmeInstanceId: "runtime-a", value: 1, labels: { agent_role: "root", environment: "prod" } },
+      { observmeInstanceId: "runtime-a", value: 1, labels: { agent_role: "root", environment: "prod" } },
+      { observmeInstanceId: "runtime-b", value: 1, labels: { agent_role: "worker", environment: "ci" } },
+    ],
+    leases: [
+      { observmeInstanceId: "runtime-a", value: 1_060 },
+      { observmeInstanceId: "runtime-b", value: 1_060 },
+    ],
+  };
+
+  assert.deepEqual(
+    evaluateCanonicalActiveAgentBreakdown(fixture, 1_000, "agent_role"),
+    new Map([
+      ["root", 1],
+      ["worker", 1],
+    ]),
+  );
+  assert.deepEqual(
+    evaluateCanonicalActiveAgentBreakdown(fixture, 1_000, "environment"),
+    new Map([
+      ["prod", 1],
+      ["ci", 1],
+    ]),
+  );
+  assert.match(CANONICAL_ACTIVE_AGENT_BY_ROLE_PROMQL, /sum by \(agent_role\).*max by \(observme_instance_id, agent_role\)/u);
+  assert.match(CANONICAL_ACTIVE_AGENT_BY_ENVIRONMENT_PROMQL, /sum by \(environment\).*max by \(observme_instance_id, environment\)/u);
+  assert.match(CANONICAL_ACTIVE_AGENT_BY_DEPTH_PROMQL, /sum by \(subagent_depth\).*max by \(observme_instance_id, subagent_depth\)/u);
+}
+
+async function currentActiveAgentDashboardQueriesRequireValidLeases() {
+  let inspectedQueryCount = 0;
+
+  for (const path of dashboardFiles) {
+    const dashboard = await readJsonFile(path);
+    assert.equal(
+      dashboardVariableNames(dashboard).includes("observme_instance_id"),
+      false,
+      `${path}: observme_instance_id must remain an internal join key`,
+    );
+
+    for (const { panel, target } of prometheusTargetsForDashboard(dashboard)) {
+      if (!target.expr.includes(activeAgentMetricName)) continue;
+      if (activeAgentDiagnosticPanelPattern.test(panel.title)) continue;
+
+      inspectedQueryCount += 1;
+      assertCanonicalActiveAgentQuery(target.expr, `${path}: ${panel.title}`);
+      assert.doesNotMatch(
+        target.legendFormat ?? "",
+        /observme_instance_id/u,
+        `${path}: ${panel.title} must not display observme_instance_id`,
+      );
+      if (panel.type !== "nodeGraph") {
+        assert.ok(hasZeroVectorFallback(target.expr), `${path}: ${panel.title} must return zero when no live lease qualifies`);
+      }
+    }
+  }
+
+  assert.ok(inspectedQueryCount > 0, "at least one current active-agent dashboard query must be inspected");
+}
+
+async function currentActiveAgentPanelsExplainLeaseConvergence() {
+  let inspectedPanelCount = 0;
+
+  for (const path of dashboardFiles) {
+    const dashboard = await readJsonFile(path);
+
+    for (const { panel, target } of prometheusTargetsForDashboard(dashboard)) {
+      if (!target.expr.includes(activeAgentMetricName)) continue;
+      if (activeAgentDiagnosticPanelPattern.test(panel.title)) continue;
+
+      inspectedPanelCount += 1;
+      const description = panel.description ?? "";
+      assert.match(description, /leased/iu, `${path}: ${panel.title} must identify leased activity`);
+      assert.match(description, /clean shutdown/iu, `${path}: ${panel.title} must explain the clean zero state`);
+      assert.match(description, /(?:crash|ungraceful)/iu, `${path}: ${panel.title} must explain ungraceful convergence`);
+      assert.match(
+        description,
+        /60-second lease plus one Prometheus scrape/iu,
+        `${path}: ${panel.title} must state the default convergence window`,
+      );
+      assert.match(description, /\/obs agents/iu, `${path}: ${panel.title} must distinguish local child state`);
+    }
+  }
+
+  assert.ok(inspectedPanelCount > 0, "at least one current active-agent panel description must be inspected");
+}
+
+async function agentDashboardShowsLeaseHealthDiagnostics() {
+  const dashboard = await readJsonFile(agentDashboardFile);
+  const rawClaimsPanel = assertAgentDashboardPanel(dashboard, "Raw active claims (diagnostic)");
+  const expiredClaimsPanel = assertAgentDashboardPanel(dashboard, "Expired active claims (diagnostic)");
+
+  assert.deepEqual(expressionsForPanel(rawClaimsPanel), [CANONICAL_RAW_ACTIVE_AGENT_CLAIMS_PROMQL]);
+  assert.deepEqual(expressionsForPanel(expiredClaimsPanel), [CANONICAL_EXPIRED_ACTIVE_AGENT_CLAIMS_PROMQL]);
+  assert.match(rawClaimsPanel.description ?? "", /not live-agent totals/iu);
+  assert.match(rawClaimsPanel.description ?? "", /may remain cached/iu);
+  assert.match(expiredClaimsPanel.description ?? "", /never contribute to leased active totals/iu);
+  assert.match(expiredClaimsPanel.description ?? "", /ungraceful exits/iu);
+  assert.match(expiredClaimsPanel.description ?? "", /deployment-tunable/iu);
+  assert.match(expiredClaimsPanel.description ?? "", /Collector cleanup/iu);
+  assert.match(expiredClaimsPanel.description ?? "", /\/obs agents/iu);
+  assert.deepEqual(expiredClaimsPanel.fieldConfig?.defaults?.thresholds?.steps, [
+    { color: "green", value: null },
+    { color: "yellow", value: 1 },
+    { color: "red", value: 5 },
+  ]);
+  assertPanelLinksToDashboard(rawClaimsPanel, exportHealthDashboardFile.split("/").at(-1).replace(".json", ""), agentDashboardFile);
+  assertPanelLinksToDashboard(expiredClaimsPanel, exportHealthDashboardFile.split("/").at(-1).replace(".json", ""), agentDashboardFile);
+  for (const panel of [rawClaimsPanel, expiredClaimsPanel]) {
+    assert.equal(panel.targets[0].instant, true, `${agentDashboardFile}: ${panel.title} must use an instant diagnostic query`);
+    assert.equal(panel.targets[0].range, false, `${agentDashboardFile}: ${panel.title} must not use a range query`);
+    assert.ok(
+      panel.links.some(link => link.url?.includes("${__url_time_range}")),
+      `${agentDashboardFile}: ${panel.title} must preserve the dashboard time range`,
+    );
+  }
 }
 
 async function dashboardFilesAreValidGrafanaDashboards() {
@@ -1088,6 +1321,8 @@ async function nodeGraphDashboardUsesCountsAndHealthSignals() {
 
   assert.ok(rootTopologyPanel, `${nodeGraphDashboardFile}: root topology panel is required`);
   assert.ok(spawnTopologyPanel, `${nodeGraphDashboardFile}: spawn topology panel is required`);
+  assert.match(rootTopologyPanel.description ?? "", /not per-workflow truth/iu);
+  assert.match(spawnTopologyPanel.description ?? "", /not per-workflow truth/iu);
   assertPanelExpressionsContainMetrics(nodeGraphDashboardFile, rootTopologyPanel, nodeGraphHealthMetricNames);
   assertPanelExpressionsContainMetrics(nodeGraphDashboardFile, spawnTopologyPanel, ["observme_subagent_spawn_failures_total"]);
 }
@@ -1376,6 +1611,14 @@ function assertPanelHasTraceJourneyFilterLink(dashboard, title) {
 test("dashboard file list covers every dashboard JSON file", listedDashboardFilesCoverDashboardJsonFiles);
 test("dashboard JSON files are valid Grafana dashboard documents", dashboardFilesAreValidGrafanaDashboards);
 test("dashboard PromQL queries only use documented ObservMe metric names", dashboardPromqlQueriesUseDocumentedMetrics);
+test(
+  "canonical active-agent PromQL is documented and evaluates lease failure cases",
+  canonicalActiveAgentPromqlIsDocumentedAndEvaluatesFailureCases,
+);
+test("canonical active-agent breakdowns retain emitted dimensions", canonicalActiveAgentBreakdownsRetainEmittedDimensions);
+test("current active-agent dashboard queries require valid leases", currentActiveAgentDashboardQueriesRequireValidLeases);
+test("current active-agent panels explain lease convergence", currentActiveAgentPanelsExplainLeaseConvergence);
+test("agent dashboard shows lease-health diagnostics", agentDashboardShowsLeaseHealthDiagnostics);
 test(
   "agent dashboard Prometheus targets avoid high-cardinality workflow and agent labels",
   agentDashboardPrometheusTargetsAvoidHighCardinalityLabels,

@@ -4,6 +4,12 @@
 
 ### Added
 
+- Added a bounded GitHub-hosted Linux CI job for active-agent lease contracts and cancellation-oriented Docker integration coverage, with resource-labeled unconditional cleanup.
+- Added Docker-backed active-agent lease integration coverage for clean shutdown, `SIGTERM`, and `SIGKILL`, proving cached raw claims outlive lease-aware activity without a Collector restart.
+- Added a session-scoped active-agent lease controller that renews from the SDK metric collection cycle with an injectable wall clock and deterministic disposal.
+- Added the `observme_agent_lease_expires_unixtime_seconds` asynchronous gauge contract with unit metadata and deterministic observable callback test support.
+- Added bounded `metrics.activeAgentLeaseDurationMillis` configuration with layered `OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS` loading, fail-safe validation, and generated/example configuration coverage.
+- Added a production-readiness task plan for lease-based active-agent accounting that remains accurate after crashes, forced termination, and cancelled GitHub Actions jobs.
 - Added a packaged `observme-docs` Pi skill that routes natural-language ObservMe questions to focused user, operator, reference, example, and contributor documentation through Pi's normal skill discovery, without an ObservMe system-prompt hook.
 - Added a versioned `@senad-d/observme/integration` event-bus API and transport-agnostic child-runner example for parent-side spawn/wait/join telemetry and child process lineage propagation.
 - Added README tables cataloging available metrics, trace spans, and structured log events, including opt-in and reserved signals.
@@ -15,6 +21,11 @@
 
 ### Changed
 
+- Completed production active-agent lease documentation, raw-query migration guidance, GitHub Actions/self-hosted clock and cleanup runbooks, missing/expired-lease troubleshooting, Collector restart semantics, and sanitized release-validation evidence.
+- Reframed the Collector's five-minute Prometheus `metric_expiration` as exporter-wide stale-series/cardinality cleanup, longer than the default active-agent lease and independent of leased liveness.
+- Migrated active-agent dashboard totals, bounded breakdowns, aggregate topology inputs, and stuck-high alerts to leased activity, with raw/expired-claim diagnostics and a deployment-tunable stale-claim alert.
+- Defined and enforced canonical lease-aware active-agent PromQL for totals, bounded breakdowns, topology inputs, and alerts, including replica deduplication, future-lease rejection, and zero-safe idle states.
+- Documented the production active-agent lease, clock, convergence, instance-join, failure-mode, and backward-compatibility contract used by upcoming runtime and dashboard integration.
 - Moved the detailed technical reference into `docs/reference/` and updated package, documentation, examples, dashboards, tests, and skill routes to use the new location.
 - Made the packaged `observme-docs` skill resolve routed references from its installed package root instead of the caller's working directory or a repository checkout.
 - Reorganized documentation around `docs/README.md`, a categorized technical-reference index, and an example guide with explicit usage and safety notes.
@@ -27,6 +38,7 @@
 
 ### Fixed
 
+- Integrated active-agent lease activation and deactivation with clean shutdown, duplicate/reload replacement, resume, and failed-start cleanup so final flushes cannot renew stale activity.
 - Fixed session, workflow, agent, turn, LLM, tool, Bash, histogram, active-span, failure/recovery, and session-count telemetry accuracy.
 - Fixed lifecycle serialization, duplicate session replacement, bounded shutdown/flush behavior, backfill cancellation, parallel tool correlation, and bounded agent-tree state cleanup.
 - Hardened configuration validation, project-root path confinement, endpoint security, custom redaction patterns, tenant-salted hashing, and environment propagation.

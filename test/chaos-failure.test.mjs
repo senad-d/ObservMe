@@ -100,6 +100,10 @@ function createFakeMeter() {
     createHistogram: name => ({
       record: (value, attributes = {}) => records.push({ type: "histogram", name, value, attributes }),
     }),
+    createObservableGauge: () => ({
+      addCallback() {},
+      removeCallback() {},
+    }),
   };
 }
 

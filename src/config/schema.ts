@@ -8,6 +8,10 @@ export type ObservMeEnvironment = (typeof observMeEnvironments)[number];
 export type OtlpProtocol = "http/protobuf";
 export type PrivacyPathMode = (typeof privacyPathModes)[number];
 
+export const ACTIVE_AGENT_LEASE_DURATION_MILLIS_MINIMUM = 10_000;
+export const ACTIVE_AGENT_LEASE_DURATION_MILLIS_MAXIMUM = 300_000;
+export const ACTIVE_AGENT_LEASE_EXPORT_SAFETY_MARGIN_MILLIS = 5_000;
+
 export interface OtlpTlsConfig {
   enabled: boolean;
   insecureSkipVerify: boolean;
@@ -71,6 +75,7 @@ export interface MetricsConfig {
   enabled: boolean;
   exportIntervalMillis: number;
   exportTimeoutMillis: number;
+  activeAgentLeaseDurationMillis: number;
   labels?: string[];
 }
 
@@ -288,6 +293,10 @@ export const observMeConfigSchema = Type.Object(
         enabled: Type.Boolean(),
         exportIntervalMillis: positiveIntegerSchema,
         exportTimeoutMillis: positiveIntegerSchema,
+        activeAgentLeaseDurationMillis: Type.Integer({
+          minimum: ACTIVE_AGENT_LEASE_DURATION_MILLIS_MINIMUM,
+          maximum: ACTIVE_AGENT_LEASE_DURATION_MILLIS_MAXIMUM,
+        }),
         labels: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
       },
       { additionalProperties: false },

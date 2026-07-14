@@ -101,6 +101,7 @@ export const PROJECT_OBSERVME_YAML_TEMPLATE = `observme:
     enabled: true
     exportIntervalMillis: 15000
     exportTimeoutMillis: 3000
+    activeAgentLeaseDurationMillis: 60000
 
   logs:
     enabled: true

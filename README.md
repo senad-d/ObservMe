@@ -62,7 +62,7 @@ This checkout implements the ObservMe MVP scope described by the packaged [`docs
 
 - Extension load checks and `/obs health` backend checks.
 - Session, workflow, agent-run, turn, LLM, tool, bash, subagent-spawn, wait/join, compaction, branch, model-change, and thinking-level telemetry.
-- Multi-agent tree metrics for active agents, depth, fan-out, orphan agents, trace-context propagation failures, child failures, and workflow duration.
+- Lease-qualified multi-agent activity plus tree metrics for depth, fan-out, orphan agents, trace-context propagation failures, child failures, and workflow duration; abrupt exits converge without a Collector restart.
 - Session-scoped OTLP trace, metric, and log exporters with bounded queues, timeouts, and shutdown flushing.
 - Configurable capture controls, redaction, path scrubbing, hashing, truncation, and high-cardinality metric-label guards.
 - Grafana dashboard JSON, alert rules, SLO definitions, Collector examples, and compatibility matrix artifacts.
@@ -230,9 +230,16 @@ Metric labels are intentionally low-cardinality. Session, workflow, agent, trace
 | Histogram | Workflow and agent tree | `observme_workflow_duration_ms`<br>`observme_agent_run_duration_ms`<br>`observme_subagent_spawn_duration_ms`<br>`observme_agent_wait_duration_ms`<br>`observme_agent_join_duration_ms`<br>`observme_agent_tree_depth`<br>`observme_agent_tree_width`<br>`observme_agent_fanout_count` | Workflow/agent latency and multi-agent tree shape. |
 | Histogram | Operation latency | `observme_turn_duration_ms`<br>`observme_llm_request_duration_ms`<br>`observme_tool_duration_ms`<br>`observme_bash_duration_ms`<br>`observme_handler_duration_ms` | End-to-end operation and extension-handler duration in milliseconds. |
 | Histogram | Context and payload size | `observme_compaction_tokens_before`<br>`observme_prompt_size_chars`<br>`observme_response_size_chars`<br>`observme_tool_result_size_chars` | Context size before compaction and payload sizes in characters. Size metrics do not contain payload content. |
-| Up-down counter | Current activity | `observme_active_spans`<br>`observme_active_agents` | Active operations and agents for the current exported stream. |
+| Up-down counter | Current activity | `observme_active_spans`<br>`observme_active_agents` | Active operations and the compatibility lifecycle claim for agents in the current exported stream. |
+| Asynchronous gauge | Agent liveness lease | `observme_agent_lease_expires_unixtime_seconds` | Absolute Unix expiry renewed on each metric collection while the session is active; operational active-agent queries join it to the positive lifecycle claim. |
 | Registered, not yet recorded | Agent lifetime | `observme_agent_lifetime_duration_ms` | Reserved instrument; the current live handlers do not record measurements yet. |
 | Registered, not yet recorded | Official GenAI compatibility | `gen_ai.client.token.usage`<br>`gen_ai.client.operation.duration` | Reserved OpenTelemetry GenAI instruments; use the `observme_llm_*` metrics above for current data. |
+
+### Active-agent liveness
+
+`observme_active_agents` remains a clean-start/clean-shutdown lifecycle claim, but raw sums are not authoritative after a crash, `SIGKILL`, cancelled GitHub Actions job, or lost runner. The shipped dashboards and alerts count an instance only when that claim is positive and its `observme_agent_lease_expires_unixtime_seconds` value is current and within the supported future horizon. Clean shutdown reaches zero after export/scrape propagation; an ungraceful exit converges within the configured lease plus up to 5 seconds of supported clock skew and one Prometheus scrape/evaluation interval (80 seconds with the default 60-second lease and a 15-second scrape).
+
+Missing, expired, malformed, or pathologically future leases fail closed. GitHub-hosted runners satisfy the clock requirement; self-hosted runners must keep the producer and Prometheus clocks synchronized within 5 seconds. Collector restart is not required for convergence, even when its Prometheus exporter continues to expose a cached raw claim. Migrate custom panels, alerts, and recording rules from raw `sum(observme_active_agents)` queries to the [canonical lease-aware PromQL](docs/reference/09-dashboards-alerts-slos.md#131-canonical-active-agent-promql), and use raw/expired claims only for diagnostics.
 
 ### Traces
 
@@ -383,7 +390,7 @@ These assets are included in the npm package:
 
 Open **ObservMe Overview** first for health/SLO chips, workload, cost, latency, agent-lineage status, and time-preserving links to focused dashboards. Use **Trace Journey** to follow a session/workflow/agent/run across Prometheus aggregates, Loki logs, and Tempo traces. Use **LLM Conversations** only for redacted opt-in content; raw prompt, response, command, path, and error-message values should never be placed in dashboard URLs or Prometheus labels. Empty failure tables normally mean no matching failures in the selected range, while optional content panels can be empty because capture is disabled by default.
 
-The full dashboard map, standard variables, drill-down workflow, threshold colors, and zero-state semantics are documented in `docs/reference/09-dashboards-alerts-slos.md`.
+The full dashboard map, canonical lease-aware active-agent queries, raw-query migration, standard variables, drill-down workflow, threshold colors, and zero-state semantics are documented in `docs/reference/09-dashboards-alerts-slos.md`. For an unexpected zero or stale raw claim, follow the active-lease troubleshooting flow in `docs/reference/11-deployment-runbooks.md` and check Export Health before concluding that the producer stopped.
 
 ## Documentation Set
 
@@ -415,8 +422,10 @@ npm run lint:fix    # ESLint auto-fix pass
 npm run format:check
 npm run test
 npm run test:integration:collector
+npm run test:integration:active-agent-lease
 npm run test:integration:grafana-stack
 npm run check:pack
+npm run pack:dry-run
 npm run smoke:pi-runtime
 npm run validate:grafana-obs
 pi --no-extensions -e .

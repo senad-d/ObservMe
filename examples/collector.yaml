@@ -1,4 +1,4 @@
-# Production-oriented Collector reference for Tempo, Loki, and Mimir.
+# Production-oriented Collector reference for Tempo, Loki, and Prometheus.
 # Verify that your Collector distribution contains every configured component,
 # replace backend endpoints/security for your deployment, and never add raw
 # content or high-cardinality execution identifiers to metric labels.
@@ -97,13 +97,13 @@ exporters:
     retry_on_failure:
       enabled: true
 
-  prometheusremotewrite/mimir:
-    endpoint: http://mimir:9009/api/v1/push
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # Exporter-wide stale-series/cardinality cleanup for gauges, counters, and
+    # histograms. Five minutes exceeds ObservMe's default one-minute active-agent
+    # lease; lease-aware PromQL, not expiration, determines liveness.
+    metric_expiration: 5m
     resource_to_telemetry_conversion:
-      enabled: true
-    sending_queue:
-      enabled: true
-    retry_on_failure:
       enabled: true
 
   debug:
@@ -120,7 +120,7 @@ service:
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, resource/observme, resource/drop_high_cardinality_metric_attrs, batch]
-      exporters: [prometheusremotewrite/mimir]
+      exporters: [prometheus]
 
     logs:
       receivers: [otlp]

@@ -1,6 +1,9 @@
 import { Compile } from "typebox/compile";
 import { defaultObservMeConfig } from "./defaults.ts";
-import { observMeConfigSchema } from "./schema.ts";
+import {
+  ACTIVE_AGENT_LEASE_EXPORT_SAFETY_MARGIN_MILLIS,
+  observMeConfigSchema,
+} from "./schema.ts";
 import type { ObservMeConfig } from "./schema.ts";
 import { validateCustomRedactionPatterns } from "../privacy/redact.ts";
 
@@ -58,6 +61,7 @@ const knownConfigValidationIssueCodes = new Set([
   "insecure_production_transport",
   "invalid_signal_endpoint_path",
   "high_cardinality_metric_label",
+  "active_agent_lease_too_short_for_export_interval",
   "custom_redaction_pattern_limit",
   "custom_redaction_pattern_too_long",
   "custom_redaction_pattern_unsupported_construct",
@@ -82,6 +86,7 @@ export function validateObservMeConfig(
     ...validateTransportSecurity(config),
     ...validateSignalEndpoints(config),
     ...validateMetricLabels(config),
+    ...validateActiveAgentLeaseDuration(config),
     ...validateCustomRedactionPatternConfig(config),
     ...validateProjectTrust(options),
     ...validateLineageEnvironment(config, options.env ?? process.env),
@@ -305,6 +310,20 @@ function validateMetricLabels(config: ObservMeConfig): ValidationIssue[] {
     code: "high_cardinality_metric_label",
     message: `Metric label ${label} is a forbidden high-cardinality identifier.`,
   }));
+}
+
+function validateActiveAgentLeaseDuration(config: ObservMeConfig): ValidationIssue[] {
+  const requiredDuration =
+    (2 * config.metrics.exportIntervalMillis) + ACTIVE_AGENT_LEASE_EXPORT_SAFETY_MARGIN_MILLIS;
+  if (config.metrics.activeAgentLeaseDurationMillis >= requiredDuration) return [];
+
+  return [
+    {
+      code: "active_agent_lease_too_short_for_export_interval",
+      message:
+        "metrics.activeAgentLeaseDurationMillis must be at least twice metrics.exportIntervalMillis plus the clock-skew safety margin.",
+    },
+  ];
 }
 
 function validateCustomRedactionPatternConfig(config: ObservMeConfig): ValidationIssue[] {

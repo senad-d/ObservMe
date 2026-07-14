@@ -64,6 +64,7 @@ observme:
     enabled: true
     exportIntervalMillis: 15000
     exportTimeoutMillis: 3000
+    activeAgentLeaseDurationMillis: 60000
 
   logs:
     enabled: true
@@ -146,6 +147,7 @@ OBSERVME_OTLP_TRACES_ENDPOINT
 OBSERVME_OTLP_METRICS_ENDPOINT
 OBSERVME_OTLP_LOGS_ENDPOINT
 OBSERVME_OTLP_TOKEN
+OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS
 OBSERVME_WORKFLOW_ID
 OBSERVME_WORKFLOW_MAX_DEPTH_WARNING
 OBSERVME_WORKFLOW_MAX_FANOUT_WARNING
@@ -183,6 +185,17 @@ OBSERVME_REDACTION_ENABLED
 OBSERVME_ALLOW_UNSAFE_CAPTURE
 OBSERVME_ALLOW_INSECURE_TRANSPORT
 ```
+
+### 2.1 Active-agent lease configuration
+
+| Setting | Default | Supported values | Purpose |
+| --- | --- | --- | --- |
+| `metrics.activeAgentLeaseDurationMillis` | `60000` | Integer `10000`–`300000`, and at least `(2 * metrics.exportIntervalMillis) + 5000` | Validity window renewed on each metric collection while the session is active. |
+| `OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS` | unset | Same as the YAML field | Environment override through the normal trusted `.env` / system environment precedence. |
+
+The value controls failure-convergence latency, not a background timer. A clean shutdown deactivates the lease before final flush and reaches zero after normal export/scrape propagation. An ungraceful exit reaches zero within the configured lease plus up to 5 seconds of supported clock skew and one Prometheus scrape/evaluation interval. Missing or invalid leases fail closed. Keep producer and Prometheus clocks synchronized within 5 seconds; GitHub-hosted runners meet this requirement, while self-hosted runners need reliable time synchronization.
+
+Do not tune this field by shortening Collector `metric_expiration`. The recommended five-minute exporter cleanup remains longer than the default lease and applies to all gauges, counters, and histograms. Changing Collector configuration may require reload or restart, but restart is not required for active-agent correctness.
 
 ## 3. Workflow and Agent Lineage Configuration
 
@@ -243,6 +256,9 @@ agent:
   writeCorrelationEntry: false
 workflow:
   enabled: true
+metrics:
+  exportIntervalMillis: 15000
+  activeAgentLeaseDurationMillis: 60000
 ```
 
 ## 6. Development Defaults
@@ -321,7 +337,8 @@ Reject config when:
 - `allowUnsafeCapture=false` and `redactionEnabled=false` while any content capture is true.
 - Production endpoint uses `http://` and `allowInsecureTransport` is not true.
 - `otlp.protocol=http/protobuf` but a signal-specific exporter URL omits the required `/v1/traces`, `/v1/metrics`, or `/v1/logs` path.
-- Metric labels include high-cardinality fields such as workflow IDs, session IDs, agent IDs, parent/child agent IDs, trace IDs, span IDs, entry IDs, spawn IDs, or spawn tool-call IDs.
+- `metrics.activeAgentLeaseDurationMillis` is fractional, non-numeric, below `10000`, above `300000`, or less than `(2 * metrics.exportIntervalMillis) + 5000`.
+- Metric labels include high-cardinality fields such as workflow IDs, session IDs, agent IDs, parent/child agent IDs, trace IDs, span IDs, entry IDs, spawn IDs, or spawn tool-call IDs. The generated `observme.instance.id` / `service.instance.id` remains a resource identity used by the Collector for the `observme_instance_id` lease join; it must not be configured as an execution-derived label.
 - Project-local config is read while `ctx.isProjectTrusted()` is false.
 - Propagated workflow or agent lineage values are malformed, too long, or contain unsafe characters.
 - Queue sizes exceed configured memory guardrails.

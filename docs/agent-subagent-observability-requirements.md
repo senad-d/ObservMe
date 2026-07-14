@@ -647,26 +647,34 @@ histogram_quantile(0.95, sum(rate(observme_subagent_spawn_duration_ms_bucket[$__
 
 ```text
 observme_active_agents
+observme_agent_lease_expires_unixtime_seconds
 observme_agent_tree_depth
 observme_agent_tree_width
 observme_agent_fanout_count
 ```
 
-Expected labels:
-
-```text
-agent_role
-subagent_depth
-```
+The active claim and lease carry the bounded `agent_role` and `environment` dimensions plus generated resource-instance identity normalized by the Collector to `observme_instance_id`. They do not currently carry `subagent_depth`; never derive a replacement depth label from workflow, session, logical-agent, trace, span, or job-run IDs. The tree histograms retain their documented bounded tree dimensions.
 
 Dashboard examples:
 
 ```promql
-sum(observme_active_agents) by (agent_role, subagent_depth)
+sum by (agent_role) (
+  max by (observme_instance_id, agent_role) (
+    (observme_active_agents > 0)
+    and on (observme_instance_id)
+    (
+      (observme_agent_lease_expires_unixtime_seconds > time())
+      and
+      (observme_agent_lease_expires_unixtime_seconds <= time() + 305)
+    )
+  )
+) or on() vector(0)
 histogram_quantile(0.95, sum(rate(observme_agent_tree_depth_bucket[$__rate_interval])) by (subagent_depth, le))
 histogram_quantile(0.95, sum(rate(observme_agent_tree_width_bucket[$__rate_interval])) by (subagent_depth, le))
 histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket[$__rate_interval])) by (subagent_depth, le))
 ```
+
+Use the canonical total, role, environment, diagnostics, and migration guidance in [`reference/09-dashboards-alerts-slos.md` §1.3](reference/09-dashboards-alerts-slos.md#13-active-agent-leased-state-contract); raw active-claim sums are not current-liveness queries after ungraceful termination.
 
 ### Lineage health metrics
 

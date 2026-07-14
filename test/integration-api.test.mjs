@@ -21,6 +21,7 @@ function createFakeMeter() {
     createCounter: () => ({ add() {} }),
     createUpDownCounter: () => ({ add() {} }),
     createHistogram: () => ({ record() {} }),
+    createObservableGauge: () => ({ addCallback() {}, removeCallback() {} }),
   };
 }
 

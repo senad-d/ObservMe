@@ -14,7 +14,9 @@ ObservMe must be tested at five levels:
 
 Required areas:
 
-- Config loading and precedence
+- Config loading, precedence, and active-agent lease/export-interval bounds
+- Active-agent lease renewal, deactivation, disposal, clock movement, and clean/abrupt lifecycle behavior
+- Canonical lease-aware PromQL, replica deduplication, and missing/expired/future lease cases
 - Redaction patterns
 - Hashing stability
 - Truncation behavior
@@ -123,6 +125,29 @@ Tests:
 - Prometheus metric query for token totals
 - Grafana dashboard import validates
 
+### 6.1 Active-agent lease integration
+
+Run the focused cached-exporter test separately from the broad Grafana stack:
+
+```bash
+npm run test:integration:active-agent-lease
+```
+
+The test starts pinned Collector and Prometheus containers, then runs real Node telemetry producers with a test-safe 2-second export interval, 10-second lease, and 1-second Prometheus scrape interval. It validates clean shutdown and `SIGTERM` first, then kills a producer with `SIGKILL` and requires all of the following:
+
+- the raw `observme_active_agents` claim remains positive across fresh Prometheus scrapes;
+- the canonical lease-aware count reaches zero without a shutdown event;
+- convergence stays within the documented 10-second lease, 5-second clock-skew allowance, and one 1-second scrape interval;
+- the Collector container identity and zero restart count remain unchanged.
+
+The test uses no credentials or content capture. Its parent process owns bounded waits and unconditional cleanup for child processes, containers, anonymous storage, and the dedicated Docker network after success, assertion failure, startup failure, or timeout. A one-minute test-only `metric_expiration` deliberately remains much longer than the lease so exporter caching reproduces the old raw-query failure; production cleanup guidance remains five minutes for the default one-minute lease.
+
+### 6.2 GitHub Actions cancellation validation
+
+The `lease-cancellation` job in `.github/workflows/ci.yml` runs lease unit/contract tests and the focused integration on `ubuntu-latest` with a bounded timeout. It simulates cancellation by sending `SIGKILL` to a producer so the workflow can assert convergence; cancelling the validation job itself could not produce evidence about its own result. An `if: always()` step removes labeled Docker resources when GitHub still schedules cleanup, but the test must reach zero through lease expiry before that step runs.
+
+Production workflows should likewise prefer graceful Pi and sidecar shutdown and use `if: always()` cleanup where available. Force cancellation, runner loss, or power loss can bypass both, so neither cleanup nor a shutdown callback may be the active-count correctness mechanism. GitHub-hosted runners meet the synchronized-clock expectation; self-hosted CI must keep the producer and Prometheus clocks within the supported 5-second skew.
+
 ## 7. Failure Tests
 
 ### Collector Down
@@ -228,15 +253,16 @@ Reject or sanitize dynamically generated labels.
 
 ## 10. Release Process
 
-1. Update version.
-2. Run unit tests.
-3. Run integration tests.
-4. Run redaction corpus tests.
-5. Run dashboard JSON validation.
-6. Run Collector config validation.
-7. Generate changelog.
-8. Publish package/artifact.
-9. Tag release.
+1. Update the version and `CHANGELOG.md`.
+2. Run `npm run validate` for source/test typechecks, ESLint, formatting, script checks, unit/contract/dashboard/alert tests, package-content checks, packaged-install smoke, handler smoke, Pi lifecycle smoke, and Pi runtime smoke.
+3. Run `npm run test:integration:collector` against the pinned Collector distribution.
+4. Run `npm run test:integration:active-agent-lease` and require clean shutdown, `SIGTERM`, and `SIGKILL` convergence without Collector restart while the raw claim remains cached.
+5. Run `npm run test:integration:grafana-stack` for live backends and dashboard provisioning. Record any unrelated pre-existing blocker precisely; it must not replace focused lease evidence.
+6. Validate Compose interpolation and the Collector config with the pinned distribution when Collector/example configuration changed.
+7. Run `npm run pack:dry-run` and confirm the lease metric source, dashboards, alerts, examples, user/operator/reference docs, and packaged `observme-docs` skill are present. Do not publish during this check.
+8. Record sanitized date, environment versions, pass/fail status, cleanup result, and any blocker in `docs/compatibility-matrix.md` and `docs/review-validation.md`; never record credentials, raw content, private paths, commands from interactive Pi, or full high-cardinality identifiers.
+9. Publish the package/artifact only after lease-related failures are resolved.
+10. Tag the release.
 
 ## 11. Compatibility Matrix
 
@@ -266,6 +292,7 @@ observme_export_errors_total
 observme_redaction_failures_total
 observme_active_spans
 observme_active_agents
+observme_agent_lease_expires_unixtime_seconds
 observme_workflows_started_total
 observme_workflows_completed_total
 observme_workflow_errors_total
@@ -313,7 +340,10 @@ When troubleshooting:
 3. Run `/obs agents` when troubleshooting workflow, parent/subagent lineage, fan-out, depth, or orphan agents.
 4. Check Collector health endpoint.
 5. Check Collector logs.
-6. Query `observme_export_errors_total`.
-7. Query Loki for `event_name="export.failed"` (or equivalent normalized structured metadata).
-8. Temporarily enable debug exporter in Collector.
-9. Never enable raw content capture in production without approval.
+6. For active-agent incidents, compare the canonical leased count, raw positive claims, expired claims, and direct presence of `observme_agent_lease_expires_unixtime_seconds`; then verify producer/Prometheus clock skew, `observme_instance_id` preservation, and the configured lease/export relationship.
+7. Query `observme_export_errors_total` and inspect Export Health before deciding that a missing or expired lease means the producer stopped.
+8. Query Loki for `event_name="export.failed"` (or equivalent normalized structured metadata).
+9. Temporarily enable the debug exporter in the Collector.
+10. Never enable raw content capture in production without approval.
+
+See [`11-deployment-runbooks.md` §5](11-deployment-runbooks.md#5-common-incidents) for expired-claim and missing-lease decision trees.

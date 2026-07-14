@@ -24,6 +24,9 @@ Edit the project config file (`.pi/observme.yaml` in the standard distribution) 
 - `privacy` — redaction, unsafe-capture acknowledgement, insecure transport, hash salt env var, and path handling. Keep `redactionEnabled: true`; set `allowUnsafeCapture: true` only when you intentionally accept unredacted sensitive-content export from this trusted project. Live telemetry and `/obs backfill` use the same policy: disabled capture omits content, enabled redaction redacts then truncates, redaction failures drop content, and `redactionEnabled: false` with `allowUnsafeCapture: true` exports raw truncated content.
 - `query.grafana` — Grafana URL, datasource UIDs, TLS, and IPv4 transport settings for `/obs` query commands.
 - `query.links.traceUrlTemplate` — the Grafana Explore trace-link template used by `/obs trace` and `/obs link`.
+- `metrics.activeAgentLeaseDurationMillis` — how long the last exported active-agent lease remains valid. The default is `60000` ms, the supported range is `10000`–`300000` ms, and the value must be at least `(2 * metrics.exportIntervalMillis) + 5000` ms. `OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS` overrides YAML through the normal precedence rules.
+
+The shipped dashboards and alerts combine a positive `observme_active_agents` lifecycle claim with a current lease; raw active-claim sums are diagnostic only after an ungraceful exit. Clean shutdown reaches zero after normal export/scrape propagation. Crash, `SIGKILL`, forced GitHub Actions cancellation, or runner loss converges within the lease plus up to 5 seconds of supported clock skew and one Prometheus scrape/evaluation interval, without restarting the Collector. Keep producer and Prometheus clocks synchronized within 5 seconds; GitHub-hosted runners meet this expectation, while self-hosted runners require reliable NTP or an equivalent time service.
 
 Keep credentials out of YAML. Reference environment variables such as `OBSERVME_OTLP_TOKEN`, `OBSERVME_GRAFANA_TOKEN`, `OBSERVME_GRAFANA_PASSWORD`, and `OBSERVME_HASH_SALT`, then set those values in the shell or a trusted project `.env` file. When any content capture flag is enabled with `privacy.redactionEnabled: true`, `OBSERVME_HASH_SALT` must be set before the event occurs; otherwise content capture fails closed and emits `redaction.failed` diagnostics instead of conversation rows.
 
@@ -45,3 +48,5 @@ Invalid or unsafe merged configuration falls back to safe defaults. `/obs status
 - [Example configurations](../examples/README.md)
 - [Security, privacy, and redaction](reference/06-security-privacy-redaction.md)
 - [Grafana and `/obs` validation flow](validation-flow.md)
+- [Canonical active-agent queries and raw-query migration](reference/09-dashboards-alerts-slos.md#131-canonical-active-agent-promql)
+- [Active-lease deployment and troubleshooting runbook](reference/11-deployment-runbooks.md)

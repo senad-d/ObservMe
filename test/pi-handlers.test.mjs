@@ -70,6 +70,10 @@ function createFakeMeter() {
     createHistogram: name => ({
       record: (value, attributes = {}) => records.push({ type: "histogram", name, value, attributes }),
     }),
+    createObservableGauge: () => ({
+      addCallback() {},
+      removeCallback() {},
+    }),
   };
 }
 
@@ -131,6 +135,30 @@ function createFakeLogger() {
   };
 }
 
+function createFakeActiveAgentLease() {
+  return {
+    active: false,
+    disposed: false,
+    callbackRegistered: true,
+    transitions: [],
+    activate() {
+      this.transitions.push("activate");
+      if (!this.disposed) this.active = true;
+    },
+    deactivate() {
+      this.transitions.push("deactivate");
+      this.active = false;
+    },
+    dispose() {
+      if (this.disposed) return;
+      this.transitions.push("dispose");
+      this.active = false;
+      this.disposed = true;
+      this.callbackRegistered = false;
+    },
+  };
+}
+
 function createFakeController() {
   return {
     flushCalls: [],
@@ -161,6 +189,7 @@ function createFakeTelemetry(lineage, tracerOverride) {
     logger,
     metrics,
     spans: createSpanRegistry(defaultObservMeConfig, metrics),
+    activeAgentLease: createFakeActiveAgentLease(),
     activeAgentRecorded: false,
     agentRunSequence: 0,
     llmRequestSequence: 0,
@@ -378,6 +407,7 @@ test("session lifecycle handlers tolerate missing trust and partial UI capabilit
     loadConfig,
     startTelemetry: async ({ lineage }) => {
       telemetry = createFakeTelemetry(lineage);
+      delete telemetry.activeAgentLease;
       return telemetry;
     },
   });
@@ -389,6 +419,56 @@ test("session lifecycle handlers tolerate missing trust and partial UI capabilit
   assert.equal(telemetry.tracer.spans[0].ended, true);
   assert.deepEqual(telemetry.controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
   assert.deepEqual(telemetry.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+});
+
+test("failed session startup disposes the inactive lease callback and bounded telemetry controller", async () => {
+  const pi = createFakePi();
+  const errors = [];
+  const statuses = [];
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+    onHandlerError: (name, error) => errors.push({ name, error }),
+  });
+
+  await assert.doesNotReject(() =>
+    pi.handlers.get("session_start")(
+      { sessionId: "session-failed-start" },
+      {
+        cwd: "/workspace/demo",
+        ui: {
+          setStatus: (key, value) => {
+            statuses.push({ key, value });
+            if (value === EXTENSION_STATUS_VALUE) throw new Error("status unavailable");
+          },
+        },
+      },
+    ),
+  );
+
+  assert.deepEqual(telemetry.activeAgentLease.transitions, ["deactivate", "dispose"]);
+  assert.equal(telemetry.activeAgentLease.active, false);
+  assert.equal(telemetry.activeAgentLease.disposed, true);
+  assert.equal(telemetry.activeAgentLease.callbackRegistered, false);
+  assert.equal(telemetry.activeAgentRecorded, false);
+  assert.equal(metricTotal(telemetry.meter.records, OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_AGENTS), 0);
+  assert.equal(telemetry.tracer.spans.every(span => span.ended), true);
+  assert.deepEqual(telemetry.controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.deepEqual(telemetry.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.deepEqual(statuses, [
+    { key: EXTENSION_STATUS_KEY, value: EXTENSION_STATUS_VALUE },
+    { key: EXTENSION_STATUS_KEY, value: undefined },
+  ]);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].name, "session_start");
+
+  await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
+  assert.equal(telemetry.controller.flushCalls.length, 1);
+  assert.equal(telemetry.controller.shutdownCalls.length, 1);
 });
 
 test("session_start emits one sanitized structured config rejection diagnostic", async () => {
@@ -535,6 +615,10 @@ test("session_start creates a root pi.session span with documented session and w
   assert.ok(span.events.some(event => event.name === LOG_EVENT_NAMES.SESSION_STARTED));
   assert.deepEqual(statuses, [{ key: EXTENSION_STATUS_KEY, value: EXTENSION_STATUS_VALUE }]);
   assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.WORKFLOW_STARTED));
+  assert.equal(telemetry.activeAgentRecorded, true);
+  assert.equal(telemetry.activeAgentLease.active, true);
+  assert.deepEqual(telemetry.activeAgentLease.transitions, ["activate"]);
+  assert.equal(metricTotal(telemetry.meter.records, OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_AGENTS), 1);
 });
 
 test("child pi.session continues the validated parent spawn context with an in-memory exporter", async t => {
@@ -722,6 +806,8 @@ test("session_start resume reads only startup header and emits no replayed telem
   assert.equal(telemetry.tracer.spans[0].attributes["pi.session.persisted"], true);
   assert.equal(telemetry.tracer.spans[0].attributes["observme.replayed"], false);
   assert.equal(hasReplayedTelemetry(telemetry), false);
+  assert.equal(telemetry.activeAgentLease.active, true);
+  assert.deepEqual(telemetry.activeAgentLease.transitions, ["activate"]);
 });
 
 test("session_start marks replayed startup telemetry only when replayOnStart is explicitly enabled", async () => {
@@ -780,12 +866,26 @@ test("session_shutdown ends root span, updates active workflow metrics, emits li
   });
 
   await pi.handlers.get("session_start")({ sessionId: "session-2" }, { cwd: "/workspace/demo" });
+  const flushSnapshots = [];
+  telemetry.controller.flush = async timeoutMs => {
+    telemetry.controller.flushCalls.push(timeoutMs);
+    flushSnapshots.push({
+      leaseActive: telemetry.activeAgentLease.active,
+      activeAgentRecorded: telemetry.activeAgentRecorded,
+      activeTotal: metricTotal(telemetry.meter.records, OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_AGENTS),
+    });
+    return { operation: "flush", completed: true, timedOut: false };
+  };
   nowMs = 1_450;
   await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
 
   assert.equal(telemetry.tracer.spans[0].ended, true);
   assert.equal(telemetry.controller.flushCalls[0], defaultObservMeConfig.shutdown.flushTimeoutMs);
   assert.equal(telemetry.controller.shutdownCalls[0], defaultObservMeConfig.shutdown.flushTimeoutMs);
+  assert.deepEqual(flushSnapshots, [{ leaseActive: false, activeAgentRecorded: false, activeTotal: 0 }]);
+  assert.deepEqual(telemetry.activeAgentLease.transitions, ["activate", "deactivate", "dispose"]);
+  assert.equal(telemetry.activeAgentLease.disposed, true);
+  assert.equal(telemetry.activeAgentLease.callbackRegistered, false);
   assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.SESSION_SHUTDOWN));
   assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.WORKFLOW_COMPLETED));
   assert.ok(
@@ -806,6 +906,38 @@ test("session_shutdown ends root span, updates active workflow metrics, emits li
         record.attributes.status === "ok",
     ),
   );
+});
+
+test("session_shutdown isolates lease-observation and exporter shutdown failures after deactivation", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-export-failures" }, { cwd: "/workspace/demo" });
+  telemetry.controller.flush = async timeoutMs => {
+    telemetry.controller.flushCalls.push(timeoutMs);
+    assert.equal(telemetry.activeAgentLease.active, false);
+    throw new Error("lease observation failed");
+  };
+  telemetry.controller.shutdown = async timeoutMs => {
+    telemetry.controller.shutdownCalls.push(timeoutMs);
+    throw new Error("exporter shutdown failed");
+  };
+
+  await assert.doesNotReject(() => pi.handlers.get("session_shutdown")({ status: "ok" }, {}));
+
+  assert.deepEqual(telemetry.controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.deepEqual(telemetry.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.equal(metricTotal(telemetry.meter.records, OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_AGENTS), 0);
+  assert.equal(metricTotal(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.EXPORT_ERRORS_TOTAL), 2);
+  assert.deepEqual(telemetry.activeAgentLease.transitions, ["activate", "deactivate", "dispose"]);
+  assert.equal(telemetry.activeAgentLease.callbackRegistered, false);
 });
 
 test("shared lifecycle queue drains delayed startup before interleaved shutdown", async t => {
@@ -962,6 +1094,9 @@ test("shared lifecycle queue preserves shutdown then reload start ordering", asy
   assert.equal(secondSession.tracer.spans[0].ended, false);
   assert.deepEqual(secondSession.controller.flushCalls, []);
   assert.deepEqual(secondSession.controller.shutdownCalls, []);
+  assert.deepEqual(firstSession.activeAgentLease.transitions, ["activate", "deactivate", "dispose"]);
+  assert.deepEqual(secondSession.activeAgentLease.transitions, ["activate"]);
+  assert.equal(sessions.filter(session => session.activeAgentLease.active).length, 1);
   assert.deepEqual(statuses, [
     { key: EXTENSION_STATUS_KEY, value: EXTENSION_STATUS_VALUE },
     { key: EXTENSION_STATUS_KEY, value: undefined },
@@ -1022,11 +1157,16 @@ test("duplicate session_start flushes and shuts down the previous telemetry sess
   assert.ok(firstSession.logger.records.some(record => record.body === LOG_EVENT_NAMES.SESSION_SHUTDOWN));
   assert.deepEqual(secondSession.controller.flushCalls, []);
   assert.deepEqual(secondSession.controller.shutdownCalls, []);
+  assert.deepEqual(firstSession.activeAgentLease.transitions, ["activate", "deactivate", "dispose"]);
+  assert.deepEqual(secondSession.activeAgentLease.transitions, ["activate"]);
+  assert.equal(sessions.filter(session => session.activeAgentLease.active).length, 1);
 
   await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
 
   assert.deepEqual(secondSession.controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
   assert.deepEqual(secondSession.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.deepEqual(secondSession.activeAgentLease.transitions, ["activate", "deactivate", "dispose"]);
+  assert.equal(sessions.filter(session => session.activeAgentLease.active).length, 0);
 });
 
 test("final lifecycle regression keeps runtime state consistent after duplicate session_start cleanup", async t => {

@@ -26,6 +26,8 @@ observme:
     idEnv: GLOBAL_WORKFLOW_ID
   agent:
     capabilityEnv: GLOBAL_AGENT_CAPABILITY
+  metrics:
+    activeAgentLeaseDurationMillis: 40000
 `;
 
 const projectConfigYaml = `
@@ -41,6 +43,8 @@ observme:
     idEnv: PROJECT_WORKFLOW_ID
   agent:
     capabilityEnv: PROJECT_AGENT_CAPABILITY
+  metrics:
+    activeAgentLeaseDurationMillis: 45000
 `;
 
 function createReader(files, calls = []) {
@@ -122,6 +126,12 @@ const rejectionDiagnosticCases = [
     expectedCode: "queue_size_exceeds_guardrail",
     sensitiveFragments: [],
   },
+  {
+    name: "lease shorter than the export window",
+    runtimeOptions: { metrics: { activeAgentLeaseDurationMillis: 34999 } },
+    expectedCode: "active_agent_lease_too_short_for_export_interval",
+    sensitiveFragments: [],
+  },
 ];
 
 for (const diagnosticCase of rejectionDiagnosticCases) {
@@ -146,6 +156,38 @@ for (const diagnosticCase of rejectionDiagnosticCases) {
     for (const fragment of diagnosticCase.sensitiveFragments) {
       assert.equal(serializedDiagnostics.includes(fragment), false);
     }
+  });
+}
+
+const invalidActiveAgentLeaseEnvironmentCases = [
+  { name: "below the absolute minimum", value: "9999", expectedCode: "invalid_config_shape" },
+  { name: "above the absolute maximum", value: "300001", expectedCode: "invalid_config_shape" },
+  { name: "fractional", value: "60000.5", expectedCode: "invalid_config_shape" },
+  { name: "negative", value: "-1", expectedCode: "invalid_config_shape" },
+  { name: "non-numeric", value: "private-lease-value", expectedCode: "invalid_config_shape" },
+  {
+    name: "below the export relationship",
+    value: "34999",
+    expectedCode: "active_agent_lease_too_short_for_export_interval",
+  },
+];
+
+for (const invalidLease of invalidActiveAgentLeaseEnvironmentCases) {
+  test(`session loader safely rejects ${invalidLease.name} active-agent lease env values`, async () => {
+    const warnings = [];
+    const loaded = await loadSessionConfigWithDiagnostics({
+      globalConfigPath: "missing-global.yaml",
+      isProjectTrusted: false,
+      readText: createReader({}),
+      env: { OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS: invalidLease.value },
+      logger: { warn: message => warnings.push(message) },
+    });
+
+    assert.deepEqual(loaded.config, defaultObservMeConfig);
+    assert.ok(loaded.diagnostics.rejection?.issueCodes.includes(invalidLease.expectedCode));
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], new RegExp(invalidLease.expectedCode, "u"));
+    assert.doesNotMatch(JSON.stringify({ diagnostics: loaded.diagnostics, warnings }), /private-lease-value/u);
   });
 }
 
@@ -301,10 +343,14 @@ test("session loader applies defaults, global config, project config, env, then 
       OBSERVME_TENANT: "env-tenant",
       OBSERVME_ENVIRONMENT: "development",
       OBSERVME_OTLP_ENDPOINT: "https://env.example.test:4318",
+      OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS: "50000",
     },
     runtimeOptions: {
       otlp: {
         timeoutMs: 9000,
+      },
+      metrics: {
+        activeAgentLeaseDurationMillis: 55000,
       },
       workflow: {
         idEnv: "RUNTIME_WORKFLOW_ID",
@@ -316,6 +362,7 @@ test("session loader applies defaults, global config, project config, env, then 
   });
 
   assert.equal(config.metrics.exportIntervalMillis, 15000, "defaults remain present when no layer overrides them");
+  assert.equal(config.metrics.activeAgentLeaseDurationMillis, 55000, "runtime options override the lease env value");
   assert.equal(config.otlp.endpoint, "https://env.example.test:4318", "env overrides project config");
   assert.equal(config.resource.attributes["observme.tenant.id"], "env-tenant", "tenant env updates resource attr");
   assert.equal(
@@ -346,6 +393,7 @@ test("project config overrides global config when no env/runtime layer overrides
   assert.equal(config.resource.attributes["deployment.environment.name"], "project-environment");
   assert.equal(config.workflow.idEnv, "PROJECT_WORKFLOW_ID");
   assert.equal(config.agent.capabilityEnv, "PROJECT_AGENT_CAPABILITY");
+  assert.equal(config.metrics.activeAgentLeaseDurationMillis, 45000);
 });
 
 test("session loader maps Grafana auth and local transport environment variables", async () => {
@@ -388,6 +436,7 @@ OBSERVME_GRAFANA_LOKI_DATASOURCE_UID=loki-file
 OBSERVME_GRAFANA_PROMETHEUS_DATASOURCE_UID=prometheus-file
 OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY=true
 OBSERVME_GRAFANA_PREFER_IPV4=true
+OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS=50000
 `;
 
 test("session loader reads trusted project .env and lets system env override it", async () => {
@@ -400,6 +449,7 @@ test("session loader reads trusted project .env and lets system env override it"
     readText: createReader({ "project.env": envFileText }, calls),
     env: {
       OBSERVME_GRAFANA_PASSWORD: "system-password",
+      OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS: "55000",
     },
   });
 
@@ -414,6 +464,22 @@ test("session loader reads trusted project .env and lets system env override it"
   });
   assert.equal(config.query.grafana.tls.insecureSkipVerify, true);
   assert.equal(config.query.grafana.transport.preferIPv4, true);
+  assert.equal(config.metrics.activeAgentLeaseDurationMillis, 55000);
+});
+
+test("session loader maps active-agent lease duration from a trusted project .env", async () => {
+  const config = await loadSessionConfig({
+    globalConfigPath: "missing-global.yaml",
+    projectConfigPath: "missing-project.yaml",
+    envFilePath: "project.env",
+    isProjectTrusted: true,
+    readText: createReader({
+      "project.env": "OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS=50000\n",
+    }),
+    env: {},
+  });
+
+  assert.equal(config.metrics.activeAgentLeaseDurationMillis, 50000);
 });
 
 test("session loader registers trusted project .env tenant salt for redacted capture", async () => {
@@ -462,6 +528,7 @@ test("factory-safe loader excludes project config and still applies global/env/r
   assert.equal(config.tenant, "factory-env-tenant");
   assert.equal(config.resource.attributes["observme.tenant.id"], "factory-env-tenant");
   assert.equal(config.workflow.idEnv, "GLOBAL_WORKFLOW_ID");
+  assert.equal(config.metrics.activeAgentLeaseDurationMillis, 40000);
 });
 
 test("session loader does not read project-local config or .env when project is untrusted", async () => {
@@ -532,6 +599,7 @@ test("generated project starter parses with privacy-preserving capture defaults"
   });
   assert.equal(parsed.privacy.redactionEnabled, true);
   assert.equal(parsed.privacy.allowUnsafeCapture, false);
+  assert.equal(parsed.metrics.activeAgentLeaseDurationMillis, 60000);
 });
 
 test("generated project starter supports redacted explicit content-capture opt-in", () => {

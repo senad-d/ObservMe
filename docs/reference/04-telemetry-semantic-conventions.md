@@ -503,8 +503,45 @@ observme_handler_duration_ms
 
 ```text
 observme_active_spans
-observme_active_agents
+observme_active_agents                              # compatibility lifecycle claim
+observme_agent_lease_expires_unixtime_seconds      # asynchronous gauge, unit s
 ```
+
+#### 12.4.1 Active-agent lease and clock contract
+
+This section is the single source of truth for active-agent lease constants and semantics. Runtime configuration, metric metadata, PromQL, dashboards, alerts, examples, and tests must reference these values rather than define different local windows.
+
+| Contract item | Required value |
+|---|---|
+| Lease metric | `observme_agent_lease_expires_unixtime_seconds` |
+| OTel instrument and unit | Asynchronous gauge, unit `s` |
+| Observation value | `(wallClockUnixMillis + metrics.activeAgentLeaseDurationMillis) / 1000`; fractional Unix seconds are valid |
+| Configuration | `metrics.activeAgentLeaseDurationMillis`; `OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS` is its environment override |
+| Default lease | `60000` ms (60 seconds) |
+| Inclusive duration bounds | `10000` ms through `300000` ms (10 seconds through 5 minutes) |
+| Export relationship | Lease duration must be at least `(2 * metrics.exportIntervalMillis) + 5000` ms |
+| Supported wall-clock skew | Producer and Prometheus clocks must differ by no more than 5 seconds |
+| Future-timestamp horizon | A lease later than `time() + 305` seconds is pathological and must not count active |
+
+`observme_active_agents` remains the clean lifecycle claim. An agent is operationally active only when its claim is positive and the matching lease is finite, later than Prometheus `time()`, and no later than the future-timestamp horizon. Missing, expired, malformed, non-finite, or pathologically future leases fail closed. Lease renewal occurs once per SDK metric collection while the session is active, including otherwise idle sessions; it does not depend on turns, tool calls, or a background heartbeat timer.
+
+On clean shutdown, deactivate the lease before the final metric force-flush and record the matching `observme_active_agents` decrement. This makes the leased result zero after normal export/scrape propagation without waiting for expiry. If shutdown telemetry cannot run, the last exported lease is allowed to expire. With synchronized clocks, an ungraceful exit converges to zero within the configured lease plus one Prometheus scrape/evaluation interval. Across the full supported positive-skew budget, the measurable worst-case bound is the configured lease plus 5 seconds plus one scrape/evaluation interval; for the defaults and a 15-second scrape interval, that is at most 80 seconds.
+
+The only per-runtime Prometheus join and deduplication key is the Collector-normalized `observme_instance_id` resource label. ObservMe generates its UUID independently for each telemetry session and never derives it from prompts, responses, content, paths, commands, GitHub run IDs, sessions, workflows, or logical agents. `service.instance.id` may carry the same resource value for OTel interoperability, but active-agent PromQL joins on `observme_instance_id` and deduplicates repeated exporter/scrape representations with `max by (observme_instance_id)`. The lease observation itself may carry only existing bounded metric labels; the instance identity comes from resource-to-metric conversion and must not become a dashboard variable or legend.
+
+Lifecycle and failure behavior is fixed as follows:
+
+| Condition | Required leased-active behavior |
+|---|---|
+| Clean exit | Deactivate before final flush; the active claim becomes zero without waiting for lease expiry. |
+| `SIGTERM` | Use the clean path when Pi delivers shutdown; otherwise use the same expiry behavior as an abrupt exit. |
+| Crash, `SIGKILL`, cancelled GitHub job, or runner/power loss | No cleanup is required for correctness; the last lease expires within the documented convergence bound. |
+| Duplicate session start, reload, or resume | Deactivate and flush the replaced session before activating its replacement. If replacement cleanup is interrupted, the old instance lease expires independently. |
+| Startup failure or partial runtime construction | Never leave an activated observable callback; dispose any registered callback. |
+| Collector or OTLP outage | Cached positive claims stop counting when their last delivered leases expire. A still-running producer becomes active again after export recovers and a fresh lease arrives. Backend unavailability itself remains an unknown/no-query state. |
+| Clock skew or clock movement | A producer clock ahead can delay expiry and one behind can fail closed early. Clocks outside the supported skew are unsupported; non-finite observations are omitted and values beyond the future horizon do not count. GitHub-hosted runners satisfy the synchronized-clock expectation; self-hosted runners must use reliable time synchronization. |
+
+A renewable lease is a bounded liveness signal, not proof that the operating-system process is reachable at the exact query instant. `observme_active_agents` remains emitted with its existing name and clean-lifecycle behavior for compatibility, so the change is additive under the semantic-convention versioning policy and does not require a major convention-version increment. Consumers that need crash-safe live counts must migrate from raw active-claim sums to the leased definition.
 
 ### 12.5 Lifecycle recording points
 

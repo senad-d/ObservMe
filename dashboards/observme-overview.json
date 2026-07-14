@@ -1075,7 +1075,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Currently active ObservMe agent runtimes. Zero can mean healthy idle. Red at 100 references the tunable ObservMeActiveAgentsStuckHigh default; yellow at 50 is an early-warning assumption. Compare sustained values with fan-out and depth.",
+      "description": "Canonical leased-active ObservMe runtimes. Clean shutdown reaches zero after export/scrape propagation; after a crash, SIGKILL, cancelled job, or runner loss, the leased total converges to zero within the default 60-second lease plus one Prometheus scrape even if raw claims stay cached. Zero can also mean healthy idle or a failed-closed lease, so check Export Health. /obs agents reports only current-process child state, not fleet liveness. Red at 100 matches the deployment-tunable ObservMeActiveAgentsStuckHigh threshold; yellow at 50 is an early warning.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1141,7 +1141,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(observme_active_agents) or vector(0)",
+          "expr": "sum(max by (observme_instance_id) ((observme_active_agents > 0) and on (observme_instance_id) ((observme_agent_lease_expires_unixtime_seconds > time()) and (observme_agent_lease_expires_unixtime_seconds <= time() + 305)))) or vector(0)",
           "range": true,
           "refId": "A"
         }
@@ -1998,7 +1998,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Current active agents by bounded role and depth. No rows can mean healthy idle or an absent active-agent gauge; compare with the ungrouped Active agents chip and Export Health before treating it as healthy.",
+      "description": "Canonical leased-active agents by emitted bounded role and environment. Clean shutdown reaches zero after export/scrape propagation; after an ungraceful exit, leased totals converge to zero within the default 60-second lease plus one Prometheus scrape while raw claims may remain cached. Depth is omitted because active signals do not emit subagent_depth. An unlabeled zero means healthy idle or no qualifying lease when Prometheus is reachable; compare Export Health. /obs agents is current-process child state, not this aggregate fleet view.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2058,14 +2058,14 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(observme_active_agents) by (agent_role, subagent_depth)",
+          "expr": "sum by (agent_role, environment) (max by (observme_instance_id, agent_role, environment) ((observme_active_agents > 0) and on (observme_instance_id) ((observme_agent_lease_expires_unixtime_seconds > time()) and (observme_agent_lease_expires_unixtime_seconds <= time() + 305)))) or on() vector(0)",
           "instant": true,
-          "legendFormat": "{{agent_role}} depth={{subagent_depth}}",
+          "legendFormat": "{{agent_role}} / {{environment}}",
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "Active agents by role/depth",
+      "title": "Active agents by role/environment",
       "type": "bargauge"
     },
     {

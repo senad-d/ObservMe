@@ -11,6 +11,7 @@ import { inheritTenantSaltEnvironment } from "../privacy/hash.ts";
 import { LOG_ATTRIBUTES, RESOURCE_ATTRIBUTES } from "../semconv/attributes.ts";
 import {
   LOG_EVENT_NAMES,
+  OBSERVME_AGENT_LEASE_METRIC_OPTIONS,
   OBSERVME_COUNTER_METRIC_NAMES,
   OBSERVME_GAUGE_METRIC_NAMES,
   OBSERVME_HISTOGRAM_METRIC_NAMES,
@@ -18,6 +19,7 @@ import {
   OFFICIAL_GENAI_METRIC_NAMES,
 } from "../semconv/metrics.ts";
 import { BoundedMap, type BoundedMapEviction } from "../util/bounded-map.ts";
+import { createActiveAgentLease } from "./active-agent-lease.ts";
 import type { AgentLineageContext } from "./agent-lineage.ts";
 import { buildResourceLineageAttributes } from "./agent-lineage.ts";
 import type { AgentTreeNode } from "./agent-tree-tracker.ts";
@@ -30,6 +32,7 @@ import {
   evictToolCallState,
   evictWaitJoinState,
   isRecord,
+  metricLabels,
   normalizeMetricValue,
   readBoolean,
   readString,
@@ -180,6 +183,16 @@ export async function startSessionTelemetry(options: StartSessionTelemetryOption
   const metrics = createObservMeMetrics(metricSdk.meter);
   const sessionReference: HandlerSessionState = {};
   const getTelemetryDropTarget = resolveSessionTelemetryDropTarget.bind(undefined, sessionReference, metrics);
+  const spans = createSpanRegistry(config, metrics, getTelemetryDropTarget);
+  const agentTree = createAgentTreeTracker(config, options.lineage, metrics, getTelemetryDropTarget);
+  const turnSequences = createTurnSequenceRegistry(config, metrics, getTelemetryDropTarget);
+  const activeAgentLease = createActiveAgentLease({
+    instrument: metrics.agentLeaseExpiresUnixTimeSeconds,
+    leaseDurationMillis: config.metrics.activeAgentLeaseDurationMillis,
+    attributes: metricLabels(config, options.lineage),
+    wallClockNow: options.wallClockNow,
+    enabled: config.metrics.enabled,
+  });
   const session: ObservMeTelemetrySession = {
     config,
     lineage: options.lineage,
@@ -188,14 +201,15 @@ export async function startSessionTelemetry(options: StartSessionTelemetryOption
     meter: metricSdk.meter,
     logger: logSdk.logger,
     metrics,
-    spans: createSpanRegistry(config, metrics, getTelemetryDropTarget),
-    agentTree: createAgentTreeTracker(config, options.lineage, metrics, getTelemetryDropTarget),
+    spans,
+    activeAgentLease,
+    agentTree,
     now: options.now ?? monotonicNowMs,
     activeAgentRecorded: false,
     agentRunSequence: 0,
     llmRequestSequence: 0,
     toolCallSequence: 0,
-    turnSequences: createTurnSequenceRegistry(config, metrics, getTelemetryDropTarget),
+    turnSequences,
   };
 
   sessionReference.session = session;
@@ -252,6 +266,10 @@ export function createObservMeMetrics(meter: TelemetryMeter): ObservMeMetrics {
     eventsObserved: meter.createCounter(OBSERVME_COUNTER_METRIC_NAMES.EVENTS_OBSERVED_TOTAL),
     activeSpans: meter.createUpDownCounter(OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_SPANS),
     activeAgents: meter.createUpDownCounter(OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_AGENTS),
+    agentLeaseExpiresUnixTimeSeconds: meter.createObservableGauge(
+      OBSERVME_GAUGE_METRIC_NAMES.AGENT_LEASE_EXPIRES_UNIXTIME_SECONDS,
+      OBSERVME_AGENT_LEASE_METRIC_OPTIONS,
+    ),
     workflowDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.WORKFLOW_DURATION_MS),
     agentRunDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_RUN_DURATION_MS),
     agentLifetimeDurationMs: createHistogram(meter, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_LIFETIME_DURATION_MS),

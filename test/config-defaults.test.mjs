@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Compile } from "typebox/compile";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
-import { observMeConfigSchema } from "../src/config/schema.ts";
+import {
+  ACTIVE_AGENT_LEASE_DURATION_MILLIS_MAXIMUM,
+  ACTIVE_AGENT_LEASE_DURATION_MILLIS_MINIMUM,
+  ACTIVE_AGENT_LEASE_EXPORT_SAFETY_MARGIN_MILLIS,
+  observMeConfigSchema,
+} from "../src/config/schema.ts";
 
 const expectedDocumentedDefaults = {
   enabled: true,
@@ -63,6 +68,7 @@ const expectedDocumentedDefaults = {
     enabled: true,
     exportIntervalMillis: 15000,
     exportTimeoutMillis: 3000,
+    activeAgentLeaseDurationMillis: 60000,
   },
   logs: {
     enabled: true,
@@ -221,6 +227,17 @@ function sortUnique(values) {
 
 test("default config snapshots every documented default value", () => {
   assert.deepEqual(defaultObservMeConfig, expectedDocumentedDefaults);
+});
+
+test("default active-agent lease satisfies the bounded export relationship", () => {
+  const leaseDuration = defaultObservMeConfig.metrics.activeAgentLeaseDurationMillis;
+  const requiredDuration =
+    (2 * defaultObservMeConfig.metrics.exportIntervalMillis) + ACTIVE_AGENT_LEASE_EXPORT_SAFETY_MARGIN_MILLIS;
+
+  assert.equal(leaseDuration, 60000);
+  assert.ok(leaseDuration >= ACTIVE_AGENT_LEASE_DURATION_MILLIS_MINIMUM);
+  assert.ok(leaseDuration <= ACTIVE_AGENT_LEASE_DURATION_MILLIS_MAXIMUM);
+  assert.ok(leaseDuration >= requiredDuration);
 });
 
 test("default config is privacy-preserving and capture-free", () => {

@@ -183,45 +183,54 @@ async function handleSessionStart(
       options.requireCompleteParentEnvelope ?? (options.trustedParentContext === true && recoveryCorrelation === undefined),
     failOpenInvalidPropagation: true,
   });
-  const session = await startTelemetryFn({ config, lineage, now: options.now });
-  session.now = options.now ?? session.now ?? monotonicNowMs;
-  updateObsStatusRuntimeState({ config: session.config, configDiagnostics: loadedConfig.diagnostics });
-  clearObsStatusExportError();
-  state.session = session;
-  const attributes = buildSessionAttributes(event, ctx, session.config, lineage, recovery);
-  const labels = metricLabels(session.config, lineage);
-
-  session.sessionAttributes = attributes;
-  const traceParent = resolveSessionTraceParent(lineage);
-  session.sessionSpan = startActiveRootSpan(session, SPAN_NAMES.PI_SESSION, attributes, "session", traceParent);
-  emitConfigRejectionDiagnostic(session, loadedConfig.diagnostics, ctx);
-  recordSessionTracePropagationFailure(session, traceParent);
-  startObsSessionRuntimeState({
-    sessionId: readString(attributes, SESSION_ATTRIBUTES.PI_SESSION_ID),
-    traceId: readSpanTraceId(session.sessionSpan),
-    traceUrlTemplate: session.config.query.links.traceUrlTemplate,
-  });
-  startObsAgentsRuntimeState({
+  const session = await startTelemetryFn({
+    config,
     lineage,
-    agentTree: session.agentTree,
-    sessionId: readString(attributes, SESSION_ATTRIBUTES.PI_SESSION_ID),
-    traceId: readSpanTraceId(session.sessionSpan),
+    now: options.now,
+    wallClockNow: options.wallClockNow,
   });
-  session.workflowStartedAtMs = session.now();
-  session.metrics.sessionsStarted.add(1, labels);
-  session.metrics.activeAgents.add(1, labels);
-  session.activeAgentRecorded = true;
-  session.sessionSpan.addEvent(LOG_EVENT_NAMES.SESSION_STARTED, attributes);
-  emitLifecycleLog(session.logger, LOG_EVENT_NAMES.SESSION_STARTED, attributes);
-  if (recovery.resumed && session.config.replayOnStart) emitStartupReplayTelemetry(session, attributes);
-
-  if (isRootWorkflow(lineage)) {
-    session.metrics.workflowsStarted.add(1, labels);
-    emitLifecycleLog(session.logger, LOG_EVENT_NAMES.WORKFLOW_STARTED, attributes);
-  }
-
-  await ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE);
+  session.now = options.now ?? session.now ?? monotonicNowMs;
   state.session = session;
+
+  try {
+    updateObsStatusRuntimeState({ config: session.config, configDiagnostics: loadedConfig.diagnostics });
+    clearObsStatusExportError();
+    const attributes = buildSessionAttributes(event, ctx, session.config, lineage, recovery);
+    const labels = metricLabels(session.config, lineage);
+
+    session.sessionAttributes = attributes;
+    const traceParent = resolveSessionTraceParent(lineage);
+    session.sessionSpan = startActiveRootSpan(session, SPAN_NAMES.PI_SESSION, attributes, "session", traceParent);
+    emitConfigRejectionDiagnostic(session, loadedConfig.diagnostics, ctx);
+    recordSessionTracePropagationFailure(session, traceParent);
+    startObsSessionRuntimeState({
+      sessionId: readString(attributes, SESSION_ATTRIBUTES.PI_SESSION_ID),
+      traceId: readSpanTraceId(session.sessionSpan),
+      traceUrlTemplate: session.config.query.links.traceUrlTemplate,
+    });
+    startObsAgentsRuntimeState({
+      lineage,
+      agentTree: session.agentTree,
+      sessionId: readString(attributes, SESSION_ATTRIBUTES.PI_SESSION_ID),
+      traceId: readSpanTraceId(session.sessionSpan),
+    });
+    session.workflowStartedAtMs = session.now();
+    session.metrics.sessionsStarted.add(1, labels);
+    session.sessionSpan.addEvent(LOG_EVENT_NAMES.SESSION_STARTED, attributes);
+    emitLifecycleLog(session.logger, LOG_EVENT_NAMES.SESSION_STARTED, attributes);
+    if (recovery.resumed && session.config.replayOnStart) emitStartupReplayTelemetry(session, attributes);
+
+    if (isRootWorkflow(lineage)) {
+      session.metrics.workflowsStarted.add(1, labels);
+      emitLifecycleLog(session.logger, LOG_EVENT_NAMES.WORKFLOW_STARTED, attributes);
+    }
+
+    await ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE);
+    activateSessionActiveAgent(session, labels);
+  } catch (error) {
+    await cleanUpFailedSessionStart(session, ctx, state);
+    throw error;
+  }
 }
 
 function createSessionShutdownHandler(state: HandlerSessionState): Handler {
@@ -429,6 +438,26 @@ function recordDuplicateSessionStartShutdownError(session: ObservMeTelemetrySess
   );
 }
 
+async function cleanUpFailedSessionStart(
+  session: ObservMeTelemetrySession,
+  ctx: ObservMeHandlerContext,
+  state: HandlerSessionState,
+): Promise<void> {
+  const labels = metricLabels(session.config, session.lineage);
+
+  try {
+    deactivateSessionActiveAgent(session, labels);
+    endAllActiveSpans(session);
+    endActiveSpan(session, session.sessionSpan);
+    await clearExtensionStatus(ctx);
+    await recordControllerOperationResult(session, "flush");
+    await recordControllerOperationResult(session, "shutdown");
+  } finally {
+    disposeSessionActiveAgentLease(session);
+    clearTelemetrySessionRuntimeState(session, state);
+  }
+}
+
 async function shutDownTelemetrySession(
   session: ObservMeTelemetrySession,
   event: unknown,
@@ -439,19 +468,64 @@ async function shutDownTelemetrySession(
   const shutdownAttributes = buildShutdownAttributes(event, session);
   const failed = workflowFailed(event);
 
-  session.metrics.sessionsShutdown.add(1, labels);
-  if (session.activeAgentRecorded) session.metrics.activeAgents.add(-1, labels);
-  recordWorkflowShutdownTelemetry(session, shutdownAttributes, failed, labels);
-  endAllActiveSpans(session);
-  session.sessionSpan?.addEvent(LOG_EVENT_NAMES.SESSION_SHUTDOWN, shutdownAttributes);
-  if (failed) session.sessionSpan?.setStatus({ code: SpanStatusCode.ERROR });
-  endActiveSpan(session, session.sessionSpan);
-  await ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, undefined);
-  await recordControllerOperationResult(session, "flush");
-  await recordControllerOperationResult(session, "shutdown");
+  try {
+    deactivateSessionActiveAgent(session, labels);
+    session.metrics.sessionsShutdown.add(1, labels);
+    recordWorkflowShutdownTelemetry(session, shutdownAttributes, failed, labels);
+    endAllActiveSpans(session);
+    session.sessionSpan?.addEvent(LOG_EVENT_NAMES.SESSION_SHUTDOWN, shutdownAttributes);
+    if (failed) session.sessionSpan?.setStatus({ code: SpanStatusCode.ERROR });
+    endActiveSpan(session, session.sessionSpan);
+    await clearExtensionStatus(ctx);
+    await recordControllerOperationResult(session, "flush");
+    await recordControllerOperationResult(session, "shutdown");
+  } finally {
+    disposeSessionActiveAgentLease(session);
+    clearTelemetrySessionRuntimeState(session, state);
+  }
+}
+
+function activateSessionActiveAgent(
+  session: ObservMeTelemetrySession,
+  labels: Record<string, string>,
+): void {
+  if (session.activeAgentRecorded) return;
+
+  session.metrics.activeAgents.add(1, labels);
+  session.activeAgentRecorded = true;
+  session.activeAgentLease?.activate();
+}
+
+function deactivateSessionActiveAgent(
+  session: ObservMeTelemetrySession,
+  labels: Record<string, string>,
+): void {
+  session.activeAgentLease?.deactivate();
+  if (!session.activeAgentRecorded) return;
+
+  session.activeAgentRecorded = false;
+  session.metrics.activeAgents.add(-1, labels);
+}
+
+function disposeSessionActiveAgentLease(session: ObservMeTelemetrySession): void {
+  session.activeAgentLease?.dispose();
+}
+
+function clearTelemetrySessionRuntimeState(
+  session: ObservMeTelemetrySession,
+  state: HandlerSessionState,
+): void {
   clearObsSessionRuntimeState();
   clearObsAgentsRuntimeState();
-  state.session = undefined;
+  if (state.session === session) state.session = undefined;
+}
+
+async function clearExtensionStatus(ctx: ObservMeHandlerContext): Promise<void> {
+  try {
+    await ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, undefined);
+  } catch {
+    return;
+  }
 }
 
 async function recordControllerOperationResult(

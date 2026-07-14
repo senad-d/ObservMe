@@ -103,11 +103,24 @@ groups:
           runbook: "Severity guidance from production docs: warning."
       - alert: ObservMeActiveAgentsStuckHigh
         expr: >-
-          sum(observme_active_agents) > 100
+          (sum(max by (observme_instance_id) ((observme_active_agents > 0) and on (observme_instance_id)
+          ((observme_agent_lease_expires_unixtime_seconds > time()) and
+          (observme_agent_lease_expires_unixtime_seconds <= time() + 305)))) or vector(0)) > 100
         for: 30m
         labels:
           severity: deployment-dependent
         annotations:
           summary: Active agents stuck high
-          description: ObservMe active-agent gauge remains above 100.
-          runbook: "Severity guidance from production docs: depends on normal fleet size; tune per deployment."
+          description: ObservMe leased active-agent count remains above 100; expired, missing, and pathological leases fail closed.
+          runbook: "Severity guidance from production docs: depends on normal fleet size; tune per deployment. Compare leased activity with raw and expired claims plus Export Health."
+      - alert: ObservMeExpiredActiveAgentClaims
+        expr: >-
+          (sum(max by (observme_instance_id) ((observme_active_agents > 0) and on (observme_instance_id)
+          (observme_agent_lease_expires_unixtime_seconds <= time()))) or vector(0)) > 5
+        for: 15m
+        labels:
+          severity: deployment-dependent
+        annotations:
+          summary: Expired active-agent claims detected
+          description: More than five positive lifecycle claims have expired leases for 15 minutes; they are stale diagnostics and excluded from leased active totals.
+          runbook: "Deployment-tunable diagnostic: compare Raw active claims, Expired active claims, leased Active agents, and Export Health; investigate abrupt producer death, export gaps, and Collector cleanup. /obs agents is local child state, not fleet truth."

@@ -72,6 +72,10 @@ function createFakeMeter() {
     createHistogram: (name: string) => ({
       record: (value: number, attributes: TestAttributes = {}) => records.push({ type: "histogram", name, value, attributes }),
     }),
+    createObservableGauge: () => ({
+      addCallback: () => undefined,
+      removeCallback: () => undefined,
+    }),
   };
 }
 

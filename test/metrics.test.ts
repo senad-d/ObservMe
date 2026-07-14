@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { Attributes, MetricOptions, ObservableCallback, ObservableResult } from "@opentelemetry/api";
 import { createObservMeMetrics } from "../src/pi/handlers.ts";
 import type { TestAttributes, TestMetricRecord } from "./support/telemetry-types.ts";
 import {
   ALL_METRIC_NAMES,
+  OBSERVME_AGENT_LEASE_METRIC_OPTIONS,
   OBSERVME_COUNTER_METRIC_NAMES,
   OBSERVME_GAUGE_METRIC_NAMES,
   OBSERVME_HISTOGRAM_METRIC_NAMES,
@@ -13,7 +15,7 @@ import {
 
 type ObservMeMetrics = ReturnType<typeof createObservMeMetrics>;
 
-type MetricMethod = "add" | "record";
+type MetricMethod = "add" | "observe" | "record";
 
 interface MetricExercise {
   readonly name: string;
@@ -25,7 +27,48 @@ interface MetricExercise {
 
 interface TestMetricInstrument {
   readonly add?: (value: number, attributes: TestAttributes) => void;
+  readonly addCallback?: (callback: ObservableCallback) => void;
   readonly record?: (value: number, attributes: TestAttributes) => void;
+  readonly removeCallback?: (callback: ObservableCallback) => void;
+}
+
+class RecordingObservableGauge {
+  readonly name: string;
+  readonly options: MetricOptions;
+  readonly #records: TestMetricRecord[];
+  readonly #callbacks = new Set<ObservableCallback>();
+
+  constructor(name: string, options: MetricOptions, records: TestMetricRecord[]) {
+    this.name = name;
+    this.options = options;
+    this.#records = records;
+  }
+
+  get callbackCount(): number {
+    return this.#callbacks.size;
+  }
+
+  addCallback(callback: ObservableCallback): void {
+    this.#callbacks.add(callback);
+  }
+
+  removeCallback(callback: ObservableCallback): void {
+    this.#callbacks.delete(callback);
+  }
+
+  async collect(): Promise<void> {
+    const result: ObservableResult = { observe: this.observe.bind(this) };
+    for (const callback of [...this.#callbacks]) await callback(result);
+  }
+
+  private observe(value: number, attributes: Attributes = {}): void {
+    this.#records.push({
+      type: "observableGauge",
+      name: this.name,
+      value,
+      attributes: { ...attributes },
+    });
+  }
 }
 
 const exerciseLabels = { environment: "test", agent_role: "root" };
@@ -88,8 +131,15 @@ const metricExercises = [
   { name: OBSERVME_HISTOGRAM_METRIC_NAMES.HANDLER_DURATION_MS, instrument: "handlerDurationMs", method: "record", type: "histogram", value: 56 },
   { name: OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_SPANS, instrument: "activeSpans", method: "add", type: "upDownCounter", value: 57 },
   { name: OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_AGENTS, instrument: "activeAgents", method: "add", type: "upDownCounter", value: 58 },
-  { name: OFFICIAL_GENAI_METRIC_NAMES.CLIENT_TOKEN_USAGE, instrument: "genAiClientTokenUsage", method: "record", type: "histogram", value: 59 },
-  { name: OFFICIAL_GENAI_METRIC_NAMES.CLIENT_OPERATION_DURATION, instrument: "genAiClientOperationDuration", method: "record", type: "histogram", value: 60 },
+  {
+    name: OBSERVME_GAUGE_METRIC_NAMES.AGENT_LEASE_EXPIRES_UNIXTIME_SECONDS,
+    instrument: "agentLeaseExpiresUnixTimeSeconds",
+    method: "observe",
+    type: "observableGauge",
+    value: 59,
+  },
+  { name: OFFICIAL_GENAI_METRIC_NAMES.CLIENT_TOKEN_USAGE, instrument: "genAiClientTokenUsage", method: "record", type: "histogram", value: 60 },
+  { name: OFFICIAL_GENAI_METRIC_NAMES.CLIENT_OPERATION_DURATION, instrument: "genAiClientOperationDuration", method: "record", type: "histogram", value: 61 },
 ] satisfies readonly MetricExercise[];
 
 function compareStrings(left: string, right: string): number {
@@ -98,9 +148,11 @@ function compareStrings(left: string, right: string): number {
 
 function createRecordingMeter() {
   const records: TestMetricRecord[] = [];
+  const observableGauges = new Map<string, RecordingObservableGauge>();
 
   return {
     records,
+    observableGauges,
     createCounter: (name: string) => ({
       add: (value: number, attributes: TestAttributes = {}) => records.push({ type: "counter", name, value, attributes }),
     }),
@@ -110,15 +162,55 @@ function createRecordingMeter() {
     createHistogram: (name: string) => ({
       record: (value: number, attributes: TestAttributes = {}) => records.push({ type: "histogram", name, value, attributes }),
     }),
+    createObservableGauge: (name: string, options: MetricOptions = {}) => {
+      const gauge = new RecordingObservableGauge(name, options, records);
+      observableGauges.set(name, gauge);
+      return gauge;
+    },
   };
 }
 
-function exerciseMetric(metrics: ObservMeMetrics, exercise: MetricExercise): void {
+async function exerciseMetric(
+  metrics: ObservMeMetrics,
+  exercise: MetricExercise,
+  meter: ReturnType<typeof createRecordingMeter>,
+): Promise<void> {
   const instrument = metrics[exercise.instrument] as TestMetricInstrument | undefined;
-  const recordMetric = instrument?.[exercise.method];
+  if (!instrument) assert.fail(`${exercise.instrument} should exist for ${exercise.name}`);
 
-  if (typeof recordMetric !== "function") assert.fail(`${exercise.instrument} should exist for ${exercise.name}`);
+  if (exercise.method === "observe") {
+    await exerciseObservableGauge(instrument, exercise, meter);
+    return;
+  }
+
+  const recordMetric = instrument[exercise.method];
+  if (typeof recordMetric !== "function") assert.fail(`${exercise.instrument} should record ${exercise.name}`);
   recordMetric(exercise.value, exerciseLabels);
+}
+
+async function exerciseObservableGauge(
+  instrument: TestMetricInstrument,
+  exercise: MetricExercise,
+  meter: ReturnType<typeof createRecordingMeter>,
+): Promise<void> {
+  const gauge = meter.observableGauges.get(exercise.name);
+  if (!gauge || !instrument.addCallback || !instrument.removeCallback) {
+    assert.fail(`${exercise.instrument} should expose an observable callback API`);
+  }
+
+  const callback = observeExerciseValue.bind(undefined, exercise.value, exerciseLabels);
+  instrument.addCallback(callback);
+  assert.equal(gauge.callbackCount, 1);
+  await gauge.collect();
+  const recordCount = meter.records.length;
+  instrument.removeCallback(callback);
+  assert.equal(gauge.callbackCount, 0);
+  await gauge.collect();
+  assert.equal(meter.records.length, recordCount, "removed callbacks must not observe again");
+}
+
+function observeExerciseValue(value: number, attributes: Attributes, result: ObservableResult): void {
+  result.observe(value, attributes);
 }
 
 function findMetricRecord(records: readonly TestMetricRecord[], exercise: MetricExercise): TestMetricRecord | undefined {
@@ -137,12 +229,17 @@ function assertEveryMetricConstantHasAnExercise() {
   assert.equal(exerciseNames.length, uniqueExerciseNames.length, "metric exercises must not duplicate metric names");
 }
 
-test("metric helper records every documented metric constant", () => {
+test("metric helper records every documented metric constant", async () => {
   const meter = createRecordingMeter();
   const metrics = createObservMeMetrics(meter);
 
   assertEveryMetricConstantHasAnExercise();
-  for (const exercise of metricExercises) exerciseMetric(metrics, exercise);
+  for (const exercise of metricExercises) await exerciseMetric(metrics, exercise, meter);
+
+  const leaseGauge = meter.observableGauges.get(
+    OBSERVME_GAUGE_METRIC_NAMES.AGENT_LEASE_EXPIRES_UNIXTIME_SECONDS,
+  );
+  assert.deepEqual(leaseGauge?.options, OBSERVME_AGENT_LEASE_METRIC_OPTIONS);
 
   for (const exercise of metricExercises) {
     const record = findMetricRecord(meter.records, exercise);

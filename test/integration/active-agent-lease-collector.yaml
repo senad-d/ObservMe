@@ -1,0 +1,50 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  resource/drop_high_cardinality_metric_attrs:
+    attributes:
+      - key: pi.workflow.id
+        action: delete
+      - key: pi.workflow.root_agent_id
+        action: delete
+      - key: pi.agent.id
+        action: delete
+      - key: pi.agent.parent_id
+        action: delete
+      - key: pi.agent.root_id
+        action: delete
+      - key: pi.agent.run.id
+        action: delete
+      - key: pi.agent.spawn.id
+        action: delete
+      - key: pi.agent.spawn.tool_call_id
+        action: delete
+      - key: pi.agent.child.id
+        action: delete
+      - key: pi.session.id
+        action: delete
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # Intentionally much longer than the fixture's 10-second lease so this
+    # test observes the cached raw claim after the producer is killed.
+    metric_expiration: 1m
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [resource/drop_high_cardinality_metric_attrs]
+      exporters: [prometheus]

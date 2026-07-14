@@ -60,6 +60,7 @@ export const defaultObservMeConfig = {
     enabled: true,
     exportIntervalMillis: 15000,
     exportTimeoutMillis: 3000,
+    activeAgentLeaseDurationMillis: 60000,
   },
   logs: {
     enabled: true,

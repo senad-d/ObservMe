@@ -34,3 +34,38 @@ jobs:
 
       - name: Validate template
         run: npm run validate
+
+  lease-cancellation:
+    name: Active-agent lease cancellation
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      OBSERVME_COLLECTOR_IMAGE: otel/opentelemetry-collector-contrib:0.104.0
+      OBSERVME_PROMETHEUS_IMAGE: prom/prometheus:v2.53.1
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.19.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run active-agent lease unit and contract tests
+        run: npm run test:active-agent-lease:contracts
+
+      - name: Simulate clean and abrupt producer termination
+        run: npm run test:integration:active-agent-lease
+
+      - name: Clean up active-agent lease Docker resources
+        if: ${{ always() }}
+        run: |
+          docker ps --all --quiet --filter "label=io.observme.integration=active-agent-lease" \
+            | xargs --no-run-if-empty docker rm --force --volumes
+          docker network ls --quiet --filter "label=io.observme.integration=active-agent-lease" \
+            | xargs --no-run-if-empty docker network rm

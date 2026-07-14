@@ -1065,7 +1065,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Current active-agent gauge grouped by the emitted agent_role label, plus the global total. The tunable total=100 reference matches ObservMeActiveAgentsStuckHigh; a missing gauge is unknown telemetry, not healthy zero.",
+      "description": "Canonical leased-active agents grouped by emitted agent_role, plus the fleet total. Clean shutdown reaches zero after export/scrape propagation; after a crash, SIGKILL, cancelled job, or runner loss, the leased total converges to zero within the default 60-second lease plus one Prometheus scrape even when raw claims stay cached. Zero can also mean healthy idle or a failed-closed lease, so compare Export Health. /obs agents reports current-process child state, not this aggregate fleet view. The total=100 reference matches the deployment-tunable ObservMeActiveAgentsStuckHigh threshold.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1115,7 +1115,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(observme_active_agents) by (agent_role)",
+          "expr": "sum by (agent_role) (max by (observme_instance_id, agent_role) ((observme_active_agents > 0) and on (observme_instance_id) ((observme_agent_lease_expires_unixtime_seconds > time()) and (observme_agent_lease_expires_unixtime_seconds <= time() + 305)))) or on() vector(0)",
           "range": true,
           "refId": "A",
           "legendFormat": "{{agent_role}}"
@@ -1126,7 +1126,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(observme_active_agents)",
+          "expr": "sum(max by (observme_instance_id) ((observme_active_agents > 0) and on (observme_instance_id) ((observme_agent_lease_expires_unixtime_seconds > time()) and (observme_agent_lease_expires_unixtime_seconds <= time() + 305)))) or vector(0)",
           "range": true,
           "refId": "B",
           "legendFormat": "total active agents"
@@ -1697,6 +1697,171 @@
         "x": 0,
         "y": 57
       },
+      "id": 105,
+      "panels": [],
+      "title": "Lease health diagnostics",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Diagnostic positive lifecycle claims before lease qualification. These are not live-agent totals and may remain cached after a crash, SIGKILL, cancelled job, or runner loss; leased activity converges to zero within the default 60-second lease plus one Prometheus scrape. Clean shutdown exports zero immediately. Compare Expired active claims and Export Health. /obs agents reports only current-process child state, not fleet liveness.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 58
+      },
+      "id": 22,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Export Health",
+          "url": "/d/observme-export-health/observme-export-health?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(max by (observme_instance_id) (observme_active_agents > 0)) or vector(0)",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Raw active claims (diagnostic)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Positive raw claims whose lease has expired. They are stale diagnostics and never contribute to leased active totals; clean shutdown normally avoids them, while ungraceful exits appear after the default 60-second lease plus one Prometheus scrape and may remain until Collector cleanup. Yellow at 1 and red at 5 are deployment-tunable. Compare Raw active claims and Export Health. /obs agents reports only current-process child state, not fleet liveness.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 58
+      },
+      "id": 23,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Export Health",
+          "url": "/d/observme-export-health/observme-export-health?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(max by (observme_instance_id) ((observme_active_agents > 0) and on (observme_instance_id) (observme_agent_lease_expires_unixtime_seconds <= time()))) or vector(0)",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Expired active claims (diagnostic)",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 66
+      },
       "id": 104,
       "panels": [],
       "title": "Lineage logs",
@@ -1768,7 +1933,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 58
+        "y": 67
       },
       "id": 6,
       "options": {

@@ -1,4 +1,4 @@
-import type { Counter, Histogram, Meter, Span, Tracer, UpDownCounter } from "@opentelemetry/api";
+import type { Counter, Histogram, Meter, ObservableGauge, Span, Tracer, UpDownCounter } from "@opentelemetry/api";
 import type { Logger } from "@opentelemetry/api-logs";
 import type { EnsureProjectConfig as BootstrapEnsureProjectConfig } from "../config/bootstrap-project-config.ts";
 import type {
@@ -13,6 +13,7 @@ import type { ObservMeOtelSdkController } from "../otel/sdk.ts";
 import type { ObservMeTraceSdk } from "../otel/traces.ts";
 import type { BoundedMap } from "../util/bounded-map.ts";
 import type { AgentLineageContext } from "./agent-lineage.ts";
+import type { ActiveAgentLeaseController } from "./active-agent-lease.ts";
 import type { AgentTreeTracker } from "./agent-tree-tracker.ts";
 import type {
   AgentWaitJoinState,
@@ -22,7 +23,10 @@ import type {
 
 export type AttributePrimitive = boolean | number | string | string[];
 export type AttributeMap = Record<string, AttributePrimitive>;
-export type TelemetryMeter = Pick<Meter, "createCounter" | "createHistogram" | "createUpDownCounter">;
+export type TelemetryMeter = Pick<
+  Meter,
+  "createCounter" | "createHistogram" | "createObservableGauge" | "createUpDownCounter"
+>;
 export type TelemetryTracer = Pick<Tracer, "startSpan">;
 export type TelemetryLogger = Pick<Logger, "emit">;
 export type Handler = (event: unknown, ctx: ObservMeHandlerContext) => Promise<void> | void;
@@ -88,6 +92,7 @@ export interface RegisterHandlersOptions {
   readonly startTelemetry?: StartSessionTelemetry;
   readonly env?: NodeJS.ProcessEnv;
   readonly now?: () => number;
+  readonly wallClockNow?: () => number;
   readonly configDirName?: string;
   readonly trustedParentContext?: boolean;
   readonly requireCompleteParentEnvelope?: boolean;
@@ -100,6 +105,7 @@ export interface StartSessionTelemetryOptions {
   readonly config: ObservMeConfig;
   readonly lineage: AgentLineageContext;
   readonly now?: () => number;
+  readonly wallClockNow?: () => number;
 }
 
 export interface TurnSequenceRegistry {
@@ -119,6 +125,7 @@ export interface ObservMeTelemetrySession {
   readonly logger: TelemetryLogger;
   readonly metrics: ObservMeMetrics;
   readonly spans: SpanRegistry;
+  readonly activeAgentLease?: ActiveAgentLeaseController;
   agentTree: AgentTreeTracker;
   sessionSpan?: Span;
   sessionAttributes?: AttributeMap;
@@ -179,6 +186,7 @@ export interface ObservMeMetrics {
   readonly eventsObserved: Counter;
   readonly activeSpans: UpDownCounter;
   readonly activeAgents: UpDownCounter;
+  readonly agentLeaseExpiresUnixTimeSeconds: ObservableGauge;
   readonly workflowDurationMs: Histogram;
   readonly agentRunDurationMs: Histogram;
   readonly agentLifetimeDurationMs: Histogram;

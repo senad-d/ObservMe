@@ -154,6 +154,7 @@ function commonMetricNames() {
     OBSERVME_COUNTER_METRIC_NAMES.PARENT_RECOVERED_FROM_CHILD_FAILURE_TOTAL,
     OBSERVME_COUNTER_METRIC_NAMES.EVENTS_OBSERVED_TOTAL,
     OBSERVME_GAUGE_METRIC_NAMES.ACTIVE_AGENTS,
+    OBSERVME_GAUGE_METRIC_NAMES.AGENT_LEASE_EXPIRES_UNIXTIME_SECONDS,
     OBSERVME_HISTOGRAM_METRIC_NAMES.WORKFLOW_DURATION_MS,
     OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_RUN_DURATION_MS,
     OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_LIFETIME_DURATION_MS,
@@ -263,6 +264,10 @@ function createFakeMeter() {
     }),
     createHistogram: (name: string) => ({
       record: (value: number, attributes: TestAttributes = {}) => records.push({ type: "histogram", name, value, attributes }),
+    }),
+    createObservableGauge: () => ({
+      addCallback: () => undefined,
+      removeCallback: () => undefined,
     }),
   };
 }

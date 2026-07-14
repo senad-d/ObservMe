@@ -5,7 +5,9 @@ import {
   ALL_METRIC_NAMES,
   ALL_OBSERVME_METRIC_NAMES,
   LOG_EVENT_NAMES,
+  OBSERVME_AGENT_LEASE_METRIC_OPTIONS,
   OBSERVME_COUNTER_METRIC_NAMES,
+  OBSERVME_GAUGE_METRIC_NAMES,
   OBSERVME_HISTOGRAM_METRIC_NAMES,
   OFFICIAL_GENAI_METRIC_NAMES,
 } from "../src/semconv/metrics.ts";
@@ -16,6 +18,7 @@ const documentedMetricNames = [
   "observme_active_agents",
   "observme_active_spans",
   "observme_agent_fanout_count",
+  "observme_agent_lease_expires_unixtime_seconds",
   "observme_agent_join_duration_ms",
   "observme_agent_lifetime_duration_ms",
   "observme_agent_run_duration_ms",
@@ -124,6 +127,14 @@ const snakeCaseObservMeMetricName = /^observme_[a-z0-9]+(?:_[a-z0-9]+)*$/;
 test("exports every metric name documented in semantic convention section 12", () => {
   assert.deepEqual(ALL_METRIC_NAMES, documentedMetricNames);
   assert.equal(OBSERVME_COUNTER_METRIC_NAMES.SESSIONS_STARTED_TOTAL, "observme_sessions_started_total");
+  assert.equal(
+    OBSERVME_GAUGE_METRIC_NAMES.AGENT_LEASE_EXPIRES_UNIXTIME_SECONDS,
+    "observme_agent_lease_expires_unixtime_seconds",
+  );
+  assert.deepEqual(OBSERVME_AGENT_LEASE_METRIC_OPTIONS, {
+    unit: "s",
+    description: "Absolute Unix timestamp in seconds when the active Pi agent lease expires.",
+  });
   assert.equal(OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_TREE_DEPTH, "observme_agent_tree_depth");
   assert.equal(OFFICIAL_GENAI_METRIC_NAMES.CLIENT_TOKEN_USAGE, "gen_ai.client.token.usage");
 });

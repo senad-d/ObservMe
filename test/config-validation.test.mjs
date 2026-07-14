@@ -3,6 +3,11 @@ import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { loadSessionConfig } from "../src/config/load-config.ts";
 import {
+  ACTIVE_AGENT_LEASE_DURATION_MILLIS_MAXIMUM,
+  ACTIVE_AGENT_LEASE_DURATION_MILLIS_MINIMUM,
+  ACTIVE_AGENT_LEASE_EXPORT_SAFETY_MARGIN_MILLIS,
+} from "../src/config/schema.ts";
+import {
   emitUnsafeCaptureWarning,
   ensureValidObservMeConfig,
   normalizeConfigRejectionDiagnostic,
@@ -43,6 +48,41 @@ function assertInvalid(config, code, options) {
 
 test("validation accepts safe defaults", () => {
   assertValid(defaultObservMeConfig, { env: {} });
+});
+
+test("validation enforces active-agent lease bounds and export relationship", () => {
+  const minimumExportInterval =
+    (ACTIVE_AGENT_LEASE_DURATION_MILLIS_MINIMUM - ACTIVE_AGENT_LEASE_EXPORT_SAFETY_MARGIN_MILLIS) / 2;
+  const exactDefaultRelationship =
+    (2 * defaultObservMeConfig.metrics.exportIntervalMillis) + ACTIVE_AGENT_LEASE_EXPORT_SAFETY_MARGIN_MILLIS;
+
+  assertValid(
+    cloneDefault({
+      metrics: {
+        exportIntervalMillis: minimumExportInterval,
+        activeAgentLeaseDurationMillis: ACTIVE_AGENT_LEASE_DURATION_MILLIS_MINIMUM,
+      },
+    }),
+  );
+  assertValid(
+    cloneDefault({ metrics: { activeAgentLeaseDurationMillis: ACTIVE_AGENT_LEASE_DURATION_MILLIS_MAXIMUM } }),
+  );
+  assertValid(cloneDefault({ metrics: { activeAgentLeaseDurationMillis: exactDefaultRelationship } }));
+
+  for (const value of [
+    ACTIVE_AGENT_LEASE_DURATION_MILLIS_MINIMUM - 1,
+    ACTIVE_AGENT_LEASE_DURATION_MILLIS_MAXIMUM + 1,
+    60000.5,
+    -1,
+    "not-a-number",
+  ]) {
+    assertInvalid(cloneDefault({ metrics: { activeAgentLeaseDurationMillis: value } }), "invalid_config_shape");
+  }
+
+  assertInvalid(
+    cloneDefault({ metrics: { activeAgentLeaseDurationMillis: exactDefaultRelationship - 1 } }),
+    "active_agent_lease_too_short_for_export_interval",
+  );
 });
 
 for (const environment of documentedEnvironmentValues) {

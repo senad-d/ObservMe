@@ -144,7 +144,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Current ObservMe agent runtimes from the active-agent gauge. Zero can mean healthy idle or an absent gauge; check Export Health before treating an unexpected zero as healthy.",
+      "description": "Canonical leased-active fleet total; Prometheus summary values are aggregate and are not filtered to the selected workflow. Clean shutdown reaches zero after export/scrape propagation; after a crash, SIGKILL, cancelled job, or runner loss, the leased total converges to zero within the default 60-second lease plus one Prometheus scrape even if raw claims stay cached. Zero can also mean healthy idle or a failed-closed lease, so check Export Health. /obs agents is current-process child state, not fleet liveness.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -195,7 +195,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(sum(observme_active_agents) or vector(0))",
+          "expr": "sum(max by (observme_instance_id) ((observme_active_agents > 0) and on (observme_instance_id) ((observme_agent_lease_expires_unixtime_seconds > time()) and (observme_agent_lease_expires_unixtime_seconds <= time() + 305)))) or vector(0)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -1005,7 +1005,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Shape of the agent tree over time without using workflow or agent IDs as metric labels. Constant reference lines mirror the depth=5 and fan-out=20 alert thresholds.",
+      "description": "Aggregate fleet shape over time, not per-workflow truth: the leased-active role series is canonical current activity, while tree histograms summarize all matching telemetry without workflow or agent IDs as metric labels. Clean shutdown removes leased activity after export/scrape propagation; after an ungraceful exit, leased activity converges to zero within the default 60-second lease plus one Prometheus scrape while raw claims may remain cached. /obs agents is local current-process child state. Constant lines mirror the depth=5 and fan-out=20 alert thresholds.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1083,7 +1083,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(observme_active_agents) by (agent_role)",
+          "expr": "sum by (agent_role) (max by (observme_instance_id, agent_role) ((observme_active_agents > 0) and on (observme_instance_id) ((observme_agent_lease_expires_unixtime_seconds > time()) and (observme_agent_lease_expires_unixtime_seconds <= time() + 305)))) or on() vector(0)",
           "legendFormat": "active {{agent_role}}",
           "range": true,
           "refId": "A"

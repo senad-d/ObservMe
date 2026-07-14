@@ -129,8 +129,125 @@ Zero-state interpretation checklist:
 - Empty failure-only Loki tables mean no matching failures in the selected range, not that the log pipeline is broken.
 - `or vector(0)` stats must say whether zero means healthy idle/no activity or a true zero failure ratio.
 - Optional redacted content panels can be empty when capture is disabled or when the Collector dropped content attributes by policy.
-- Active-session estimates are approximate across process restarts/counter resets; `observme_active_agents` is the authoritative active agent gauge.
+- Active-session estimates are approximate across process restarts and counter resets. Raw `observme_active_agents` values are lifecycle claims, not authoritative liveness after an ungraceful exit.
 - High-cardinality execution identifiers are allowed as Loki/Tempo filter variables only and must never be introduced into Prometheus queries or panel links from aggregate panels.
+
+### 1.3 Active-agent leased-state contract
+
+The authoritative metric, duration, export-interval relationship, clock-skew allowance, future-timestamp horizon, convergence target, and failure-mode behavior are defined once in [`04-telemetry-semantic-conventions.md` §12.4.1](04-telemetry-semantic-conventions.md#1241-active-agent-lease-and-clock-contract). Dashboards, alerts, examples, and tests must use that contract without introducing panel-local lease or skew windows.
+
+Operational active-agent views combine a positive `observme_active_agents` lifecycle claim with a currently valid `observme_agent_lease_expires_unixtime_seconds` value on the generated `observme_instance_id` resource label. The instance label is an internal join/deduplication key only: it must not be exposed as a dashboard variable, group, legend, URL value, or topology identity. Duplicate scrape/exporter representations of one instance count once.
+
+Interpret active-agent states as follows:
+
+- positive claim plus a valid current lease: active;
+- clean-shutdown claim of zero: inactive after normal export/scrape propagation, without waiting for lease expiry;
+- positive claim plus an expired lease: inactive stale claim, available only as a diagnostic;
+- missing, malformed, non-finite, or pathologically future lease: inactive (fail closed);
+- no matching series: zero-safe healthy idle/no activity when the telemetry backend itself is reachable.
+
+A crash, `SIGKILL`, cancelled job, or lost runner therefore converges to zero within the semantic-convention bound even if the Collector continues to expose the cached raw claim. A Collector/export outage can intentionally undercount after the last delivered lease expires; use Export Health and backend reachability to distinguish that state from process termination. Clean lifecycle handling and GitHub Actions `if: always()` cleanup remain useful latency optimizations, but neither is the correctness mechanism.
+
+### 1.3.1 Canonical active-agent PromQL
+
+Use the following total everywhere current live-agent state is required:
+
+```promql
+sum(
+  max by (observme_instance_id) (
+    (observme_active_agents > 0)
+    and on (observme_instance_id)
+    (
+      (observme_agent_lease_expires_unixtime_seconds > time())
+      and
+      (observme_agent_lease_expires_unixtime_seconds <= time() + 305)
+    )
+  )
+) or vector(0)
+```
+
+Both comparisons are required. The lower bound expires stale claims; the upper bound rejects leases beyond the frozen 305-second future horizon. `and on (observme_instance_id)` fails closed when the lease is absent or non-comparable, and `max by (observme_instance_id)` removes duplicate Collector/exporter/scrape replicas before the outer sum. The final `or vector(0)` makes no-series results render as zero; when Prometheus and Export Health are reachable, zero can mean healthy idle, clean shutdown, an expired claim, or a lease that failed closed.
+
+For a bounded emitted dimension, retain that dimension in both aggregations. Grouped queries use `or on() vector(0)` so the unlabeled zero appears only when no labeled breakdown exists. Canonical role and environment breakdowns are:
+
+```promql
+sum by (agent_role) (
+  max by (observme_instance_id, agent_role) (
+    (observme_active_agents > 0)
+    and on (observme_instance_id)
+    (
+      (observme_agent_lease_expires_unixtime_seconds > time())
+      and
+      (observme_agent_lease_expires_unixtime_seconds <= time() + 305)
+    )
+  )
+) or on() vector(0)
+```
+
+```promql
+sum by (environment) (
+  max by (observme_instance_id, environment) (
+    (observme_active_agents > 0)
+    and on (observme_instance_id)
+    (
+      (observme_agent_lease_expires_unixtime_seconds > time())
+      and
+      (observme_agent_lease_expires_unixtime_seconds <= time() + 305)
+    )
+  )
+) or on() vector(0)
+```
+
+The shipped active claim and lease currently emit `agent_role` and `environment`; they do not emit the metric label `subagent_depth`. Therefore current-active depth panels must not group by `subagent_depth`. For a compatible pipeline that actually emits the same bounded `subagent_depth` on the active claim, this is the supported depth shape:
+
+```promql
+sum by (subagent_depth) (
+  max by (observme_instance_id, subagent_depth) (
+    (observme_active_agents > 0)
+    and on (observme_instance_id)
+    (
+      (observme_agent_lease_expires_unixtime_seconds > time())
+      and
+      (observme_agent_lease_expires_unixtime_seconds <= time() + 305)
+    )
+  )
+) or on() vector(0)
+```
+
+Do not substitute resource-derived or high-cardinality execution labels for these dimensions. Use the bounded spawn/tree metrics for depth views in the shipped dashboards until `subagent_depth` is emitted on the active signals themselves.
+
+Raw positive lifecycle claims are diagnostic only:
+
+```promql
+sum(max by (observme_instance_id) (observme_active_agents > 0)) or vector(0)
+```
+
+Expired positive claims are diagnostic and never contribute to the live total:
+
+```promql
+sum(
+  max by (observme_instance_id) (
+    (observme_active_agents > 0)
+    and on (observme_instance_id)
+    (observme_agent_lease_expires_unixtime_seconds <= time())
+  )
+) or vector(0)
+```
+
+Compare raw claims, expired claims, the canonical live total, and Export Health when diagnosing a producer crash or export gap. A raw-minus-live difference can also include a missing, malformed, or pathologically future lease, so it must not be labeled strictly as “expired.” Never expose `observme_instance_id` as a variable or legend in these diagnostics.
+
+### 1.3.2 Migration from raw active-agent queries
+
+Use this rollout order for custom dashboards, recording rules, alerts, and API consumers:
+
+1. Deploy ObservMe producers that emit both `observme_active_agents` and `observme_agent_lease_expires_unixtime_seconds` with the same generated `observme_instance_id` resource label.
+2. Confirm the lease metric is present and clocks are synchronized before changing consumers. A missing lease fails closed, so a mixed-version producer without the new metric will not appear in the leased total.
+3. Replace raw `sum(observme_active_agents)`, raw role sums, and any equivalent positive-claim aggregation with the canonical total or bounded-dimension form above. Preserve the future-horizon check, instance join, deduplication, and zero-safe fallback together.
+4. Keep raw and expired-claim queries only in panels or runbooks explicitly labeled as diagnostics. Do not use them for paging, capacity decisions, or current topology.
+5. Keep Collector `metric_expiration` longer than the lease. Do not shorten expiration or schedule Collector restarts to correct liveness; an expired lease stops counting while the cached raw claim remains available for diagnosis.
+6. During rollback, old raw consumers continue to see the compatibility lifecycle claim, but they regain the known ghost-agent behavior after ungraceful exits. Treat rollback as a temporary loss of crash-safe liveness semantics.
+
+Validate the migrated consumer with live+valid, clean-shutdown, expired, missing, pathologically future, duplicate-replica, and no-series cases before production use.
 
 ## 2. Overview Dashboard
 
@@ -584,10 +701,22 @@ Severity: warning.
 ### Active Agents Stuck High
 
 ```promql
-sum(observme_active_agents) > 100
+(
+  sum(
+    max by (observme_instance_id) (
+      (observme_active_agents > 0)
+      and on (observme_instance_id)
+      (
+        (observme_agent_lease_expires_unixtime_seconds > time())
+        and
+        (observme_agent_lease_expires_unixtime_seconds <= time() + 305)
+      )
+    )
+  ) or vector(0)
+) > 100
 ```
 
-Severity depends on normal fleet size; tune per deployment.
+Severity depends on normal fleet size; tune per deployment. This alert uses leased live agents, not cached raw claims.
 
 ## 12. SLOs
 

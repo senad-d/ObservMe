@@ -66,6 +66,12 @@ export const OBSERVME_HISTOGRAM_METRIC_NAMES = {
 export const OBSERVME_GAUGE_METRIC_NAMES = {
   ACTIVE_SPANS: "observme_active_spans",
   ACTIVE_AGENTS: "observme_active_agents",
+  AGENT_LEASE_EXPIRES_UNIXTIME_SECONDS: "observme_agent_lease_expires_unixtime_seconds",
+} as const;
+
+export const OBSERVME_AGENT_LEASE_METRIC_OPTIONS = {
+  unit: "s",
+  description: "Absolute Unix timestamp in seconds when the active Pi agent lease expires.",
 } as const;
 
 export const OFFICIAL_GENAI_METRIC_NAMES = {

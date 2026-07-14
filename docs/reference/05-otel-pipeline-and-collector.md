@@ -47,6 +47,7 @@ metrics:
   enabled: true
   exportIntervalMillis: 15000
   exportTimeoutMillis: 3000
+  activeAgentLeaseDurationMillis: 60000
 
 logs:
   enabled: true
@@ -57,6 +58,8 @@ logs:
 ```
 
 The OpenTelemetry JS OTLP HTTP exporters default to signal-specific paths such as `http://localhost:4318/v1/traces`, `http://localhost:4318/v1/metrics`, and `/v1/logs`. Treat `otlp.endpoint` as a base endpoint in ObservMe config, but pass signal-specific URLs to SDK exporters that require an explicit `url`.
+
+The default active-agent lease is 60 seconds and renews on each 15-second metric collection. Supported lease values are 10 seconds through 5 minutes and must be at least twice the export interval plus 5 seconds. Keep the producer and Prometheus clocks within 5 seconds; otherwise a lease may fail closed early or remain valid longer than intended. The exact contract is frozen in [`04-telemetry-semantic-conventions.md` §12.4.1](04-telemetry-semantic-conventions.md#1241-active-agent-lease-and-clock-contract).
 
 ## 4. Trace Context and Workflow/Agent-Lineage Propagation
 
@@ -118,10 +121,10 @@ service:
 
 ## 6. Production Collector for Grafana Stack
 
-This configuration routes traces to Tempo, logs to Loki, and metrics to a Prometheus-compatible remote write endpoint such as Mimir. Use a Collector distribution that contains every configured component. The minimal debug example works with the core Collector, while `prometheusremotewrite`, `probabilistic_sampler`, and `tail_sampling` are commonly deployed from the Collector Contrib distribution or a vendor distribution such as Grafana Alloy.
+This configuration routes traces to Tempo, logs to Loki, and metrics to a Prometheus scrape endpoint. Use a Collector distribution that contains every configured component. The minimal debug example works with the core Collector, while `prometheus`, `prometheusremotewrite`, `probabilistic_sampler`, and `tail_sampling` are commonly deployed from the Collector Contrib distribution or a vendor distribution such as Grafana Alloy.
 
 ```yaml
-# Production-oriented Collector reference for Tempo, Loki, and Mimir.
+# Production-oriented Collector reference for Tempo, Loki, and Prometheus.
 # Verify that your Collector distribution contains every configured component,
 # replace backend endpoints/security for your deployment, and never add raw
 # content or high-cardinality execution identifiers to metric labels.
@@ -220,13 +223,13 @@ exporters:
     retry_on_failure:
       enabled: true
 
-  prometheusremotewrite/mimir:
-    endpoint: http://mimir:9009/api/v1/push
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # Exporter-wide stale-series/cardinality cleanup for gauges, counters, and
+    # histograms. Five minutes exceeds ObservMe's default one-minute active-agent
+    # lease; lease-aware PromQL, not expiration, determines liveness.
+    metric_expiration: 5m
     resource_to_telemetry_conversion:
-      enabled: true
-    sending_queue:
-      enabled: true
-    retry_on_failure:
       enabled: true
 
   debug:
@@ -243,7 +246,7 @@ service:
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, resource/observme, resource/drop_high_cardinality_metric_attrs, batch]
-      exporters: [prometheusremotewrite/mimir]
+      exporters: [prometheus]
 
     logs:
       receivers: [otlp]
@@ -251,9 +254,19 @@ service:
       exporters: [otlphttp/loki]
 ```
 
+### 6.1 Prometheus exporter expiration policy
+
+The shipped local and production scrape-exporter examples set `metric_expiration: 5m`. This exporter-level setting applies uniformly to every Prometheus-exported gauge, counter, and histogram; it cannot be scoped only to active-agent metrics. Its only purpose is stale-series and cardinality cleanup: it bounds the Collector memory used by abandoned metric streams and eventually lets Prometheus mark an expired series stale after the exporter stops exposing it. Lease-aware PromQL remains the active-agent correctness mechanism, even while the Collector still exposes a cached positive `observme_active_agents` value.
+
+Five minutes comfortably exceeds the default 60-second active-agent lease and 15-second SDK metric export interval. If either interval is customized, keep `metric_expiration` longer than the lease and allow enough additional time for expected export delays and scrape gaps. A shorter value cleans abandoned streams sooner but can evict gauges, counters, and histograms during a temporary producer outage; a longer value consumes Collector memory and preserves abandoned cardinality for longer. It must never be shortened merely to make active-agent totals converge.
+
+Apply a Collector configuration change through the deployment's supported reload mechanism or restart the Collector. A restart clears the Prometheus exporter's in-memory series cache, but neither reload nor restart deletes samples already stored in Prometheus; historical samples remain subject to Prometheus retention and deletion policy. Restart is never required merely to make an expired active-agent lease stop counting. `metric_expiration` belongs only to the metrics scrape exporter, so traces and logs are unaffected. Remote-write deployments do not use this scrape-exporter cache setting and must apply their backend's series-retention policy, while continuing to use the same lease-aware active-agent queries.
+
+When migrating, deploy a version that emits `observme_agent_lease_expires_unixtime_seconds`, verify the Collector preserves the generated `observme_instance_id`, then replace every current-activity raw sum in dashboards, recording rules, and alerts with the canonical queries in [`09-dashboards-alerts-slos.md` §1.3.1](09-dashboards-alerts-slos.md#131-canonical-active-agent-promql). Keep raw and expired claims only as clearly labeled diagnostics. Missing leases intentionally fail closed, so do not switch a mixed-version fleet until the lease metric is visible for the producers that should count.
+
 The Collector attribute processor is defense in depth for log attributes only. It must not be the only redaction layer, and it does not sanitize arbitrary log bodies; ObservMe must redact or drop sensitive content before export. The traces pipeline intentionally keeps `pi.llm.prompt.redacted`, `pi.llm.response.redacted`, and `pi.llm.thinking.redacted` so Tempo can display redacted content after explicit capture is enabled. Old telemetry that an earlier Collector dropped cannot be recovered; generate new LLM events after updating the Collector.
 
-Keep high-cardinality lineage attributes on traces/logs, but remove them from the metrics pipeline unless the organization explicitly accepts the cardinality. The bundled local Loki pipeline promotes `pi.agent.id` and `pi.agent.run.id` as log labels so the LLM Conversations dashboard can filter captured chat content by agent and run. Prometheus resource-to-telemetry conversion is safe only after the metrics pipeline drops `pi.workflow.id`, `pi.agent.id`, `pi.session.id`, trace IDs, and spawn IDs; the remaining generated `service.instance.id`/`observme.instance.id` labels keep concurrent ObservMe metric streams distinct so session counters can be summed accurately.
+Keep high-cardinality lineage attributes on traces/logs, but remove them from the metrics pipeline unless the organization explicitly accepts the cardinality. The bundled local Loki pipeline promotes `pi.agent.id` and `pi.agent.run.id` as log labels so the LLM Conversations dashboard can filter captured chat content by agent and run. Prometheus resource-to-telemetry conversion is safe only after the metrics pipeline drops `pi.workflow.id`, `pi.agent.id`, `pi.session.id`, trace IDs, and spawn IDs. Preserve the generated `service.instance.id`/`observme.instance.id` resource identity in the metrics pipeline so lease-aware queries can join and deduplicate concurrent ObservMe metric streams without exposing workflow, session, logical-agent, trace, span, or job-run identifiers as labels.
 
 ## 7. Direct-to-Backend Development Mode
 

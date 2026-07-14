@@ -11,6 +11,7 @@ The npm package ships configuration examples and an extension-integration exampl
 - Local self-signed TLS and IPv4 preference are enabled for that profile.
 - Prompt, response, thinking, tool, Bash, and path capture remain disabled.
 - Redaction remains enabled and unsafe capture remains disabled.
+- Metrics export every 15 seconds and renew a 60-second active-agent lease; keep producer and Prometheus clocks synchronized within 5 seconds.
 
 To use it in a trusted project:
 
@@ -27,13 +28,17 @@ Read [`../docs/configuration.md`](../docs/configuration.md) for the quick guide 
 
 - traces are exported to Tempo;
 - logs are exported to Loki;
-- metrics are remote-written to Mimir;
+- metrics are exposed on a Prometheus scrape endpoint;
+- the five-minute `metric_expiration` applies to all exported metric types only as stale-series/cardinality cleanup, not active-agent liveness;
+- lease-aware PromQL joins the positive lifecycle claim and lease on generated `observme_instance_id`; raw `observme_active_agents` sums are diagnostics, not production live totals;
 - high-cardinality workflow, agent, session, and spawn attributes are removed from metrics;
 - accidental content attributes are removed from logs as defense in depth.
 
 The example uses Collector components commonly provided by the Collector Contrib distribution. Verify that your deployed distribution includes every receiver, processor, and exporter, then replace backend endpoints and security settings for your environment.
 
-Read [`../docs/reference/05-otel-pipeline-and-collector.md`](../docs/reference/05-otel-pipeline-and-collector.md) for pipeline design and [`../docs/reference/11-deployment-runbooks.md`](../docs/reference/11-deployment-runbooks.md) for deployment and incident checks.
+Read [`../docs/reference/05-otel-pipeline-and-collector.md`](../docs/reference/05-otel-pipeline-and-collector.md) for pipeline design, [`../docs/reference/09-dashboards-alerts-slos.md`](../docs/reference/09-dashboards-alerts-slos.md#131-canonical-active-agent-promql) for canonical queries and raw-query migration, and [`../docs/reference/11-deployment-runbooks.md`](../docs/reference/11-deployment-runbooks.md) for deployment and incident checks.
+
+For GitHub Actions, prefer graceful Pi/sidecar shutdown and an `if: always()` cleanup step, but do not depend on either after force cancellation. Lease expiry provides correctness without a Collector restart. GitHub-hosted runner clocks meet the supported expectation; self-hosted runners must use reliable time synchronization.
 
 ## `integrations/subagent-runner.ts`
 

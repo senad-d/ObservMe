@@ -65,6 +65,7 @@ test("ensureProjectObservMeConfig creates the trusted project starter file", asy
     assert.match(text, /filePaths: false/u);
     assert.match(text, /redactionEnabled: true/u);
     assert.match(text, /allowUnsafeCapture: false/u);
+    assert.match(text, /activeAgentLeaseDurationMillis: 60000/u);
     assert.match(text, /token: \$\{OBSERVME_GRAFANA_TOKEN\}/u);
   } finally {
     await removeTempProject(cwd);

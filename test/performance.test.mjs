@@ -166,6 +166,10 @@ function createFakeMeter(batchRecorder, metricTotals) {
         recordBatchItem(batchRecorder, "metrics");
       },
     }),
+    createObservableGauge: () => ({
+      addCallback() {},
+      removeCallback() {},
+    }),
   };
 }
 

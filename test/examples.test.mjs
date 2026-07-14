@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { loadFactoryConfig, parseObservMeConfigText } from "../src/config/load-config.ts";
 import { getGrafanaQueryReadiness } from "../src/query/grafana-readiness.ts";
 
 const observmeExampleFile = "examples/observme.yaml";
+const environmentExampleFile = ".env.example";
 const collectorExampleFile = "examples/collector.yaml";
 const stackDatasourcesFile = "observability-stack/config/grafana/provisioning/datasources/datasources.yaml";
 const stackCollectorFile = "observability-stack/config/otel/otel-collector.yaml";
@@ -38,6 +40,8 @@ const requiredContentDrops = [
   "pi.tool.result.redacted",
 ];
 const resourceToTelemetryConversionPattern = /resource_to_telemetry_conversion:\s*\n\s*enabled: true/u;
+const recommendedMetricExpiration = "5m";
+const collectorDurationUnitMillis = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 };
 
 async function readText(path) {
   return readFile(path, "utf8");
@@ -90,6 +94,7 @@ async function observmeExampleLoadsAsValidSafeConfig() {
   assert.equal(config.agent.propagateTraceContext, true);
   assert.equal(config.agent.propagateToSubagents, true);
   assert.equal(config.agent.writeCorrelationEntry, false);
+  assert.equal(config.metrics.activeAgentLeaseDurationMillis, 60000);
   assert.deepEqual(Object.values(config.capture), [false, false, false, false, false, false, false, false]);
   assert.equal(config.privacy.redactionEnabled, true);
   assert.equal(config.privacy.allowUnsafeCapture, false);
@@ -157,6 +162,13 @@ async function observmeExampleIsQueryReadyWithDocumentedSecretInputs() {
   assertSupportedDatasourceReadiness(tokenAuthConfig);
 }
 
+async function environmentExampleDocumentsActiveAgentLease() {
+  const environmentExample = await readText(environmentExampleFile);
+
+  assert.match(environmentExample, /^OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS=60000$/mu);
+  assert.doesNotMatch(environmentExample, /^OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS=.*(?:token|password|secret)/miu);
+}
+
 async function collectorExampleMatchesProductionReference() {
   const [docs, collector] = await Promise.all([
     readText("docs/reference/05-otel-pipeline-and-collector.md"),
@@ -165,6 +177,27 @@ async function collectorExampleMatchesProductionReference() {
   const reference = extractProductionCollectorReference(docs);
 
   assert.equal(normalizeYaml(collector), normalizeYaml(reference));
+}
+
+async function collectorExamplesUseLeaseIndependentCleanupExpiration() {
+  const collectors = await Promise.all([
+    readText(stackCollectorFile),
+    readText(collectorExampleFile),
+  ]);
+
+  for (const collector of collectors) {
+    const exporterBlock = extractPrometheusExporterBlock(collector);
+    const expiration = extractMetricExpiration(exporterBlock);
+
+    assert.equal(expiration, recommendedMetricExpiration);
+    assert.ok(
+      parseCollectorDurationMillis(expiration) > defaultObservMeConfig.metrics.activeAgentLeaseDurationMillis,
+      "Prometheus cleanup expiration should exceed the default active-agent lease",
+    );
+    assert.match(exporterBlock, /Exporter-wide stale-series\/cardinality cleanup for gauges, counters, and/u);
+    assert.match(exporterBlock, /lease-aware PromQL, not expiration, determines liveness/u);
+    assert.match(collector, /metrics:[\s\S]*?exporters: \[prometheus\]/u);
+  }
 }
 
 async function collectorExampleIncludesCardinalityAndContentDropProcessors() {
@@ -194,6 +227,24 @@ function assertSupportedDatasourceReadiness(config) {
   for (const datasource of Object.keys(supportedLocalDatasourceUids)) {
     assert.equal(getGrafanaQueryReadiness(config, datasource).status, "ready", `${datasource} query config should be ready`);
   }
+}
+
+function extractPrometheusExporterBlock(text) {
+  const match = text.match(/(?:^|\n) {2}prometheus:\n(?<block>[\s\S]*?)(?=\n {2}[a-z][^\n]*:\n|\nservice:\n)/u);
+  assert.ok(match?.groups?.block, "Prometheus exporter block should be configured");
+  return match.groups.block;
+}
+
+function extractMetricExpiration(exporterBlock) {
+  const match = exporterBlock.match(/^ {4}metric_expiration:\s*(?<duration>\S+)\s*$/mu);
+  assert.ok(match?.groups?.duration, "Prometheus exporter should configure metric_expiration");
+  return match.groups.duration;
+}
+
+function parseCollectorDurationMillis(value) {
+  const match = value.match(/^(?<amount>\d+)(?<unit>ms|s|m|h)$/u);
+  assert.ok(match?.groups?.amount && match.groups.unit, `unsupported Collector duration: ${value}`);
+  return Number(match.groups.amount) * collectorDurationUnitMillis[match.groups.unit];
 }
 
 function extractGrafanaDatasourceUidsByType(text) {
@@ -236,7 +287,12 @@ test("example YAML files have parseable YAML syntax", examplesHaveValidYamlSynta
 test("ObservMe example config loads as a valid supported local config", observmeExampleLoadsAsValidSafeConfig);
 test("ObservMe example matches the supported local Grafana query profile", observmeExampleMatchesSupportedLocalQueryProfile);
 test("ObservMe example is query-ready with documented secret inputs", observmeExampleIsQueryReadyWithDocumentedSecretInputs);
+test("environment example documents the active-agent lease without credentials", environmentExampleDocumentsActiveAgentLease);
 test("Collector example matches the documented production Grafana-stack reference", collectorExampleMatchesProductionReference);
+test(
+  "Collector examples use lease-independent cleanup expiration longer than the default lease",
+  collectorExamplesUseLeaseIndependentCleanupExpiration,
+);
 test(
   "Collector example includes high-cardinality and content drop processors",
   collectorExampleIncludesCardinalityAndContentDropProcessors,

@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import {
+  CANONICAL_ACTIVE_AGENT_TOTAL_PROMQL,
+  CANONICAL_EXPIRED_ACTIVE_AGENT_CLAIMS_PROMQL,
+} from "./support/active-agent-promql.mjs";
 
 const alertFile = "dashboards/observme-alerts.yaml";
 const metricNamePattern = /\bobservme_[a-z0-9_]+(?:_(?:bucket|sum|count))?\b/gu;
 const histogramSuffixes = ["_bucket", "_sum", "_count"];
+const canonicalActiveAgentAlertExpression = `(${CANONICAL_ACTIVE_AGENT_TOTAL_PROMQL}) > 100`;
+const canonicalExpiredActiveAgentClaimsAlertExpression = `(${CANONICAL_EXPIRED_ACTIVE_AGENT_CLAIMS_PROMQL}) > 5`;
+const rawActiveAgentSumPattern = /sum\s*\(\s*observme_active_agents(?:\s*>\s*0)?\s*\)/u;
 const forbiddenMetricLabelPattern =
   /\b(?:session_id|workflow_id|workflow_root_agent_id|agent_id|parent_agent_id|child_agent_id|agent_run_id|spawn_id|spawn_tool_call_id|trace_id|span_id|pi_workflow_id|pi_workflow_root_agent_id|pi_agent_id|pi_agent_parent_id|pi_agent_root_id|pi_agent_spawn_id)\b/u;
 const expectedAlertRules = [
@@ -72,9 +79,15 @@ const expectedAlertRules = [
   },
   {
     name: "ObservMeActiveAgentsStuckHigh",
-    expression: "sum(observme_active_agents) > 100",
+    expression: canonicalActiveAgentAlertExpression,
     severity: "deployment-dependent",
     guidance: "depends on normal fleet size; tune per deployment",
+  },
+  {
+    name: "ObservMeExpiredActiveAgentClaims",
+    expression: canonicalExpiredActiveAgentClaimsAlertExpression,
+    severity: "deployment-dependent",
+    guidance: "Deployment-tunable diagnostic",
   },
 ];
 
@@ -194,6 +207,39 @@ async function alertRulesAvoidForbiddenHighCardinalityLabels() {
   assert.doesNotMatch(text, forbiddenMetricLabelPattern, "alert rules must not group or filter by high-cardinality labels");
 }
 
+async function activeAgentAlertRequiresCanonicalLeaseQualification() {
+  const text = await readFile(alertFile, "utf8");
+  const block = alertBlocksByName(text).get("ObservMeActiveAgentsStuckHigh");
+  assert.ok(block, "ObservMeActiveAgentsStuckHigh alert rule is required");
+
+  const expression = extractFoldedScalar(block, "expr");
+  assert.equal(expression, canonicalActiveAgentAlertExpression);
+  assert.match(expression, /and on \(observme_instance_id\)/u);
+  assert.match(expression, /max by \(observme_instance_id\)/u);
+  assert.match(expression, /observme_agent_lease_expires_unixtime_seconds > time\(\)/u);
+  assert.match(expression, /observme_agent_lease_expires_unixtime_seconds <= time\(\) \+ 305/u);
+  assert.match(expression, /or vector\(0\)/u);
+  assert.doesNotMatch(expression, rawActiveAgentSumPattern);
+}
+
+async function expiredActiveAgentClaimsAlertIsTunableAndDiagnosticOnly() {
+  const text = await readFile(alertFile, "utf8");
+  const block = alertBlocksByName(text).get("ObservMeExpiredActiveAgentClaims");
+  assert.ok(block, "ObservMeExpiredActiveAgentClaims alert rule is required");
+
+  const expression = extractFoldedScalar(block, "expr");
+  assert.equal(expression, canonicalExpiredActiveAgentClaimsAlertExpression);
+  assert.match(expression, /observme_agent_lease_expires_unixtime_seconds <= time\(\)/u);
+  assert.doesNotMatch(expression, /observme_agent_lease_expires_unixtime_seconds > time\(\)/u);
+  assert.match(block, /for: 15m/u);
+  assert.match(block, /stale diagnostics and excluded from leased active totals/u);
+  assert.match(block, /Deployment-tunable diagnostic/u);
+  assert.match(block, /Export Health/u);
+  assert.match(block, /\/obs agents is local child state, not fleet truth/u);
+}
+
 test("alert rules match every documented production alert", alertRulesMatchProductionDocs);
 test("alert rule expressions only use documented ObservMe metric names", alertRulesUseOnlyDocumentedMetricNames);
 test("alert rules avoid forbidden high-cardinality metric labels", alertRulesAvoidForbiddenHighCardinalityLabels);
+test("active-agent alert requires canonical lease qualification", activeAgentAlertRequiresCanonicalLeaseQualification);
+test("expired active-agent claims alert is tunable and diagnostic only", expiredActiveAgentClaimsAlertIsTunableAndDiagnosticOnly);
