@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import { QUERY_RESULT_COUNT_MAXIMUM } from "../src/config/query-limits.ts";
 import { createOversizedGrafanaStreamResponse } from "./grafana-response-limit-helpers.mjs";
 import {
   LokiQueryClient,
@@ -140,6 +141,24 @@ test("LokiQueryClient queries logs through the Grafana Loki datasource proxy wit
   assert.equal(logs[0].timestampUnixNano, "1783422000000000000");
   assert.equal(logs[0].labels.pi_session_id, "session-1");
   assert.equal(logs[0].metadata.event_name, "llm.request.failed");
+});
+
+test("queryLoki clamps oversized runtime maxLogs before transport and result selection", async () => {
+  const config = cloneDefaultConfig();
+  config.query.maxLogs = QUERY_RESULT_COUNT_MAXIMUM + 1_000;
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  let requestUrl;
+
+  const logs = await queryLoki(config, "{service.name=\"observme-pi-extension\"}", defaultRange, {
+    fetch: async input => {
+      requestUrl = new URL(String(input));
+      return createLokiQueryResponse();
+    },
+  });
+
+  assert.equal(requestUrl.searchParams.get("limit"), String(QUERY_RESULT_COUNT_MAXIMUM));
+  assert.equal(logs.length, 3);
 });
 
 test("queryLoki reports malformed success payloads as backend schema errors without raw body content", async () => {

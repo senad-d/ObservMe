@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { applyContentCapturePolicy } from "../src/privacy/content-capture.ts";
@@ -13,6 +14,66 @@ function buildSyntheticPemBlock(label, body) {
 
 function cloneConfig(overrides = {}) {
   return mergeConfig(structuredClone(defaultObservMeConfig), overrides);
+}
+
+function runAdversarialCaptureInChild() {
+  const configModuleUrl = new URL("../src/config/defaults.ts", import.meta.url).href;
+  const captureModuleUrl = new URL("../src/privacy/content-capture.ts", import.meta.url).href;
+  const script = `
+    import { defaultObservMeConfig } from ${JSON.stringify(configModuleUrl)};
+    import { applyContentCapturePolicy } from ${JSON.stringify(captureModuleUrl)};
+
+    const rejectionCases = [
+      { name: "nested", pattern: "^(a+)+$", rawValue: "a".repeat(4096) + "! nested-sentinel" },
+      { name: "alternation", pattern: "^(?:a|aa)+$", rawValue: "a".repeat(4096) + "! alternation-sentinel" },
+      { name: "adjacent", pattern: "^a+a+$", rawValue: "a".repeat(65536) + "! adjacent-sentinel" },
+    ];
+    const rejections = [];
+    for (const rejectionCase of rejectionCases) {
+      const config = structuredClone(defaultObservMeConfig);
+      config.privacy.customRedactionPatterns = [{ name: rejectionCase.name, pattern: rejectionCase.pattern }];
+      const result = applyContentCapturePolicy({
+        captureEnabled: true,
+        value: rejectionCase.rawValue,
+        kind: "prompt",
+        config,
+      });
+      rejections.push({
+        name: rejectionCase.name,
+        mode: result.mode,
+        captured: result.captured,
+        hasValue: result.value !== undefined,
+        redactionFailures: result.redactionFailures,
+        leakedRaw:
+          result.value?.includes(rejectionCase.rawValue) === true
+          || result.errors.some(error => error.includes(rejectionCase.rawValue)),
+      });
+    }
+
+    const safeConfig = structuredClone(defaultObservMeConfig);
+    safeConfig.privacy.customRedactionPatterns = [{ name: "safe", pattern: "(?i)(?:foo|bar)+" }];
+    const safeResult = applyContentCapturePolicy({
+      captureEnabled: true,
+      value: "FOObar",
+      kind: "prompt",
+      config: safeConfig,
+    });
+    process.stdout.write(JSON.stringify({
+      rejections,
+      safe: {
+        mode: safeResult.mode,
+        captured: safeResult.captured,
+        redactionFailures: safeResult.redactionFailures,
+        redacted: /^\\[REDACTED:safe:[a-f0-9]{12}\\]$/u.test(safeResult.value ?? ""),
+      },
+    }));
+  `;
+
+  return spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+    encoding: "utf8",
+    env: { ...process.env, OBSERVME_HASH_SALT: "adversarial-capture-child-test-salt" },
+    timeout: 3_000,
+  });
 }
 
 function mergeConfig(base, overlay) {
@@ -150,6 +211,48 @@ test("content-capture policy captures truncated raw prompt, tool result, and bas
   assertUnsafeSecretIsCapturedRaw("prompt", "maxPromptChars");
   assertUnsafeSecretIsCapturedRaw("toolResult", "maxToolResultChars");
   assertUnsafeSecretIsCapturedRaw("bashOutput", "maxBashOutputChars");
+});
+
+test("content-capture policy bounds unsafe regex rejection and preserves safe quantified alternatives", () => {
+  const child = runAdversarialCaptureInChild();
+
+  assert.equal(child.error, undefined, child.error?.message);
+  assert.equal(child.signal, null);
+  assert.equal(child.status, 0, child.stderr);
+  assert.deepEqual(JSON.parse(child.stdout), {
+    rejections: [
+      {
+        name: "nested",
+        mode: "dropped",
+        captured: false,
+        hasValue: false,
+        redactionFailures: 1,
+        leakedRaw: false,
+      },
+      {
+        name: "alternation",
+        mode: "dropped",
+        captured: false,
+        hasValue: false,
+        redactionFailures: 1,
+        leakedRaw: false,
+      },
+      {
+        name: "adjacent",
+        mode: "dropped",
+        captured: false,
+        hasValue: false,
+        redactionFailures: 1,
+        leakedRaw: false,
+      },
+    ],
+    safe: {
+      mode: "redacted",
+      captured: true,
+      redactionFailures: 0,
+      redacted: true,
+    },
+  });
 });
 
 test("content-capture policy drops captured content when redaction fails", () => {

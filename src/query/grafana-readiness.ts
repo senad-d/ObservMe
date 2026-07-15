@@ -1,5 +1,10 @@
 import type { GrafanaDatasourceUidsConfig, ObservMeConfig } from "../config/schema.ts";
 import { hasUnresolvedEnvironmentPlaceholder, normalizeConfiguredGrafanaSecret } from "./grafana-transport.ts";
+import type { GrafanaUrlSecurityFailureClass } from "./grafana-url.ts";
+import {
+  classifyGrafanaUrlSecurityFailure,
+  formatGrafanaUrlSecurityFailure,
+} from "./grafana-url.ts";
 
 export type GrafanaQueryDatasourceKey = keyof GrafanaDatasourceUidsConfig;
 export type GrafanaQueryReadinessStatus = "ready" | "disabled" | "not_ready";
@@ -66,12 +71,23 @@ function validateGrafanaUrl(url: string): GrafanaQueryReadinessIssue[] {
 function validateGrafanaUrlProtocol(url: string): GrafanaQueryReadinessIssue[] {
   try {
     const parsed = new URL(url);
-    if (parsed.protocol === "http:" || parsed.protocol === "https:") return [];
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return [createInvalidGrafanaUrlIssue()];
+
+    const securityFailure = classifyGrafanaUrlSecurityFailure(parsed);
+    return securityFailure ? [createEmbeddedGrafanaCredentialsIssue(securityFailure)] : [];
   } catch (error) {
     return [createInvalidGrafanaUrlIssue(readUrlParseFailureKind(error))];
   }
+}
 
-  return [createInvalidGrafanaUrlIssue()];
+function createEmbeddedGrafanaCredentialsIssue(
+  failureClass: GrafanaUrlSecurityFailureClass,
+): GrafanaQueryReadinessIssue {
+  return createGrafanaReadinessIssue(
+    "embedded_grafana_url_credentials",
+    "query.grafana.url",
+    formatGrafanaUrlSecurityFailure(failureClass),
+  );
 }
 
 function createInvalidGrafanaUrlIssue(failureKind?: string): GrafanaQueryReadinessIssue {

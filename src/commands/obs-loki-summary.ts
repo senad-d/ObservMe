@@ -1,4 +1,6 @@
+import { normalizeQueryResultCount } from "../config/query-limits.ts";
 import type { LogResult, TimeRange } from "../query/loki.ts";
+import { normalizeObsBackendLabel } from "../safety/display-bounds.ts";
 import { LOG_ATTRIBUTES } from "../semconv/attributes.ts";
 
 export interface ObsLokiLogSummaryRow {
@@ -25,10 +27,8 @@ export interface ObsLokiTimeRangeOptions {
 }
 
 const defaultRangeHours = 1;
-const minimumMaxLogs = 1;
 const millisecondsPerHour = 60 * 60 * 1000;
 const nanosecondsPerMillisecond = 1_000_000n;
-const maximumDisplayValueLength = 96;
 const safeEventBodyPattern = /^[A-Za-z0-9_.:-]{1,96}$/u;
 const integerNanosecondsPattern = /^-?\d+$/u;
 const unknownTimestamp = "unknown-time";
@@ -51,8 +51,7 @@ export function formatObsLokiWindow(options: ObsLokiTimeRangeOptions = {}): stri
 }
 
 export function normalizeObsLokiMaxLogs(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value) || value < minimumMaxLogs) return minimumMaxLogs;
-  return Math.trunc(value);
+  return normalizeQueryResultCount(value);
 }
 
 export function toObsLokiLogSummaryRow(log: LogResult): ObsLokiLogSummaryRow {
@@ -140,10 +139,7 @@ function normalizeObsLokiLogSummaryRow(row: ObsLokiLogSummaryRow): ObsLokiLogSum
 }
 
 function normalizeDisplayValue(value: string | undefined): string | undefined {
-  const normalized = value?.replace(/\s+/gu, " ").trim();
-  if (!normalized) return undefined;
-  if (normalized.length <= maximumDisplayValueLength) return normalized;
-  return `${normalized.slice(0, maximumDisplayValueLength - 1)}…`;
+  return normalizeObsBackendLabel(value);
 }
 
 function renderObsLokiLogSummaryRow(row: ObsLokiLogSummaryRow): string {

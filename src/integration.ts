@@ -13,6 +13,7 @@ export type ObservMeIntegrationFailureReason =
   | "session_unavailable"
   | "invalid_request"
   | "spawn_already_exists"
+  | "child_agent_already_exists"
   | "wait_already_exists"
   | "join_already_exists"
   | "spawn_not_found"

@@ -126,6 +126,11 @@ export interface StartedSubagentSpawn {
   readonly attributes: AttributeMap;
 }
 
+export interface SubagentSpawnIdentity {
+  readonly spawnId: string;
+  readonly childAgentId: string;
+}
+
 export interface CompleteSubagentSpawnOptions {
   readonly childAgentId?: string;
   readonly childStatus?: AgentTerminalStatus;
@@ -237,12 +242,18 @@ export async function runSubagentWithObservability<Result>(
   }
 }
 
+export function resolveSubagentSpawnIdentity(
+  options: Pick<StartSubagentSpawnOptions, "spawnId" | "childAgentId"> = {},
+): SubagentSpawnIdentity {
+  const spawnId = options.spawnId ?? `spawn-${randomUUID()}`;
+  return { spawnId, childAgentId: options.childAgentId ?? `child-${spawnId}` };
+}
+
 export function startSubagentSpawn(
   session: SubagentTelemetrySession,
   options: StartSubagentSpawnOptions = {},
 ): StartedSubagentSpawn {
-  const spawnId = options.spawnId ?? `spawn-${randomUUID()}`;
-  const childAgentId = options.childAgentId ?? `child-${spawnId}`;
+  const { spawnId, childAgentId } = resolveSubagentSpawnIdentity(options);
   const spawnReason = normalizeSpawnReason(options.spawnReason);
   const labels = subagentSpawnMetricLabels(session, options, spawnReason);
   const parentSpan = resolveSubagentParentSpan(session);

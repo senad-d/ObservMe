@@ -1882,6 +1882,96 @@ test("duplicate session_start flushes and shuts down the previous telemetry sess
   assert.equal(sessions.filter(session => session.activeAgentLease.active).length, 0);
 });
 
+test("session replacement waits for timed-out exporter cleanup before starting new providers", async () => {
+  const pi = createFakePi();
+  const sessions = [];
+  const notifications = [];
+  let resolveShutdown;
+  const shutdownSettlement = new Promise(resolve => {
+    resolveShutdown = resolve;
+  });
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      const telemetry = createFakeTelemetry(lineage);
+      sessions.push(telemetry);
+      if (sessions.length === 1) {
+        telemetry.controller.shutdown = async timeoutMs => {
+          telemetry.controller.shutdownCalls.push(timeoutMs);
+          return {
+            operation: "shutdown",
+            completed: false,
+            timedOut: true,
+            settlement: shutdownSettlement,
+          };
+        };
+      }
+      return telemetry;
+    },
+  });
+  const ctx = {
+    cwd: "/workspace/demo",
+    ui: { notify: (message, level) => notifications.push({ message, level }) },
+  };
+
+  await pi.handlers.get("session_start")({ sessionId: "session-cleanup-first" }, ctx);
+  await pi.handlers.get("session_start")({ sessionId: "session-cleanup-blocked" }, ctx);
+
+  assert.equal(sessions.length, 1);
+  assert.deepEqual(sessions[0].controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.ok(notifications.some(notification => notification.message.includes("shutdown cleanup is still unresolved")));
+  assert.deepEqual(sessions[0].activeAgentLease.transitions, ["activate", "deactivate", "dispose"]);
+
+  resolveShutdown({ operation: "shutdown", completed: true, timedOut: false });
+  await shutdownSettlement;
+  await Promise.resolve();
+  await pi.handlers.get("session_start")({ sessionId: "session-cleanup-retry" }, ctx);
+
+  assert.equal(sessions.length, 2);
+  assert.deepEqual(sessions[1].controller.shutdownCalls, []);
+  assert.deepEqual(sessions[1].activeAgentLease.transitions, ["activate"]);
+});
+
+test("never-settling exporter cleanup keeps repeated session replacement blocked", async () => {
+  const pi = createFakePi();
+  const sessions = [];
+  const notifications = [];
+  const shutdownSettlement = new Promise(() => undefined);
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      const telemetry = createFakeTelemetry(lineage);
+      sessions.push(telemetry);
+      telemetry.controller.shutdown = async timeoutMs => {
+        telemetry.controller.shutdownCalls.push(timeoutMs);
+        return {
+          operation: "shutdown",
+          completed: false,
+          timedOut: true,
+          settlement: shutdownSettlement,
+        };
+      };
+      return telemetry;
+    },
+  });
+  const ctx = {
+    cwd: "/workspace/demo",
+    ui: { notify: message => notifications.push(message) },
+  };
+
+  await pi.handlers.get("session_start")({ sessionId: "session-never-first" }, ctx);
+  await pi.handlers.get("session_start")({ sessionId: "session-never-blocked-once" }, ctx);
+  await pi.handlers.get("session_start")({ sessionId: "session-never-blocked-twice" }, ctx);
+
+  assert.equal(sessions.length, 1);
+  assert.deepEqual(sessions[0].controller.shutdownCalls, [
+    defaultObservMeConfig.shutdown.flushTimeoutMs,
+    defaultObservMeConfig.shutdown.flushTimeoutMs,
+  ]);
+  assert.equal(notifications.filter(message => message.includes("shutdown cleanup is still unresolved")).length, 2);
+  assert.deepEqual(sessions[0].activeAgentLease.transitions, ["activate", "deactivate", "dispose"]);
+});
+
 test("final lifecycle regression keeps runtime state consistent after duplicate session_start cleanup", async t => {
   clearObsSessionRuntimeState();
   resetObsStatusRuntimeState();

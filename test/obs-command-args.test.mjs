@@ -5,6 +5,10 @@ import { handleObsBackfillCommand } from "../src/commands/obs-backfill.ts";
 import { handleObsHealthCommand } from "../src/commands/obs-health.ts";
 import { handleObsTraceCommand } from "../src/commands/obs-trace.ts";
 import {
+  OBS_COMMAND_OUTPUT_MAX_CHARS,
+  OBS_COMMAND_OUTPUT_MAX_ROWS,
+} from "../src/safety/display-bounds.ts";
+import {
   getObsRootCommandArgumentCompletions,
   getObsRootSubcommands,
   getObsRootUsage,
@@ -33,6 +37,30 @@ function createFakeCommandPi() {
   return {
     commands,
     registerCommand: (name, options) => commands.set(name, options),
+  };
+}
+
+const oversizedProviderError = new Error(
+  `${"unsafe\u001b\u0007\u0085\u2028\u2029\n".repeat(OBS_COMMAND_OUTPUT_MAX_ROWS + 10)}${"x".repeat(OBS_COMMAND_OUTPUT_MAX_CHARS)}`,
+);
+
+function throwOversizedProviderError() {
+  throw oversizedProviderError;
+}
+
+function createFailingRootDispatchOptions() {
+  return {
+    status: { getStatus: throwOversizedProviderError },
+    health: { getHealth: throwOversizedProviderError },
+    session: { getSession: throwOversizedProviderError },
+    cost: { getCost: throwOversizedProviderError },
+    trace: { getTrace: throwOversizedProviderError },
+    tools: { getTools: throwOversizedProviderError },
+    agents: { getAgents: throwOversizedProviderError },
+    backfill: { runBackfill: throwOversizedProviderError },
+    errors: { getErrors: throwOversizedProviderError },
+    logs: { getLogs: throwOversizedProviderError },
+    link: { getLink: throwOversizedProviderError },
   };
 }
 
@@ -200,6 +228,25 @@ test("root /obs registry keeps usage, completions, and dispatch aligned", async 
   assert.deepEqual(calls, subcommands);
   assert.equal(notifications.length, subcommands.length);
   assert.equal(notifications.some(notification => notification.type === "error"), false);
+});
+
+test("every root /obs subcommand applies the shared final notification policy", async () => {
+  const pi = createFakeCommandPi();
+  const notifications = [];
+
+  registerObsCommand(pi, createFailingRootDispatchOptions());
+  const command = pi.commands.get("obs");
+  for (const subcommand of getObsRootSubcommands()) {
+    await command.handler(obsRootArgsForSubcommand(subcommand), createCommandContext(notifications));
+  }
+
+  assert.equal(notifications.length, getObsRootSubcommands().length);
+  for (const notification of notifications) {
+    assert.ok(notification.message.length <= OBS_COMMAND_OUTPUT_MAX_CHARS);
+    assert.ok(notification.message.split("\n").length <= OBS_COMMAND_OUTPUT_MAX_ROWS);
+    assert.doesNotMatch(notification.message.replaceAll("\n", ""), /[\p{Cc}\p{Zl}\p{Zp}]/u);
+  }
+  assert.ok(notifications.some(notification => /… output truncated$/u.test(notification.message)));
 });
 
 test("root /obs dispatch normalizes whitespace and subcommand case", async () => {

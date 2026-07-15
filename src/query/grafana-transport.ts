@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import type { ObservMeConfig } from "../config/schema.ts";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
 import { hasUnresolvedEnvironmentPlaceholder } from "../safety/sensitive-input.ts";
+import { assertCredentialFreeGrafanaUrl } from "./grafana-url.ts";
 
 export type GrafanaFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 export type GrafanaAuthMode = "bearer" | "basic" | "none";
@@ -104,6 +105,7 @@ export class GrafanaTransportClient {
   }
 
   async fetch(input: string | URL, options: GrafanaTransportFetchOptions = {}): Promise<Response> {
+    assertCredentialFreeGrafanaUrl(input);
     return fetchGrafanaRequest(
       this.#fetcher,
       input,
@@ -127,6 +129,7 @@ export function createGrafanaTransport(
 
 export function buildGrafanaApiUrl(baseUrl: string, apiPath: string): URL {
   const url = new URL(baseUrl.trim());
+  assertCredentialFreeGrafanaUrl(url);
   const basePath = removeTrailingSlashes(url.pathname);
   const path = removeLeadingSlashes(apiPath);
   url.pathname = `${basePath}/${path}`;
@@ -374,6 +377,7 @@ export async function fetchGrafanaWithNode(
 ): Promise<Response> {
   const url = new URL(input);
   assertSupportedGrafanaUrl(url);
+  assertCredentialFreeGrafanaUrl(url);
 
   const requestOptions = createGrafanaNodeRequestOptions(config, init);
   const body = normalizeRequestBody(init?.body);

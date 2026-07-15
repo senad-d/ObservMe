@@ -3,7 +3,15 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { defaultObservMeConfig } from "./defaults.ts";
-import { resolveProjectLocalFilePath } from "./project-paths.ts";
+import {
+  isUnsafeProjectPathError,
+  readCanonicalProjectLocalFileText,
+  resolveProjectLocalFilePath,
+} from "./project-paths.ts";
+import type {
+  ProjectLocalFileOperationHooks,
+  ProjectLocalFilePathOptions,
+} from "./project-paths.ts";
 import type { ConfigLogSink, ConfigRejectionDiagnostic } from "./validate.ts";
 import {
   ensureValidObservMeConfig,
@@ -53,6 +61,11 @@ export interface LoadConfigOptions {
   logger?: ConfigLogSink;
 }
 
+export interface ProjectFileOperationHooks {
+  readonly projectConfig?: ProjectLocalFileOperationHooks;
+  readonly environmentFile?: ProjectLocalFileOperationHooks;
+}
+
 export interface LoadSessionConfigOptions extends LoadConfigOptions {
   ctx?: ProjectTrustContext;
   cwd?: string;
@@ -61,6 +74,7 @@ export interface LoadSessionConfigOptions extends LoadConfigOptions {
   envFilePath?: string;
   loadEnvFile?: boolean;
   isProjectTrusted?: boolean | (() => boolean | Promise<boolean>);
+  projectFileOperationHooks?: ProjectFileOperationHooks;
 }
 
 export type SessionConfigProjectStatus = BaseSessionConfigSourceStatus | "skipped_untrusted";
@@ -396,7 +410,13 @@ async function readProjectConfigSource(
   if (!projectTrusted) return { status: "missing" };
 
   try {
-    return await readConfigSource(resolveProjectConfigPath(options), options);
+    const pathOptions = createProjectConfigPathOptions(options);
+    const readOptions = createProjectSourceReadOptions(
+      options,
+      pathOptions,
+      options.projectFileOperationHooks?.projectConfig,
+    );
+    return await readConfigSource(resolveProjectLocalFilePath(pathOptions), readOptions);
   } catch {
     return { status: "rejected", issueCode: "config_source_rejected" };
   }
@@ -410,7 +430,13 @@ async function readTrustedProjectEnvSource(
   if (options.loadEnvFile === false) return { status: "skipped_disabled" };
 
   try {
-    return await readEnvSource(resolveProjectEnvFilePath(options), options);
+    const pathOptions = createProjectEnvFilePathOptions(options);
+    const readOptions = createProjectSourceReadOptions(
+      options,
+      pathOptions,
+      options.projectFileOperationHooks?.environmentFile,
+    );
+    return await readEnvSource(resolveProjectLocalFilePath(pathOptions), readOptions);
   } catch {
     return { status: "rejected", issueCode: "config_source_rejected" };
   }
@@ -441,7 +467,10 @@ async function readConfigSourceText(
     if (text === undefined) return { status: "missing" };
     if (text.trim() === "") return { status: "malformed", issueCode: "config_source_malformed" };
     return { status: "loaded", value: text };
-  } catch {
+  } catch (error) {
+    if (isUnsafeProjectPathError(error)) {
+      return { status: "rejected", issueCode: "config_source_rejected" };
+    }
     return { status: "unreadable", issueCode: "config_source_unreadable" };
   }
 }
@@ -463,24 +492,36 @@ function resolveGlobalConfigPath(options: LoadConfigOptions): string {
   return options.globalConfigPath ?? join(homedir(), CONFIG_DIR_NAME, "agent", observmeYamlFileName);
 }
 
-function resolveProjectConfigPath(options: LoadSessionConfigOptions): string {
-  return resolveProjectLocalFilePath({
+function createProjectSourceReadOptions(
+  options: LoadSessionConfigOptions,
+  pathOptions: ProjectLocalFilePathOptions,
+  hooks: ProjectLocalFileOperationHooks | undefined,
+): LoadConfigOptions {
+  if (options.readText !== undefined) return options;
+  return {
+    ...options,
+    readText: readCanonicalProjectLocalFileText.bind(undefined, pathOptions, hooks),
+  };
+}
+
+function createProjectConfigPathOptions(options: LoadSessionConfigOptions): ProjectLocalFilePathOptions {
+  return {
     cwd: options.cwd,
     configDirName: options.configDirName,
     defaultConfigDirName: CONFIG_DIR_NAME,
     fileName: observmeYamlFileName,
     overridePath: options.projectConfigPath,
     inputLabel: "project config path",
-  });
+  };
 }
 
-function resolveProjectEnvFilePath(options: LoadSessionConfigOptions): string {
-  return resolveProjectLocalFilePath({
+function createProjectEnvFilePathOptions(options: LoadSessionConfigOptions): ProjectLocalFilePathOptions {
+  return {
     cwd: options.cwd,
     fileName: defaultEnvFileName,
     overridePath: options.envFilePath ?? defaultEnvFileName,
     inputLabel: "project env path",
-  });
+  };
 }
 
 async function resolveProjectTrust(options: LoadSessionConfigOptions): Promise<boolean> {

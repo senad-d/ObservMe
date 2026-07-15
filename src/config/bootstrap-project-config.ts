@@ -3,11 +3,16 @@ import type {
   ExtensionContext,
   SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
 import { RESOURCE_ATTRIBUTES } from "../semconv/attributes.ts";
-import { resolveProjectLocalFilePath } from "./project-paths.ts";
+import {
+  createCanonicalProjectLocalFileExclusively,
+  resolveProjectLocalFilePath,
+} from "./project-paths.ts";
+import type {
+  ProjectLocalFileOperationHooks,
+  ProjectLocalFilePathOptions,
+} from "./project-paths.ts";
 
 export type ProjectConfigBootstrapStatus = "created" | "exists" | "skipped_untrusted";
 export type ProjectConfigNotifyLevel = "info" | "warning" | "error";
@@ -34,6 +39,7 @@ export interface EnsureProjectConfigOptions {
   readonly configDirName?: string;
   readonly cwd?: string;
   readonly isProjectTrusted?: boolean | (() => boolean | Promise<boolean>);
+  readonly projectFileOperationHooks?: ProjectLocalFileOperationHooks;
 }
 
 export type EnsureProjectConfig = (options: EnsureProjectConfigOptions) => Promise<ProjectConfigBootstrapResult>;
@@ -196,11 +202,16 @@ export function registerProjectConfigBootstrap(
 export async function ensureProjectObservMeConfig(
   options: EnsureProjectConfigOptions = {},
 ): Promise<ProjectConfigBootstrapResult> {
-  const configPath = resolveProjectObservMeConfigPath(options);
+  const pathOptions = createProjectObservMeConfigPathOptions(options);
+  const configPath = resolveProjectLocalFilePath(pathOptions);
   const projectTrusted = await resolveBootstrapProjectTrust(options.isProjectTrusted);
 
   if (!projectTrusted) return { path: configPath, status: "skipped_untrusted" };
-  return createProjectObservMeConfigFile(configPath);
+  return createProjectObservMeConfigFile(
+    configPath,
+    pathOptions,
+    options.projectFileOperationHooks,
+  );
 }
 
 function createProjectConfigBootstrapHandler(
@@ -258,30 +269,40 @@ async function notifyProjectConfigBootstrapFailed(ctx: ProjectConfigBootstrapCon
   await ctx.ui?.notify?.(`ObservMe could not create the project config file: ${formatError(error)}`, "warning");
 }
 
-async function createProjectObservMeConfigFile(configPath: string): Promise<ProjectConfigBootstrapResult> {
-  return withFileMutationQueue(configPath, createProjectObservMeConfigFileInQueue.bind(undefined, configPath));
+async function createProjectObservMeConfigFile(
+  configPath: string,
+  pathOptions: ProjectLocalFilePathOptions,
+  hooks: ProjectLocalFileOperationHooks | undefined,
+): Promise<ProjectConfigBootstrapResult> {
+  return withFileMutationQueue(
+    configPath,
+    createProjectObservMeConfigFileInQueue.bind(undefined, configPath, pathOptions, hooks),
+  );
 }
 
-async function createProjectObservMeConfigFileInQueue(configPath: string): Promise<ProjectConfigBootstrapResult> {
-  await mkdir(dirname(configPath), { recursive: true });
-
-  try {
-    await writeFile(configPath, PROJECT_OBSERVME_YAML_TEMPLATE, { encoding: "utf8", flag: "wx" });
-    return { path: configPath, status: "created" };
-  } catch (error) {
-    if (isFileAlreadyExistsError(error)) return { path: configPath, status: "exists" };
-    throw error;
-  }
+async function createProjectObservMeConfigFileInQueue(
+  configPath: string,
+  pathOptions: ProjectLocalFilePathOptions,
+  hooks: ProjectLocalFileOperationHooks | undefined,
+): Promise<ProjectConfigBootstrapResult> {
+  const status = await createCanonicalProjectLocalFileExclusively(
+    pathOptions,
+    PROJECT_OBSERVME_YAML_TEMPLATE,
+    hooks,
+  );
+  return { path: configPath, status };
 }
 
-function resolveProjectObservMeConfigPath(options: EnsureProjectConfigOptions): string {
-  return resolveProjectLocalFilePath({
+function createProjectObservMeConfigPathOptions(
+  options: EnsureProjectConfigOptions,
+): ProjectLocalFilePathOptions {
+  return {
     cwd: options.cwd,
     configDirName: options.configDirName,
     defaultConfigDirName: CONFIG_DIR_NAME,
     fileName: observmeYamlFileName,
     inputLabel: "project config path",
-  });
+  };
 }
 
 async function resolveBootstrapProjectTrust(
@@ -290,14 +311,6 @@ async function resolveBootstrapProjectTrust(
   if (typeof isProjectTrusted === "boolean") return isProjectTrusted;
   if (typeof isProjectTrusted === "function") return isProjectTrusted();
   return false;
-}
-
-function isFileAlreadyExistsError(error: unknown): boolean {
-  return isErrorWithCode(error) && error.code === "EEXIST";
-}
-
-function isErrorWithCode(error: unknown): error is NodeJS.ErrnoException {
-  return typeof error === "object" && error !== null && "code" in error;
 }
 
 function formatError(error: unknown): string {

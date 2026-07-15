@@ -1,5 +1,6 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { QUERY_RESULT_COUNT_MAXIMUM, QUERY_RESULT_COUNT_MINIMUM } from "./query-limits.ts";
 
 const observMeEnvironments = ["production", "development", "test"] as const;
 const privacyPathModes = ["hash", "basename", "full", "drop"] as const;
@@ -195,6 +196,10 @@ const environmentSchema = StringEnum(observMeEnvironments);
 const otlpProtocolSchema = Type.Literal("http/protobuf");
 const stringRecordSchema = Type.Record(Type.String(), Type.String());
 const positiveIntegerSchema = Type.Integer({ minimum: 1 });
+const queryResultCountSchema = Type.Integer({
+  minimum: QUERY_RESULT_COUNT_MINIMUM,
+  maximum: QUERY_RESULT_COUNT_MAXIMUM,
+});
 const ratioSchema = Type.Number({ minimum: 0, maximum: 1 });
 const pathModeSchema = StringEnum(privacyPathModes);
 
@@ -357,10 +362,10 @@ export const observMeConfigSchema = Type.Object(
       {
         enabled: Type.Boolean(),
         timeoutMs: positiveIntegerSchema,
-        maxLogs: positiveIntegerSchema,
-        maxTraces: positiveIntegerSchema,
-        maxMetricSeries: positiveIntegerSchema,
-        maxAgents: positiveIntegerSchema,
+        maxLogs: queryResultCountSchema,
+        maxTraces: queryResultCountSchema,
+        maxMetricSeries: queryResultCountSchema,
+        maxAgents: queryResultCountSchema,
         links: Type.Object(
           {
             traceUrlTemplate: Type.String(),

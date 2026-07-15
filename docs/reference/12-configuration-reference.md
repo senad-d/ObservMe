@@ -138,9 +138,13 @@ observme:
 
 `otlp.endpoint` and every `otlp.signalEndpoints` value must be an absolute HTTP(S) URL without userinfo, unresolved placeholders, a query, or a fragment; credentials belong in `otlp.headers`. The base endpoint may contain an intentional path, to which ObservMe appends exactly one `/v1/{signal}` suffix using URL pathname semantics. Explicit signal endpoints must already end in their matching `/v1/traces`, `/v1/metrics`, or `/v1/logs` path.
 
+`query.grafana.url` must be an absolute HTTP(S) base URL without a username or password component. Authentication belongs only in `query.grafana.token` or the complete `query.grafana.username` and `query.grafana.password` pair. Credential-bearing base URLs fail configuration validation and query/transport preflight before network I/O. Diagnostics identify the bounded `embedded_credentials` failure class without rendering the rejected URL or either credential component.
+
 `otlp.tls.enabled` is intentionally unsupported and rejected as an unknown setting: the `http://` or `https://` endpoint scheme is the single source of truth for whether TLS is used. The retained `otlp.tls.insecureSkipVerify` option is passed to every OTLP HTTP exporter as its certificate-verification behavior.
 
 `query.links.traceUrlTemplate` is shared by `/obs session`, `/obs trace`, and `/obs link`. Absolute HTTP(S) templates support `{traceId}`, `{{traceId}}` (with optional inner whitespace), `${traceId}`, and `%TRACE_ID%`; optional Tempo UID placeholders use the matching `{tempoDatasourceUid}`, `{{tempoDatasourceUid}}`, `${tempoDatasourceUid}`, and `%TEMPO_DATASOURCE_UID%` forms. An empty template or one containing `...` selects the structured Grafana Explore fallback built from `query.grafana.url` and `query.grafana.datasourceUids.tempo`. Unsupported placeholders and invalid URLs fail with a bounded diagnostic.
+
+`query.maxLogs`, `query.maxTraces`, `query.maxMetricSeries`, and `query.maxAgents` accept integers from 1 through 100. Query clients enforce the same upper bound at runtime before issuing backend requests.
 
 ## 2. Environment Variables
 
@@ -231,6 +235,17 @@ Rules:
 6. Explicit runtime options
 
 Copy `.env.example` to `.env` for project-local extension variables, or export the same `OBSERVME_*` names in the shell before starting Pi. System environment variables override `.env` values, and `.env` must never be committed. If redacted content capture is enabled, set `OBSERVME_HASH_SALT` in the shell or trusted project `.env`; missing salts make capture fail closed.
+
+### 4.1 Project-Local Path and Symlink Policy
+
+Project config, project `.env`, and starter-config creation use the same fail-closed filesystem policy:
+
+- Pi must mark the project trusted before ObservMe reads or creates a project-local file.
+- The lexical path and resolved canonical target must both remain inside one stable canonical project root.
+- Existing file or directory symlinks are supported when their targets remain inside that root. Out-of-root, dangling, or unverifiable symlinks are rejected.
+- Reads and creates use opened file handles whose file identity, root identity, and canonical containment are verified before bytes are consumed or written. Concurrent replacement of a file, ancestor, or project root therefore rejects the operation instead of following the substituted target.
+- Normal missing in-root paths remain supported. Starter creation is exclusive and idempotent, never overwrites an existing file, and removes an unverified empty target if post-open validation fails.
+- Rejected project sources use the bounded `config_source_rejected` classification. Warnings and status diagnostics do not include canonical targets, external paths, file contents, or environment values; the rejected layer is skipped and other accepted layers continue to apply.
 
 Automatic project starter file:
 
@@ -344,11 +359,13 @@ Reject config when:
 
 - `allowUnsafeCapture=false` and `redactionEnabled=false` while any content capture is true.
 - A production OTLP or Grafana endpoint uses `http://` and `privacy.allowInsecureTransport` is not true.
+- `query.grafana.url` contains an embedded username or password instead of using the dedicated token or username/password settings.
 - Production sets `otlp.tls.insecureSkipVerify=true` or `query.grafana.tls.insecureSkipVerify=true` and `privacy.allowInsecureTransport` is not true.
 - `otlp.protocol=http/protobuf` but a signal-specific exporter URL omits the required `/v1/traces`, `/v1/metrics`, or `/v1/logs` path.
 - `metrics.activeAgentLeaseDurationMillis` is fractional, non-numeric, below `10000`, above `300000`, or less than `(2 * metrics.exportIntervalMillis) + 5000`.
 - Metric labels include high-cardinality fields such as workflow IDs, session IDs, agent IDs, parent/child agent IDs, trace IDs, span IDs, entry IDs, spawn IDs, or spawn tool-call IDs. The generated `observme.instance.id` / `service.instance.id` remains a resource identity used by the Collector for the `observme_instance_id` lease join; it must not be configured as an execution-derived label.
 - Project-local config is read while `ctx.isProjectTrusted()` is false.
+- A project config, project `.env`, or starter-config path escapes the canonical project root, changes identity during I/O, or cannot be verified safely.
 - Propagated workflow or agent lineage values are malformed, too long, or contain unsafe characters.
 - Queue sizes exceed configured memory guardrails.
 

@@ -257,7 +257,7 @@ test("/obs status reports trusted project config source and Grafana query readin
   assert.match(notifications[0].message, /Grafana query readiness: ready/u);
 });
 
-test("/obs status rejects credential-bearing OTLP env URLs without rendering secret values", async t => {
+test("/obs status rejects credential-bearing endpoint URLs without rendering secret values", async t => {
   resetObsStatusRuntimeState();
   t.after(() => resetObsStatusRuntimeState());
 
@@ -272,7 +272,10 @@ test("/obs status rejects credential-bearing OTLP env URLs without rendering sec
   assert.equal(notifications.length, 1);
   assert.match(notifications[0].message, /OTLP endpoint: https:\/\/otel-collector\.example\.com:4318/u);
   assert.match(notifications[0].message, /Grafana URL: https:\/\/grafana\.example\.com\//u);
-  assert.match(notifications[0].message, /Config rejection: safe defaults applied \(1 issue\(s\): invalid_otlp_endpoint\)/u);
+  assert.match(
+    notifications[0].message,
+    /Config rejection: safe defaults applied \(2 issue\(s\): invalid_otlp_endpoint, embedded_grafana_url_credentials\)/u,
+  );
   assert.doesNotMatch(
     notifications[0].message,
     /otlp-user|otlp-password|otlp-query-secret|otlp-header-secret|grafana-user|grafana-password|grafana-query-secret|grafana-token-secret|grafana-basic-secret/u,

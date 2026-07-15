@@ -1,3 +1,4 @@
+import { normalizeQueryResultCount } from "../config/query-limits.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { GrafanaFetch, GrafanaTransportClient } from "./grafana-transport.ts";
 import { createGrafanaTransport } from "./grafana-transport.ts";
@@ -45,7 +46,6 @@ interface NormalizedTimeRange {
   readonly to: Date;
 }
 
-const minimumMaxTraces = 1;
 const maxTempoSearchAttributes = 8;
 const maxTempoSearchAttributeValueLength = 256;
 const safeTempoAttributeKeyPattern = /^[A-Za-z_][A-Za-z0-9_.-]*$/u;
@@ -326,7 +326,5 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function resolveMaxTraces(config: ObservMeConfig): number {
-  const maxTraces = config.query.maxTraces;
-  if (!Number.isFinite(maxTraces) || maxTraces < minimumMaxTraces) return minimumMaxTraces;
-  return Math.trunc(maxTraces);
+  return normalizeQueryResultCount(config.query.maxTraces);
 }

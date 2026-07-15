@@ -230,7 +230,7 @@ Example:
 
 The Collector cannot recover content dropped by an older configuration; generate new LLM events after updating the Collector and dashboards. Do not use raw chat text in Loki or Tempo query strings.
 
-## 11. Authentication
+## 11. Authentication and Credential-Free Endpoint URLs
 
 ObservMe supports OTLP headers:
 
@@ -240,7 +240,9 @@ otlp:
     Authorization: "Bearer ${OBSERVME_OTLP_TOKEN}"
 ```
 
-Secrets must be read from environment variables or secure runtime config, not hardcoded in extension source.
+Grafana base URLs must be absolute HTTP(S) URLs without embedded username or password components. Configure Grafana authentication only through `query.grafana.token` or the complete `query.grafana.username` and `query.grafana.password` pair. A credential-bearing base URL is rejected during configuration validation and query readiness, before either Grafana transport can perform network I/O. Diagnostics report only the safe `embedded_credentials` failure class and dedicated setting names; they do not render the rejected URL or credential values.
+
+Secrets must be read from environment variables or secure runtime config, not hardcoded in extension source or embedded in endpoint URLs.
 
 ## 12. TLS
 
@@ -282,6 +284,8 @@ ObservMe should emit security-relevant logs:
 Do not log secrets while reporting security failures.
 
 ## 15. Safe Config Validation
+
+Trusted project config, project `.env`, and starter-config creation share one filesystem boundary. Their lexical paths and canonical targets must remain inside the stable canonical project root. Existing symlinks are supported only when they resolve to files or directories inside that root; out-of-root, dangling, replaced, or unverifiable paths fail closed. Reads and starter writes use identity-verified file handles and recheck containment so a concurrent file, ancestor, or root change cannot substitute an external target. A rejected project source is not loaded, starter creation does not overwrite an existing file, and diagnostics expose only a bounded failure class rather than canonical or external path details.
 
 Reject config if:
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { loadSessionConfig } from "../src/config/load-config.ts";
+import { QUERY_RESULT_COUNT_MAXIMUM } from "../src/config/query-limits.ts";
 import {
   ACTIVE_AGENT_LEASE_DURATION_MILLIS_MAXIMUM,
   ACTIVE_AGENT_LEASE_DURATION_MILLIS_MINIMUM,
@@ -48,6 +49,19 @@ function assertInvalid(config, code, options) {
 
 test("validation accepts safe defaults", () => {
   assertValid(defaultObservMeConfig, { env: {} });
+});
+
+test("validation enforces explicit query result-count upper bounds", () => {
+  const queryLimitNames = ["maxLogs", "maxTraces", "maxMetricSeries", "maxAgents"];
+  const maximums = Object.fromEntries(queryLimitNames.map(name => [name, QUERY_RESULT_COUNT_MAXIMUM]));
+
+  assertValid(cloneDefault({ query: maximums }));
+  for (const name of queryLimitNames) {
+    assertInvalid(
+      cloneDefault({ query: { [name]: QUERY_RESULT_COUNT_MAXIMUM + 1 } }),
+      "invalid_config_shape",
+    );
+  }
 });
 
 test("validation enforces active-agent lease bounds and export relationship", () => {
@@ -161,6 +175,71 @@ test("validation rejects insecure production transport unless explicitly allowed
     }),
     "insecure_production_transport",
   );
+});
+
+test("validation rejects credentials embedded in Grafana URLs without exposing configuration values", () => {
+  const credentialCases = [
+    {
+      url: "https://private-url-user-value@private-url-host-value.example.test/private-url-path-value?tenant=private-url-query-value",
+      sensitiveValues: [
+        "private-url-user-value",
+        "private-url-host-value",
+        "private-url-path-value",
+        "private-url-query-value",
+      ],
+    },
+    {
+      url: "https://:private-url-password-value@private-password-host-value.example.test/private-password-path-value?tenant=private-password-query-value",
+      sensitiveValues: [
+        "private-url-password-value",
+        "private-password-host-value",
+        "private-password-path-value",
+        "private-password-query-value",
+      ],
+    },
+  ];
+  const configuredAuthValues = [
+    "private-bearer-token-value",
+    "private-basic-user-value",
+    "private-basic-password-value",
+  ];
+
+  for (const credentialCase of credentialCases) {
+    const result = validateObservMeConfig(cloneDefault({
+      query: {
+        grafana: {
+          url: credentialCase.url,
+          token: configuredAuthValues[0],
+          username: configuredAuthValues[1],
+          password: configuredAuthValues[2],
+        },
+      },
+    }));
+    const issue = result.issues.find(candidate => candidate.code === "embedded_grafana_url_credentials");
+    const diagnostic = JSON.stringify(result);
+
+    assert.equal(result.valid, false);
+    assert.deepEqual(issue, {
+      code: "embedded_grafana_url_credentials",
+      message:
+        "query.grafana.url is invalid (embedded_credentials). Configure authentication through query.grafana.token or query.grafana.username/password.",
+    });
+    for (const sensitiveValue of [...credentialCase.sensitiveValues, ...configuredAuthValues]) {
+      assert.equal(diagnostic.includes(sensitiveValue), false);
+    }
+  }
+
+  assertValid(cloneDefault({ query: { grafana: { url: "https://grafana.example.test", token: "bearer-token" } } }));
+  assertValid(cloneDefault({
+    query: {
+      grafana: {
+        url: "https://grafana.example.test",
+        token: "",
+        username: "basic-user",
+        password: "basic-password",
+      },
+    },
+  }));
 });
 
 test("validation requires production acknowledgement for every certificate-verification bypass", () => {
@@ -373,11 +452,36 @@ test("validation rejects high-cardinality metric labels", () => {
 });
 
 test("validation rejects unsafe custom redaction regex patterns", () => {
-  assertValid(cloneDefault({ privacy: { customRedactionPatterns: [{ name: "safe", pattern: "(?i)customercredential\\([a-z0-9-]+\\)" }] } }));
+  assertValid(cloneDefault({
+    privacy: {
+      customRedactionPatterns: [
+        { name: "safe", pattern: "(?i)customercredential\\([a-z0-9-]+\\)" },
+        { name: "safe-alternation", pattern: "(?:customer|tenant)label\\([a-z0-9-]+\\)" },
+        { name: "safe-quantified-alternation", pattern: "(?i)(?:foo|bar)+" },
+        { name: "safe-disjoint-repetition", pattern: "[a-z]+[0-9]+" },
+      ],
+    },
+  }));
   assertInvalid(
     cloneDefault({ privacy: { customRedactionPatterns: [{ name: "nested", pattern: "(a+)+b" }] } }),
     "custom_redaction_pattern_nested_quantifier",
   );
+  assertInvalid(
+    cloneDefault({ privacy: { customRedactionPatterns: [{ name: "wrapped-nested", pattern: "((a+))+b" }] } }),
+    "custom_redaction_pattern_nested_quantifier",
+  );
+  for (const pattern of ["^(?:a|aa)+$", "(?i)^(?:(?:aa|a)){2,}$"]) {
+    assertInvalid(
+      cloneDefault({ privacy: { customRedactionPatterns: [{ name: "ambiguous", pattern }] } }),
+      "custom_redaction_pattern_ambiguous_alternation",
+    );
+  }
+  for (const pattern of ["^a+a+$", "^(?:ab)+(?:ab)+$", "^a+b*a+$"]) {
+    assertInvalid(
+      cloneDefault({ privacy: { customRedactionPatterns: [{ name: "overlapping", pattern }] } }),
+      "custom_redaction_pattern_ambiguous_repetition",
+    );
+  }
   assertInvalid(
     cloneDefault({ privacy: { customRedactionPatterns: [{ name: "broken", pattern: "(" }] } }),
     "invalid_custom_redaction_pattern",

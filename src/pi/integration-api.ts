@@ -19,6 +19,7 @@ import {
   endAgentJoin,
   endAgentWait,
   failSubagentSpawn,
+  resolveSubagentSpawnIdentity,
   startAgentJoin,
   startAgentWait,
   startSubagentSpawn,
@@ -94,11 +95,15 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
     if (!session) return integrationFailure("session_unavailable");
     try {
       if (!isValidStartSubagentOptions(options)) return integrationFailure("invalid_request");
-      if (options.spawnId && session.spans.activeSubagentSpawns.has(options.spawnId)) {
+      const identity = resolveSubagentSpawnIdentity(options);
+      if (session.spans.activeSubagentSpawns.has(identity.spawnId)) {
         return integrationFailure("spawn_already_exists");
       }
+      if (isChildAgentIdentifierRetained(session, identity.childAgentId)) {
+        return integrationFailure("child_agent_already_exists");
+      }
 
-      const started = startSubagentSpawn(session, options);
+      const started = startSubagentSpawn(session, { ...options, ...identity });
       return {
         ok: true,
         spawnId: started.spawnId,
@@ -209,6 +214,14 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
       return integrationFailure("operation_failed");
     }
   }
+}
+
+function isChildAgentIdentifierRetained(session: ObservMeTelemetrySession, childAgentId: string): boolean {
+  if (session.agentTree.getAgent(childAgentId)) return true;
+  for (const activeSpawn of session.spans.activeSubagentSpawns.values()) {
+    if (activeSpawn.childAgentId === childAgentId) return true;
+  }
+  return false;
 }
 
 function resolveIntegrationEventBus(pi: unknown): IntegrationEventBus | undefined {

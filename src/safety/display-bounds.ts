@@ -1,5 +1,6 @@
 export const OBS_BACKEND_LABEL_MAX_CHARS = 96;
 export const OBS_COMMAND_OUTPUT_MAX_CHARS = 8192;
+export const OBS_COMMAND_OUTPUT_MAX_ROWS = 64;
 export const OBS_COMMAND_RENDER_ROW_LIMIT = 20;
 
 const truncationMarker = "…";
@@ -40,10 +41,33 @@ export function selectObsCommandRows<T>(rows: readonly T[]): BoundedObsCommandRo
 }
 
 export function boundObsCommandOutput(output: string): string {
-  if (output.length <= OBS_COMMAND_OUTPUT_MAX_CHARS) return output;
+  const normalized = normalizeObsCommandOutput(output);
+  const rows = normalized.split("\n");
+  const rowsTruncated = rows.length > OBS_COMMAND_OUTPUT_MAX_ROWS;
+  const content = rowsTruncated ? rows.slice(0, OBS_COMMAND_OUTPUT_MAX_ROWS - 1).join("\n") : normalized;
+
+  if (!rowsTruncated && content.length <= OBS_COMMAND_OUTPUT_MAX_CHARS) return content;
 
   const prefixLimit = OBS_COMMAND_OUTPUT_MAX_CHARS - outputTruncationSuffix.length;
-  return `${truncateUnicodeText(output, prefixLimit, "")}${outputTruncationSuffix}`;
+  const characterBounded = truncateUnicodeText(content, prefixLimit, "");
+  const rowBounded = selectOutputRows(characterBounded, OBS_COMMAND_OUTPUT_MAX_ROWS - 1);
+  return `${rowBounded}${outputTruncationSuffix}`;
+}
+
+function normalizeObsCommandOutput(output: string): string {
+  return output.replace(unsafeDisplayControlPattern, normalizeObsCommandControlSequence);
+}
+
+function normalizeObsCommandControlSequence(sequence: string): string {
+  let normalized = "";
+  for (const character of sequence) normalized += character === "\n" ? "\n" : " ";
+  return normalized;
+}
+
+function selectOutputRows(output: string, maximumRows: number): string {
+  const rows = output.split("\n");
+  if (rows.length <= maximumRows) return output;
+  return rows.slice(0, maximumRows).join("\n");
 }
 
 function truncateUnicodeText(value: string, maximumChars: number, suffix: string): string {

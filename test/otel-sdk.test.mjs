@@ -160,15 +160,16 @@ test("controller sanitizes startup failures, cleans generic SDKs, and rejects re
   assert.equal(shutdownCalls, 1);
 });
 
-test("bounded flush and shutdown complete within the configured timeout for unresponsive SDKs", async () => {
+test("bounded flush and shutdown retain ownership after unresponsive SDK timeouts", async () => {
   const warnings = [];
+  const sdk = {
+    forceFlush: () => new Promise(() => {}),
+    shutdown: () => new Promise(() => {}),
+  };
   const controller = await startOtelSdk({
     config: defaultObservMeConfig,
     logger: { warn: message => warnings.push(message) },
-    sdkFactory: () => ({
-      forceFlush: () => new Promise(() => {}),
-      shutdown: () => new Promise(() => {}),
-    }),
+    sdkFactory: () => sdk,
   });
 
   const flush = await measure(() => controller.flush(25));
@@ -180,9 +181,68 @@ test("bounded flush and shutdown complete within the configured timeout for unre
   assert.equal(shutdown.result.operation, "shutdown");
   assert.equal(shutdown.result.timedOut, true);
   assert.equal(shutdown.elapsedMs < 250, true);
-  assert.equal(controller.state, "shutdown");
+  assert.ok(shutdown.result.settlement);
+  assert.equal(controller.state, "shutdown_pending");
+  assert.equal(controller.sdk, sdk);
+  assert.deepEqual(controller.snapshot(), { state: "shutdown_pending", started: false, shutdown: false });
   assert.ok(warnings.some(message => message.includes("flush exceeded timeout")));
   assert.ok(warnings.some(message => message.includes("shutdown exceeded timeout")));
+});
+
+test("late shutdown settlement releases retained SDK ownership", async () => {
+  let resolveShutdown;
+  const shutdownPending = new Promise(resolve => {
+    resolveShutdown = resolve;
+  });
+  const sdk = { shutdown: () => shutdownPending };
+  const controller = await startOtelSdk({
+    config: defaultObservMeConfig,
+    sdkFactory: () => sdk,
+  });
+
+  const result = await controller.shutdown(5);
+
+  assert.equal(result.timedOut, true);
+  assert.ok(result.settlement);
+  assert.equal(controller.state, "shutdown_pending");
+  assert.equal(controller.sdk, sdk);
+
+  resolveShutdown();
+  const settlement = await result.settlement;
+  await Promise.resolve();
+
+  assert.deepEqual(settlement, { operation: "shutdown", completed: true, timedOut: false });
+  assert.equal(controller.state, "shutdown");
+  assert.equal(controller.sdk, undefined);
+});
+
+test("late shutdown rejection is observed and leaves cleanup retryable", async () => {
+  let rejectShutdown;
+  const shutdownPending = new Promise((_resolve, reject) => {
+    rejectShutdown = reject;
+  });
+  const sdk = { shutdown: () => shutdownPending };
+  const controller = await startOtelSdk({
+    config: defaultObservMeConfig,
+    sdkFactory: () => sdk,
+  });
+
+  const result = await controller.shutdown(5);
+  assert.ok(result.settlement);
+  rejectShutdown(new Error("late exporter failure"));
+  const settlement = await result.settlement;
+  await Promise.resolve();
+
+  assert.match(settlement.error.message, /late exporter failure/u);
+  assert.equal(controller.state, "shutdown_failed");
+  assert.equal(controller.sdk, sdk);
+
+  sdk.shutdown = async () => undefined;
+  const retry = await controller.shutdown(100);
+
+  assert.deepEqual(retry, { operation: "shutdown", completed: true, timedOut: false });
+  assert.equal(controller.state, "shutdown");
+  assert.equal(controller.sdk, undefined);
 });
 
 test("bounded OTEL operations report failures without throwing into Pi lifecycle handlers", async () => {

@@ -1,11 +1,24 @@
 import type { ObservMeConfig } from "../config/schema.ts";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
 import type { AgentLineageContext } from "../pi/agent-lineage.ts";
-import type { BoundedOtelOperationResult, OtelShutdownLogSink, ShutdownableOtelSdk } from "./shutdown.ts";
+import type {
+  BoundedOtelOperationResult,
+  OtelOperationSettlement,
+  OtelShutdownLogSink,
+  ShutdownableOtelSdk,
+} from "./shutdown.ts";
 import { flushOtelSdk, shutdownOtelSdk } from "./shutdown.ts";
 
-// `failed` is terminal: startup cleanup clears the SDK reference and the controller cannot be retried.
-export type OtelSdkLifecycleState = "idle" | "starting" | "started" | "failed" | "shutting_down" | "shutdown";
+// `failed` is terminal for startup; shutdown cleanup can remain owned for observation or retry.
+export type OtelSdkLifecycleState =
+  | "idle"
+  | "starting"
+  | "started"
+  | "failed"
+  | "shutting_down"
+  | "shutdown_pending"
+  | "shutdown_failed"
+  | "shutdown";
 
 export interface StartOtelSdkFactoryOptions {
   readonly config: ObservMeConfig;
@@ -38,6 +51,8 @@ export class ObservMeOtelSdkController {
   readonly #logger?: OtelShutdownLogSink;
   #sdk?: SessionScopedOtelSdk;
   #startPromise?: Promise<SessionScopedOtelSdk>;
+  #shutdownPromise?: Promise<BoundedOtelOperationResult>;
+  #pendingShutdown?: Promise<OtelOperationSettlement>;
   #startupCleanupResult?: BoundedOtelOperationResult;
   #state: OtelSdkLifecycleState = "idle";
 
@@ -69,6 +84,9 @@ export class ObservMeOtelSdkController {
     if (this.#state === "starting" && this.#startPromise) return this.#startPromise;
     if (this.#state === "failed") throw new Error("ObservMe OTEL SDK controller cannot be restarted after failed startup.");
     if (this.#state === "shutdown") throw new Error("ObservMe OTEL SDK controller cannot be restarted after shutdown.");
+    if (this.#state !== "idle") {
+      throw new Error(`ObservMe OTEL SDK controller cannot start while cleanup state is ${this.#state}.`);
+    }
 
     this.#state = "starting";
     this.#startPromise = this.startOnce();
@@ -108,12 +126,60 @@ export class ObservMeOtelSdkController {
   async shutdown(timeoutMs: number = this.#config.shutdown.flushTimeoutMs): Promise<BoundedOtelOperationResult> {
     if (this.#state === "shutdown") return completedShutdown();
     if (this.#state === "failed") return this.#startupCleanupResult ?? completedShutdown();
+    if (this.#state === "shutting_down" && this.#shutdownPromise) return this.#shutdownPromise;
+    if (this.#state === "shutdown_pending" && this.#pendingShutdown) {
+      return pendingShutdown(this.#pendingShutdown);
+    }
 
     this.#state = "shutting_down";
-    const result = await shutdownOtelSdk(this.#sdk, timeoutMs, this.#logger);
+    this.#shutdownPromise = this.shutdownOnce(timeoutMs);
+    return this.#shutdownPromise;
+  }
+
+  private async shutdownOnce(timeoutMs: number): Promise<BoundedOtelOperationResult> {
+    try {
+      const result = await shutdownOtelSdk(this.#sdk, timeoutMs, this.#logger);
+      this.applyShutdownResult(result);
+      return result;
+    } finally {
+      this.#shutdownPromise = undefined;
+    }
+  }
+
+  private applyShutdownResult(result: BoundedOtelOperationResult): void {
+    if (result.timedOut && result.settlement) {
+      this.#pendingShutdown = result.settlement;
+      this.#state = "shutdown_pending";
+      void result.settlement.then(this.observePendingShutdown.bind(this, result.settlement));
+      return;
+    }
+
+    if (result.error || !result.completed) {
+      this.#state = "shutdown_failed";
+      return;
+    }
+
+    this.releaseShutdownOwnership();
+  }
+
+  private observePendingShutdown(
+    pending: Promise<OtelOperationSettlement>,
+    settlement: OtelOperationSettlement,
+  ): void {
+    if (this.#pendingShutdown !== pending) return;
+
+    this.#pendingShutdown = undefined;
+    if (settlement.error || !settlement.completed) {
+      this.#state = "shutdown_failed";
+      return;
+    }
+
+    this.releaseShutdownOwnership();
+  }
+
+  private releaseShutdownOwnership(): void {
     this.#sdk = undefined;
     this.#state = "shutdown";
-    return result;
   }
 }
 
@@ -164,6 +230,10 @@ function startupCleanupGuidance(cleanup: BoundedOtelOperationResult | undefined)
 
 function completedShutdown(): BoundedOtelOperationResult {
   return { operation: "shutdown", completed: true, timedOut: false };
+}
+
+function pendingShutdown(settlement: Promise<OtelOperationSettlement>): BoundedOtelOperationResult {
+  return { operation: "shutdown", completed: false, timedOut: true, settlement };
 }
 
 function sanitizeStartupCleanupResult(result: BoundedOtelOperationResult): BoundedOtelOperationResult {

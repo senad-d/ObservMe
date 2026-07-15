@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import { QUERY_RESULT_COUNT_MAXIMUM } from "../src/config/query-limits.ts";
 import { createOversizedGrafanaStreamResponse } from "./grafana-response-limit-helpers.mjs";
 import {
   FORBIDDEN_HIGH_CARDINALITY_PROMETHEUS_LABELS,
@@ -352,6 +353,31 @@ test("queryPrometheus rejects missing Prometheus datasource UID before fetching"
     /query\.grafana\.datasourceUids\.prometheus is not configured/u,
   );
   assert.equal(fetchCalls, 0);
+});
+
+test("queryPrometheus clamps every oversized runtime result limit before transport", async () => {
+  const config = cloneDefaultConfig();
+  config.query.maxMetricSeries = QUERY_RESULT_COUNT_MAXIMUM + 1_000;
+  config.query.maxAgents = QUERY_RESULT_COUNT_MAXIMUM + 1_000;
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const calls = [];
+  const fetcher = async input => {
+    calls.push(String(input));
+    return createPrometheusVectorResponse();
+  };
+
+  for (const resultLimit of ["metricSeries", "agents", QUERY_RESULT_COUNT_MAXIMUM + 1_000]) {
+    await queryPrometheus(config, "sum(observme_sessions_started_total)", undefined, {
+      fetch: fetcher,
+      resultLimit,
+    });
+  }
+
+  assert.equal(calls.length, 3);
+  for (const call of calls) {
+    assert.equal(new URL(call).searchParams.get("limit"), String(QUERY_RESULT_COUNT_MAXIMUM));
+  }
 });
 
 test("queryPrometheus caps agent summaries by query.maxAgents when requested", async () => {

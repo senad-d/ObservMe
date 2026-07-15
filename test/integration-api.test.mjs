@@ -17,18 +17,30 @@ const validSpanContext = {
 };
 
 function createFakeMeter() {
+  const records = [];
   return {
-    createCounter: () => ({ add() {} }),
-    createUpDownCounter: () => ({ add() {} }),
-    createHistogram: () => ({ record() {} }),
+    records,
+    createCounter: name => ({
+      add: (value, attributes = {}) => records.push({ type: "counter", name, value, attributes }),
+    }),
+    createUpDownCounter: name => ({
+      add: (value, attributes = {}) => records.push({ type: "upDownCounter", name, value, attributes }),
+    }),
+    createHistogram: name => ({
+      record: (value, attributes = {}) => records.push({ type: "histogram", name, value, attributes }),
+    }),
     createObservableGauge: () => ({ addCallback() {}, removeCallback() {} }),
   };
 }
 
 function createFakeTracer() {
+  const spans = [];
   return {
+    spans,
     startSpan(name, options = {}, parentContext) {
-      return createFakeSpan(name, options.attributes ?? {}, parentContext ? trace.getSpan(parentContext) : undefined);
+      const span = createFakeSpan(name, options.attributes ?? {}, parentContext ? trace.getSpan(parentContext) : undefined);
+      spans.push(span);
+      return span;
     },
   };
 }
@@ -216,6 +228,61 @@ test("integration API rejects unsafe requests and duplicate active lifecycle ide
   assert.equal(session.spans.activeAgentJoins.size, 1);
   assert.equal(session.spans.activeAgentJoins.get(join.id), activeJoin);
   assert.deepEqual(api.endJoin(join.id, { joinStatus: "completed" }), { ok: true });
+});
+
+test("integration API rejects active and retained child placeholder collisions before mutation", () => {
+  const events = createEventBus();
+  const session = createFakeTelemetry();
+  registerObservMeIntegration({ events }, { session });
+  const api = requestObservMeIntegration({ events });
+
+  assert.ok(api);
+  const started = api.startSubagent({
+    spawnId: "spawn-collision-source",
+    childAgentId: "child-spawn-generated-collision",
+    env: {},
+  });
+  assert.equal(started.ok, true);
+
+  const activeSpawn = session.spans.activeSubagentSpawns.get(started.spawnId);
+  const activeChild = session.agentTree.getAgent(started.childAgentId);
+  const activeSpanCount = session.tracer.spans.length;
+  const activeMetricCount = session.meter.records.length;
+  assert.deepEqual(api.startSubagent({ spawnId: "spawn-generated-collision", env: {} }), {
+    ok: false,
+    reason: "child_agent_already_exists",
+  });
+  assert.equal(session.spans.activeSubagentSpawns.size, 1);
+  assert.equal(session.spans.activeSubagentSpawns.get(started.spawnId), activeSpawn);
+  assert.deepEqual(session.agentTree.getAgent(started.childAgentId), activeChild);
+  assert.equal(session.tracer.spans.length, activeSpanCount);
+  assert.equal(session.meter.records.length, activeMetricCount);
+
+  assert.deepEqual(api.completeSubagent(started.spawnId, { childAgentId: started.childAgentId }), { ok: true });
+  const terminalChild = session.agentTree.getAgent(started.childAgentId);
+  const terminalSpanCount = session.tracer.spans.length;
+  const terminalMetricCount = session.meter.records.length;
+  assert.equal(terminalChild.status, "completed");
+  assert.deepEqual(
+    api.startSubagent({
+      spawnId: "spawn-terminal-reuse",
+      childAgentId: started.childAgentId,
+      env: {},
+    }),
+    { ok: false, reason: "child_agent_already_exists" },
+  );
+  assert.equal(session.spans.activeSubagentSpawns.size, 0);
+  assert.deepEqual(session.agentTree.getAgent(started.childAgentId), terminalChild);
+  assert.equal(session.tracer.spans.length, terminalSpanCount);
+  assert.equal(session.meter.records.length, terminalMetricCount);
+
+  const unique = api.startSubagent({
+    spawnId: "spawn-unique-child",
+    childAgentId: "child-unique",
+    env: {},
+  });
+  assert.equal(unique.ok, true);
+  assert.deepEqual(api.completeSubagent(unique.spawnId, { childAgentId: unique.childAgentId }), { ok: true });
 });
 
 test("integration API propagates child context and records spawn, wait, and join lifecycle", () => {

@@ -22,6 +22,7 @@ import { handleObsToolsCommand } from "./obs-tools.ts";
 import type { ObsTraceCommandContext, RegisterObsTraceCommandOptions } from "./obs-trace.ts";
 import { handleObsTraceCommand } from "./obs-trace.ts";
 import { completeObsSubcommands, firstObsCommandToken, obsUsageWithError } from "./obs-args.ts";
+import { notifyObsCommand } from "./obs-command-support.ts";
 
 export interface ObsCommandContext
   extends ObsStatusCommandContext,
@@ -153,7 +154,11 @@ export async function handleObsCommand(
     return;
   }
 
-  await ctx.ui?.notify?.(obsUsageWithError(OBS_ROOT_USAGE, subcommand ? `Unknown subcommand: ${subcommand}.` : undefined), "warning");
+  await notifyObsCommand(
+    ctx,
+    obsUsageWithError(OBS_ROOT_USAGE, subcommand ? `Unknown subcommand: ${subcommand}.` : undefined),
+    "warning",
+  );
 }
 
 export function getObsRootCommandArgumentCompletions(prefix: string): Array<{ value: string; label: string }> | null {

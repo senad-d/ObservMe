@@ -21,7 +21,10 @@
 
 ### Changed
 
+- Made the 0.1.5 hardening patch self-contained with explicit review units, all imported production modules included, and unrelated specification history preserved.
 - Established a typed Pi event registration contract, removed non-event legacy registrations, pinned the release-resolved Pi API, and added minimum/release compatibility validation with pre-registration diagnostics.
+- Centralized embedded-credential Grafana URL diagnostics so configuration validation, readiness checks, URL construction, and transports share one safe failure class and operator guidance.
+- Documented credential-free Grafana base URLs and the fail-closed canonical project-file boundary across configuration, security, query, and troubleshooting guidance.
 - Completed production active-agent lease documentation, raw-query migration guidance, GitHub Actions/self-hosted clock and cleanup runbooks, missing/expired-lease troubleshooting, Collector restart semantics, and sanitized release-validation evidence.
 - Reframed the Collector's five-minute Prometheus `metric_expiration` as exporter-wide stale-series/cardinality cleanup, longer than the default active-agent lease and independent of leased liveness.
 - Migrated active-agent dashboard totals, bounded breakdowns, aggregate topology inputs, and stuck-high alerts to leased activity, with raw/expired-claim diagnostics and a deployment-tunable stale-claim alert.
@@ -39,6 +42,14 @@
 
 ### Fixed
 
+- Accepted supported stable Pi versions with SemVer build metadata while preserving bounded diagnostics and prerelease rejection.
+- Rejected prerelease Pi builds excluded by the declared stable compatibility range before extension registration.
+- Applied one control-safe 64-row/8,192-character policy to every `/obs` notification and capped query result counts at configuration and runtime boundaries.
+- Coupled canonical project config, `.env`, and starter-config I/O to identity-verified file handles so concurrent symlink and ancestor swaps fail closed without exposing external paths.
+- Rejected credentials embedded in Grafana base URLs during config validation, query readiness, and transport preflight without exposing their values.
+- Rejected active and retained child-agent identifier collisions before creating integration spans, tree state, metrics, or propagation envelopes.
+- Retained ownership of timed-out OpenTelemetry shutdowns, observed late settlement safely, and deferred session replacement until prior exporter cleanup completes.
+- Replaced custom-redaction regex heuristics with bounded structural validation that rejects nested, ambiguous-alternative, and overlapping sequential repetition while preserving safe disjoint quantified alternatives.
 - Used concise word-character syntax for single-brace unresolved trace-link placeholders.
 - Used concise word-character syntax for dollar-brace unresolved trace-link placeholders.
 - Used concise word-character syntax for double-brace unresolved trace-link placeholders.

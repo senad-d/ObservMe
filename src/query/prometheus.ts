@@ -1,3 +1,4 @@
+import { normalizeQueryResultCount } from "../config/query-limits.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import { LOG_ATTRIBUTES } from "../semconv/attributes.ts";
 import type { GrafanaFetch, GrafanaTransportClient } from "./grafana-transport.ts";
@@ -78,7 +79,6 @@ const allForbiddenHighCardinalityPrometheusLabels = [
   ...forbiddenHighCardinalityPrometheusLabelAliases,
 ] as const;
 const minimumMaxMetricSeries = 1;
-const minimumMaxAgents = 1;
 const maxPromQlQueryLength = 4096;
 
 export class PrometheusQueryClient {
@@ -356,19 +356,15 @@ function normalizeExplicitResultLimit(limit: number): number {
     throw new Error("Prometheus result limit must be a positive finite number.");
   }
 
-  return Math.trunc(limit);
+  return normalizeQueryResultCount(limit);
 }
 
 function resolveMaxMetricSeries(config: ObservMeConfig): number {
-  const maxMetricSeries = config.query.maxMetricSeries;
-  if (!Number.isFinite(maxMetricSeries) || maxMetricSeries < minimumMaxMetricSeries) return minimumMaxMetricSeries;
-  return Math.trunc(maxMetricSeries);
+  return normalizeQueryResultCount(config.query.maxMetricSeries);
 }
 
 function resolveMaxAgents(config: ObservMeConfig): number {
-  const maxAgents = config.query.maxAgents;
-  if (!Number.isFinite(maxAgents) || maxAgents < minimumMaxAgents) return minimumMaxAgents;
-  return Math.trunc(maxAgents);
+  return normalizeQueryResultCount(config.query.maxAgents);
 }
 
 function formatPrometheusTimestamp(date: Date): string {

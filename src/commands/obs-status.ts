@@ -15,6 +15,7 @@ import {
 } from "../config/transport-security.ts";
 import { getGrafanaQueryReadiness } from "../query/grafana-readiness.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
+import { notifyObsCommand } from "./obs-command-support.ts";
 import { sanitizeObsDiagnosticText } from "./obs-diagnostics.ts";
 
 export interface ObsStatusCommandContext {
@@ -104,15 +105,15 @@ export async function handleObsStatusCommand(
   options: RegisterObsStatusCommandOptions = {},
 ): Promise<void> {
   if (!isObsStatusRequest(args)) {
-    await notifyStatus(ctx, "Usage: /obs status", "warning");
+    await notifyObsCommand(ctx, "Usage: /obs status", "warning");
     return;
   }
 
   try {
     const snapshot = await resolveObsStatusSnapshot(ctx, options);
-    await notifyStatus(ctx, renderObsStatus(snapshot), "info");
+    await notifyObsCommand(ctx, renderObsStatus(snapshot), "info");
   } catch (error) {
-    await notifyStatus(ctx, `ObservMe status unavailable: ${sanitizeObsDiagnosticText(formatError(error))}`, "error");
+    await notifyObsCommand(ctx, `ObservMe status unavailable: ${sanitizeObsDiagnosticText(formatError(error))}`, "error");
   }
 }
 
@@ -248,10 +249,6 @@ function createObsStatusLoadOptions(
 
 function isObsStatusRequest(args: string): boolean {
   return isExactObsSubcommandRequest(args, OBS_STATUS_SUBCOMMAND, { allowEmpty: true });
-}
-
-async function notifyStatus(ctx: ObsStatusCommandContext, message: string, type: "info" | "warning" | "error"): Promise<void> {
-  await ctx.ui?.notify?.(message, type);
 }
 
 function formatCaptureLines(capture: CaptureConfig): string[] {

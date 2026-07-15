@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import { QUERY_RESULT_COUNT_MAXIMUM } from "../src/config/query-limits.ts";
 import { MAX_GRAFANA_RESPONSE_BODY_BYTES } from "../src/query/grafana-transport.ts";
 import { TempoQueryClient, searchTempo } from "../src/query/tempo.ts";
 import { createOversizedGrafanaStreamResponse } from "./grafana-response-limit-helpers.mjs";
@@ -102,6 +103,24 @@ test("TempoQueryClient searches traces through the Grafana Tempo datasource prox
   );
   assert.equal(traces[0].rootServiceName, "observme-pi-extension");
   assert.equal(traces[0].durationMs, 125);
+});
+
+test("searchTempo clamps oversized runtime maxTraces before transport and result selection", async () => {
+  const config = cloneDefaultConfig();
+  config.query.maxTraces = QUERY_RESULT_COUNT_MAXIMUM + 1_000;
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  let requestUrl;
+
+  const traces = await searchTempo(config, { "pi.session.id": "session-1" }, defaultRange, {
+    fetch: async input => {
+      requestUrl = new URL(String(input));
+      return createTempoSearchResponse();
+    },
+  });
+
+  assert.equal(requestUrl.searchParams.get("limit"), String(QUERY_RESULT_COUNT_MAXIMUM));
+  assert.equal(traces.length, 3);
 });
 
 test("searchTempo cancels injected responses whose declared Content-Length exceeds the limit", async () => {

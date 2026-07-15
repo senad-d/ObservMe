@@ -115,14 +115,14 @@ Do not put raw tasks, prompts, command lines, environment values, child output, 
 | Option | Values and meaning |
 | --- | --- |
 | `spawnId` | Optional caller-generated safe ID; omit to let ObservMe generate it. |
-| `childAgentId` | Optional bounded parent-side placeholder; this is not propagated as the child's real agent ID. |
+| `childAgentId` | Optional bounded parent-side placeholder; this is not propagated as the child's real agent ID and must remain unique while its active or terminal node is retained. |
 | `command` / `args` | Used only to create a salted command fingerprint when configured; raw values are not exported. Omit them if the launcher cannot safely provide them. |
 | `spawnType` | `command`, `tool`, `extension`, or `unknown`. |
 | `spawnReason` | `delegated_task`, `parallel_search`, `review`, `tool_wrapper`, or `unknown`. |
 | `toolCallId` | Optional high-cardinality trace/log correlation when a tool initiated the spawn. |
 | `env` | Base child environment. ObservMe removes stale lineage/W3C keys and returns the replacement environment. |
 
-Runtime callers are validated even when JavaScript bypasses the TypeScript types. Caller-provided lifecycle identifiers must match `[A-Za-z0-9._:-]{1,128}`. Commands and individual arguments are capped at 4096 characters, argument lists at 256 items, and environment objects at 4096 entries. Durations must be finite, non-negative milliseconds. Invalid or duplicate active operations return a failure without replacing an existing span.
+Runtime callers are validated even when JavaScript bypasses the TypeScript types. Caller-provided lifecycle identifiers must match `[A-Za-z0-9._:-]{1,128}`. Commands and individual arguments are capped at 4096 characters, argument lists at 256 items, and environment objects at 4096 entries. Durations must be finite, non-negative milliseconds. Invalid or duplicate active operations return a failure without replacing an existing span. Child placeholders, including generated placeholders, are collision-checked before span, tree, metric, or propagation state is created; do not reuse a terminal placeholder while its bounded tree node remains retained.
 
 Completion accepts only terminal child states (`completed`, `failed`, `cancelled`), and any supplied outcome must match. Wait/join methods use bounded child states (`starting`, `active`, `completed`, `failed`, `cancelled`, `orphaned`), join states (`waiting`, `completed`, `failed`, `cancelled`, `timeout`, `unknown`), and wait reasons (`dependency`, `rate_limit`, `child_running`, `unknown`). `failurePropagated=false` on a completed join confirms that the parent recovered from a failed child.
 
@@ -133,6 +133,7 @@ All mutation methods return a discriminated result. Handle these reasons without
 | `session_unavailable` | ObservMe is loaded but no telemetry session is active. |
 | `invalid_request` | An identifier, enum, duration, command/argument field, or environment shape is invalid or oversized. |
 | `spawn_already_exists` / `wait_already_exists` / `join_already_exists` | The requested lifecycle identifier is already active. Generate a unique identifier or finish the active operation; do not overwrite it. |
+| `child_agent_already_exists` | The requested or generated child placeholder belongs to an active spawn or retained tree node. Generate a unique child identifier; do not reuse terminal placeholders. |
 | `spawn_not_found` / `wait_not_found` / `join_not_found` | The lifecycle handle is absent or has already ended. |
 | `child_agent_mismatch` | The supplied child ID does not match the child stored for the active spawn. |
 | `invalid_terminal_transition` | Terminal status/outcome fields contradict each other or would rewrite an existing terminal tree state. |

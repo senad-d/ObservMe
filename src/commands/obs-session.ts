@@ -3,6 +3,7 @@ import type { ObservMeConfig } from "../config/schema.ts";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
 import { buildGrafanaTraceLink } from "../query/trace-link.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
+import { notifyObsCommand } from "./obs-command-support.ts";
 
 export interface ObsSessionCommandContext {
   readonly ui: {
@@ -82,15 +83,15 @@ export async function handleObsSessionCommand(
   options: RegisterObsSessionCommandOptions = {},
 ): Promise<void> {
   if (!isObsSessionRequest(args)) {
-    await notifySession(ctx, "Usage: /obs session", "warning");
+    await notifyObsCommand(ctx, "Usage: /obs session", "warning");
     return;
   }
 
   try {
     const snapshot = await resolveObsSessionSnapshot(ctx, options);
-    await notifySession(ctx, renderObsSession(snapshot), snapshot.traceLinkError ? "warning" : "info");
+    await notifyObsCommand(ctx, renderObsSession(snapshot), snapshot.traceLinkError ? "warning" : "info");
   } catch (error) {
-    await notifySession(ctx, `ObservMe session unavailable: ${formatError(error)}`, "error");
+    await notifyObsCommand(ctx, `ObservMe session unavailable: ${formatError(error)}`, "error");
   }
 }
 
@@ -258,14 +259,6 @@ function formatUsd(value: number): string {
 
 function isObsSessionRequest(args: string): boolean {
   return isExactObsSubcommandRequest(args, OBS_SESSION_SUBCOMMAND);
-}
-
-async function notifySession(
-  ctx: ObsSessionCommandContext,
-  message: string,
-  type: "info" | "warning" | "error",
-): Promise<void> {
-  await ctx.ui?.notify?.(message, type);
 }
 
 function formatError(error: unknown): string {

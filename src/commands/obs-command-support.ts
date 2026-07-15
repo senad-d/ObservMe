@@ -1,6 +1,7 @@
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
 import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
+import { boundObsCommandOutput } from "../safety/display-bounds.ts";
 
 export type ObsCommandNotificationType = "info" | "warning" | "error";
 
@@ -33,7 +34,7 @@ export async function notifyObsCommand(
   message: string,
   type: ObsCommandNotificationType,
 ): Promise<void> {
-  await ctx.ui?.notify?.(message, type);
+  await ctx.ui?.notify?.(boundObsCommandOutput(message), type);
 }
 
 export function normalizeObsCommandTimeoutMs(value: number | undefined, fallback: number, invalidFallback = fallback): number {

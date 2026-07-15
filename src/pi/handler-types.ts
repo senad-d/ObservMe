@@ -270,6 +270,7 @@ export interface CompositeOtelSignalSdk {
 
 export interface HandlerSessionState {
   session?: ObservMeTelemetrySession;
+  pendingCleanup?: ObservMeTelemetrySession;
 }
 
 export interface HandlerRegistration {

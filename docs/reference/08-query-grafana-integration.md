@@ -43,9 +43,10 @@ query:
 
 Authentication and local transport behavior:
 
-- Prefer `query.grafana.token` for Grafana service-account or bearer tokens.
+- Keep `query.grafana.url` credential-free: it must be an absolute HTTP(S) base URL with no embedded username or password component.
+- Configure authentication only with `query.grafana.token` or the dedicated `query.grafana.username` and `query.grafana.password` settings. Prefer the token for Grafana service-account or bearer authentication.
 - If the token is blank or an unresolved environment placeholder, ObservMe may use `query.grafana.username` plus `query.grafana.password` as a local-development Basic auth fallback.
-- Query-backed commands fail fast before backend calls when Grafana auth is unresolved/missing/incomplete, `query.grafana.url` is invalid, or a required datasource UID is blank.
+- Query-backed commands fail fast before backend calls when Grafana auth is unresolved/missing/incomplete, `query.grafana.url` is invalid or contains credentials, or a required datasource UID is blank. Credential-bearing URLs report the safe `embedded_credentials` class without rendering the URL or credential values.
 - `401` and `403` responses are surfaced as Grafana authentication failures without printing token or password values.
 - Browser login cookies are irrelevant because `/obs` commands call the Grafana API directly from the Pi process.
 
@@ -272,11 +273,13 @@ query:
   maxAgents: 20
 ```
 
+Each query result-count setting accepts integers from 1 through 100. Runtime query clients clamp programmatically supplied values to the same ceiling before adding a backend request limit or selecting parsed results.
+
 ### Bounded command display
 
 Prometheus label keys and values used for `/obs` display are normalized before they enter command snapshots. Control and line-separator characters become spaces, repeated whitespace collapses, and each label is limited to 96 UTF-16 code units. Truncated labels retain a valid Unicode prefix and end with `…`.
 
-`/obs cost` renders at most 20 rows. `/obs tools` renders at most 20 call rows and 20 failure rows. Omitted rows are reported explicitly. `/obs agents` retains its 10-row recent-child display limit. Final `/obs cost`, `/obs tools`, and `/obs agents` notifications are limited to 8,192 UTF-16 code units; a notification that reaches the hard limit ends with `… output truncated`. These display bounds do not change PromQL, metric identity, or emitted telemetry.
+`/obs cost` renders at most 20 rows. `/obs tools` renders at most 20 call rows and 20 failure rows. Omitted rows are reported explicitly. `/obs agents` retains its 10-row recent-child display limit. Every final `/obs` notification is normalized to remove terminal controls other than intended line feeds and is limited to 64 rows and 8,192 UTF-16 code units. A notification that reaches either hard limit ends with `… output truncated`. These display bounds do not change backend queries, metric identity, or emitted telemetry.
 
 ## 8. Dependency Direction
 

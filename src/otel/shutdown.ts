@@ -9,11 +9,19 @@ export interface ShutdownableOtelSdk extends FlushableOtelSdk {
   shutdown?: () => Promise<void> | void;
 }
 
+export interface OtelOperationSettlement {
+  readonly operation: "flush" | "shutdown";
+  readonly completed: boolean;
+  readonly timedOut: false;
+  readonly error?: unknown;
+}
+
 export interface BoundedOtelOperationResult {
   readonly operation: "flush" | "shutdown";
   readonly completed: boolean;
   readonly timedOut: boolean;
   readonly error?: unknown;
+  readonly settlement?: Promise<OtelOperationSettlement>;
 }
 
 export interface OtelShutdownLogSink {
@@ -54,10 +62,10 @@ export async function runBoundedOtelOperation(
   const timeoutResult = timeoutOperation(operation, normalizedTimeoutMs, timeoutController.signal);
 
   try {
-    const completed = completeOperation(operation, action);
-    return await Promise.race([completed, timeoutResult]);
-  } catch (error) {
-    return { operation, completed: false, timedOut: false, error };
+    const settlement = settleOperation(operation, action);
+    const result = await Promise.race([settlement, timeoutResult]);
+    if (!result.timedOut) return result;
+    return { ...result, settlement };
   } finally {
     timeoutController.abort();
   }
@@ -68,12 +76,16 @@ function normalizeTimeoutMs(timeoutMs: number): number {
   return timeoutMs;
 }
 
-async function completeOperation(
+async function settleOperation(
   operation: "flush" | "shutdown",
   action: () => Promise<void> | void,
-): Promise<BoundedOtelOperationResult> {
-  await action();
-  return completedOperation(operation);
+): Promise<OtelOperationSettlement> {
+  try {
+    await action();
+    return completedOperation(operation);
+  } catch (error) {
+    return { operation, completed: false, timedOut: false, error };
+  }
 }
 
 async function timeoutOperation(
@@ -84,17 +96,33 @@ async function timeoutOperation(
   return delay(timeoutMs, { operation, completed: false, timedOut: true } as const, { signal });
 }
 
-function completedOperation(operation: "flush" | "shutdown"): BoundedOtelOperationResult {
+function completedOperation(operation: "flush" | "shutdown"): OtelOperationSettlement {
   return { operation, completed: true, timedOut: false };
 }
 
 function logBoundedOperationIssue(result: BoundedOtelOperationResult, logger: OtelShutdownLogSink | undefined): void {
   if (result.timedOut) {
-    logger?.warn?.(`ObservMe OTEL ${result.operation} exceeded timeout and was abandoned.`);
+    warnOtelOperation(logger, `ObservMe OTEL ${result.operation} exceeded timeout and remains pending.`);
+    void result.settlement?.then(logLateOperationIssue.bind(undefined, logger));
     return;
   }
 
-  if (result.error) logger?.warn?.(`ObservMe OTEL ${result.operation} failed: ${formatError(result.error)}`);
+  logLateOperationIssue(logger, result);
+}
+
+function logLateOperationIssue(
+  logger: OtelShutdownLogSink | undefined,
+  result: Pick<BoundedOtelOperationResult, "operation" | "error">,
+): void {
+  if (result.error) warnOtelOperation(logger, `ObservMe OTEL ${result.operation} failed: ${formatError(result.error)}`);
+}
+
+function warnOtelOperation(logger: OtelShutdownLogSink | undefined, message: string): void {
+  try {
+    logger?.warn?.(message);
+  } catch {
+    return;
+  }
 }
 
 function formatError(error: unknown): string {

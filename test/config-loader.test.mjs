@@ -1,6 +1,7 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
-import { homedir } from "node:os";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { PROJECT_OBSERVME_YAML_TEMPLATE } from "../src/config/bootstrap-project-config.ts";
@@ -57,6 +58,14 @@ function createReader(files, calls = []) {
   };
 }
 
+async function createTempConfigProject() {
+  return mkdtemp(join(tmpdir(), "observme-config-loader-"));
+}
+
+async function removeTempConfigProject(path) {
+  await rm(path, { force: true, recursive: true });
+}
+
 const malformedProjectConfigCases = [
   {
     name: "wrong nested object type",
@@ -108,6 +117,14 @@ const rejectionDiagnosticCases = [
     expectedCode: "insecure_production_transport",
     expectedCodes: ["insecure_production_transport", "invalid_otlp_endpoint"],
     sensitiveFragments: ["private-user", "private-endpoint-password", "private-path", "private-token"],
+  },
+  {
+    name: "embedded Grafana URL credentials",
+    runtimeOptions: {
+      query: { grafana: { url: "https://private-grafana-user:private-grafana-password@grafana.test" } },
+    },
+    expectedCode: "embedded_grafana_url_credentials",
+    sensitiveFragments: ["private-grafana-user", "private-grafana-password"],
   },
   {
     name: "forbidden metric labels",
@@ -407,6 +424,197 @@ test("session loader keeps normal project config and env paths inside cwd", asyn
   assert.deepEqual(calls, ["missing-global.yaml", projectPath, envPath]);
   assert.equal(config.tenant, "env-file-tenant");
   assert.equal(config.otlp.endpoint, "https://project.example.test:4318");
+});
+
+test("session loader rejects out-of-root directory and environment file symlinks", async () => {
+  const cwd = await createTempConfigProject();
+  const outsideDirectory = await createTempConfigProject();
+  const warnings = [];
+
+  try {
+    await writeFile(join(outsideDirectory, "observme.yaml"), projectConfigYaml, "utf8");
+    await writeFile(join(outsideDirectory, ".env"), "OBSERVME_TENANT=outside-env\n", "utf8");
+    await symlink(outsideDirectory, join(cwd, CONFIG_DIR_NAME), "dir");
+    await symlink(join(outsideDirectory, ".env"), join(cwd, ".env"), "file");
+
+    const loaded = await loadSessionConfigWithDiagnostics({
+      cwd,
+      globalConfigPath: join(cwd, "missing-global.yaml"),
+      isProjectTrusted: true,
+      env: {},
+      logger: { warn: message => warnings.push(message) },
+    });
+
+    assert.deepEqual(loaded.config, defaultObservMeConfig);
+    assert.equal(loaded.diagnostics.projectConfigStatus, "rejected");
+    assert.equal(loaded.diagnostics.envFileStatus, "rejected");
+    assert.deepEqual(loaded.diagnostics.rejection, {
+      issueCodes: ["config_source_rejected"],
+      issueCount: 2,
+    });
+    assert.equal(warnings.length, 1);
+    assert.doesNotMatch(warnings[0], /observme-config-loader|outside-env|\.env/u);
+  } finally {
+    await Promise.all([removeTempConfigProject(cwd), removeTempConfigProject(outsideDirectory)]);
+  }
+});
+
+test("session loader rejects project config and environment file symlinks outside the project root", async () => {
+  const cwd = await createTempConfigProject();
+  const outsideDirectory = await createTempConfigProject();
+
+  try {
+    await mkdir(join(cwd, CONFIG_DIR_NAME));
+    await writeFile(join(outsideDirectory, "project.yaml"), projectConfigYaml, "utf8");
+    await writeFile(join(outsideDirectory, "project.env"), "OBSERVME_TENANT=outside-env\n", "utf8");
+    await symlink(join(outsideDirectory, "project.yaml"), join(cwd, CONFIG_DIR_NAME, "observme.yaml"), "file");
+    await symlink(join(outsideDirectory, "project.env"), join(cwd, ".env"), "file");
+
+    const loaded = await loadSessionConfigWithDiagnostics({
+      cwd,
+      globalConfigPath: join(cwd, "missing-global.yaml"),
+      isProjectTrusted: true,
+      env: {},
+    });
+
+    assert.deepEqual(loaded.config, defaultObservMeConfig);
+    assert.equal(loaded.diagnostics.projectConfigStatus, "rejected");
+    assert.equal(loaded.diagnostics.envFileStatus, "rejected");
+  } finally {
+    await Promise.all([removeTempConfigProject(cwd), removeTempConfigProject(outsideDirectory)]);
+  }
+});
+
+test("session loader supports project config and environment symlinks that resolve inside the project root", async () => {
+  const cwd = await createTempConfigProject();
+  const inRootConfigDirectory = join(cwd, "config-target");
+  const inRootEnvPath = join(cwd, "environment-target");
+
+  try {
+    await mkdir(inRootConfigDirectory);
+    await writeFile(join(inRootConfigDirectory, "observme.yaml"), projectConfigYaml, "utf8");
+    await writeFile(inRootEnvPath, "OBSERVME_TENANT=in-root-env\n", "utf8");
+    await symlink(inRootConfigDirectory, join(cwd, CONFIG_DIR_NAME), "dir");
+    await symlink(inRootEnvPath, join(cwd, ".env"), "file");
+
+    const loaded = await loadSessionConfigWithDiagnostics({
+      cwd,
+      globalConfigPath: join(cwd, "missing-global.yaml"),
+      isProjectTrusted: true,
+      env: {},
+    });
+
+    assert.equal(loaded.diagnostics.projectConfigStatus, "loaded");
+    assert.equal(loaded.diagnostics.envFileStatus, "loaded");
+    assert.equal(loaded.config.tenant, "in-root-env");
+    assert.equal(loaded.config.otlp.endpoint, "https://project.example.test:4318");
+  } finally {
+    await removeTempConfigProject(cwd);
+  }
+});
+
+test("session loader rejects config and env files swapped to outside symlinks before open", async () => {
+  const cwd = await createTempConfigProject();
+  const outsideDirectory = await createTempConfigProject();
+  const configPath = join(cwd, CONFIG_DIR_NAME, "observme.yaml");
+  const envPath = join(cwd, ".env");
+  const warnings = [];
+
+  try {
+    await mkdir(join(cwd, CONFIG_DIR_NAME));
+    await writeFile(configPath, projectConfigYaml, "utf8");
+    await writeFile(envPath, "OBSERVME_TENANT=in-root-env\n", "utf8");
+    await writeFile(join(outsideDirectory, "observme.yaml"), "observme:\n  tenant: private-outside-config\n", "utf8");
+    await writeFile(join(outsideDirectory, ".env"), "OBSERVME_TENANT=private-outside-env\n", "utf8");
+
+    const loaded = await loadSessionConfigWithDiagnostics({
+      cwd,
+      globalConfigPath: join(cwd, "missing-global.yaml"),
+      isProjectTrusted: true,
+      env: {},
+      logger: { warn: message => warnings.push(message) },
+      projectFileOperationHooks: {
+        projectConfig: {
+          beforeOpen: async () => {
+            await rename(configPath, `${configPath}.stable`);
+            await symlink(join(outsideDirectory, "observme.yaml"), configPath, "file");
+          },
+        },
+        environmentFile: {
+          beforeOpen: async () => {
+            await rename(envPath, `${envPath}.stable`);
+            await symlink(join(outsideDirectory, ".env"), envPath, "file");
+          },
+        },
+      },
+    });
+
+    assert.deepEqual(loaded.config, defaultObservMeConfig);
+    assert.equal(loaded.diagnostics.projectConfigStatus, "rejected");
+    assert.equal(loaded.diagnostics.envFileStatus, "rejected");
+    assert.doesNotMatch(
+      JSON.stringify({ diagnostics: loaded.diagnostics, warnings }),
+      /private-outside|observme-config-loader|\.stable/u,
+    );
+  } finally {
+    await Promise.all([removeTempConfigProject(cwd), removeTempConfigProject(outsideDirectory)]);
+  }
+});
+
+test("session loader rejects a config ancestor swapped outside the project before open", async () => {
+  const cwd = await createTempConfigProject();
+  const outsideDirectory = await createTempConfigProject();
+  const configDirectory = join(cwd, CONFIG_DIR_NAME);
+  const stableConfigDirectory = join(cwd, "stable-config");
+  const outsideConfigPath = join(outsideDirectory, "observme.yaml");
+
+  try {
+    await mkdir(configDirectory);
+    await writeFile(join(configDirectory, "observme.yaml"), projectConfigYaml, "utf8");
+    await writeFile(outsideConfigPath, "observme:\n  tenant: private-outside-ancestor\n", "utf8");
+
+    const loaded = await loadSessionConfigWithDiagnostics({
+      cwd,
+      globalConfigPath: join(cwd, "missing-global.yaml"),
+      isProjectTrusted: true,
+      loadEnvFile: false,
+      env: {},
+      projectFileOperationHooks: {
+        projectConfig: {
+          beforeOpen: async () => {
+            await rename(configDirectory, stableConfigDirectory);
+            await symlink(outsideDirectory, configDirectory, "dir");
+          },
+        },
+      },
+    });
+
+    assert.deepEqual(loaded.config, defaultObservMeConfig);
+    assert.equal(loaded.diagnostics.projectConfigStatus, "rejected");
+    assert.equal(loaded.diagnostics.envFileStatus, "skipped_disabled");
+    assert.equal(await readFile(outsideConfigPath, "utf8"), "observme:\n  tenant: private-outside-ancestor\n");
+  } finally {
+    await Promise.all([removeTempConfigProject(cwd), removeTempConfigProject(outsideDirectory)]);
+  }
+});
+
+test("session loader treats normal missing canonical project paths as missing", async () => {
+  const cwd = await createTempConfigProject();
+
+  try {
+    const loaded = await loadSessionConfigWithDiagnostics({
+      cwd,
+      globalConfigPath: join(cwd, "missing-global.yaml"),
+      isProjectTrusted: true,
+      env: {},
+    });
+
+    assert.deepEqual(loaded.config, defaultObservMeConfig);
+    assert.equal(loaded.diagnostics.projectConfigStatus, "missing");
+    assert.equal(loaded.diagnostics.envFileStatus, "missing");
+  } finally {
+    await removeTempConfigProject(cwd);
+  }
 });
 
 test("session loader rejects traversal and absolute project config directories", async () => {

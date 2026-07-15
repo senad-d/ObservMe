@@ -1,6 +1,6 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -145,6 +145,113 @@ test("ensureProjectObservMeConfig rejects traversal and absolute config director
       /Unsafe ObservMe project config path/u,
     );
     await assert.rejects(readFile(join(cwd, "..", "outside", "observme.yaml"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await removeTempProject(cwd);
+  }
+});
+
+test("ensureProjectObservMeConfig rejects project config directory symlinks outside the project root", async () => {
+  const cwd = await createTempProject();
+  const outsideDirectory = await createTempProject();
+  const outsideConfigPath = join(outsideDirectory, "observme.yaml");
+
+  try {
+    await symlink(outsideDirectory, join(cwd, CONFIG_DIR_NAME), "dir");
+    await assert.rejects(
+      ensureProjectObservMeConfig({ cwd, isProjectTrusted: true }),
+      /Unsafe ObservMe project config path/u,
+    );
+    await assert.rejects(readFile(outsideConfigPath, "utf8"), { code: "ENOENT" });
+  } finally {
+    await Promise.all([removeTempProject(cwd), removeTempProject(outsideDirectory)]);
+  }
+});
+
+test("ensureProjectObservMeConfig rejects project config file symlinks outside the project root", async () => {
+  const cwd = await createTempProject();
+  const outsideDirectory = await createTempProject();
+  const outsideConfigPath = join(outsideDirectory, "outside-observme.yaml");
+  const outsideContent = "observme:\n  tenant: outside\n";
+
+  try {
+    await mkdir(join(cwd, CONFIG_DIR_NAME));
+    await writeFile(outsideConfigPath, outsideContent, "utf8");
+    await symlink(outsideConfigPath, projectConfigPath(cwd), "file");
+
+    await assert.rejects(
+      ensureProjectObservMeConfig({ cwd, isProjectTrusted: true }),
+      /Unsafe ObservMe project config path/u,
+    );
+    assert.equal(await readFile(outsideConfigPath, "utf8"), outsideContent);
+  } finally {
+    await Promise.all([removeTempProject(cwd), removeTempProject(outsideDirectory)]);
+  }
+});
+
+test("ensureProjectObservMeConfig does not overwrite a target created after validation", async () => {
+  const cwd = await createTempProject();
+  const configPath = projectConfigPath(cwd);
+  const existing = "observme:\n  tenant: concurrent-existing\n";
+
+  try {
+    const result = await ensureProjectObservMeConfig({
+      cwd,
+      isProjectTrusted: true,
+      projectFileOperationHooks: {
+        beforeOpen: writeFile.bind(undefined, configPath, existing, "utf8"),
+      },
+    });
+
+    assert.deepEqual(result, { path: configPath, status: "exists" });
+    assert.equal(await readFile(configPath, "utf8"), existing);
+  } finally {
+    await removeTempProject(cwd);
+  }
+});
+
+test("ensureProjectObservMeConfig removes an empty outside target when an ancestor changes before create", async () => {
+  const cwd = await createTempProject();
+  const outsideDirectory = await createTempProject();
+  const configDirectory = join(cwd, CONFIG_DIR_NAME);
+  const stableConfigDirectory = join(cwd, "stable-config");
+  const outsideConfigPath = join(outsideDirectory, "observme.yaml");
+
+  try {
+    await mkdir(configDirectory);
+
+    await assert.rejects(
+      ensureProjectObservMeConfig({
+        cwd,
+        isProjectTrusted: true,
+        projectFileOperationHooks: {
+          beforeOpen: async () => {
+            await rename(configDirectory, stableConfigDirectory);
+            await symlink(outsideDirectory, configDirectory, "dir");
+          },
+        },
+      }),
+      /Unsafe ObservMe project config path/u,
+    );
+
+    await assert.rejects(readFile(outsideConfigPath, "utf8"), { code: "ENOENT" });
+    await assert.rejects(readFile(join(stableConfigDirectory, "observme.yaml"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await Promise.all([removeTempProject(cwd), removeTempProject(outsideDirectory)]);
+  }
+});
+
+test("ensureProjectObservMeConfig supports a project config directory symlink that stays in root", async () => {
+  const cwd = await createTempProject();
+  const inRootDirectory = join(cwd, "config-target");
+
+  try {
+    await mkdir(inRootDirectory);
+    await symlink(inRootDirectory, join(cwd, CONFIG_DIR_NAME), "dir");
+
+    const result = await ensureProjectObservMeConfig({ cwd, isProjectTrusted: true });
+
+    assert.deepEqual(result, { path: projectConfigPath(cwd), status: "created" });
+    assert.equal(await readFile(join(inRootDirectory, "observme.yaml"), "utf8"), PROJECT_OBSERVME_YAML_TEMPLATE);
   } finally {
     await removeTempProject(cwd);
   }

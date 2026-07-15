@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import { QUERY_RESULT_COUNT_MAXIMUM } from "../src/config/query-limits.ts";
 import { getObsRootCommandArgumentCompletions, registerObsCommand } from "../src/commands/obs.ts";
 import { OBS_ERRORS_LOGQL, getObsErrorsSnapshot, renderObsErrors } from "../src/commands/obs-errors.ts";
 import {
@@ -166,6 +167,30 @@ test("/obs logs queries the current session with normalized pi_session_id and ca
   assert.match(output, /llm\.request\.failed/u);
   assert.equal(output.includes("raw prompt body"), false);
   assert.equal(output.includes("raw arguments"), false);
+});
+
+test("Loki summaries clamp row counts and neutralize terminal controls and injected line structure", () => {
+  const output = renderObsErrors({
+    window: "1h",
+    query: OBS_ERRORS_LOGQL,
+    maxLogs: QUERY_RESULT_COUNT_MAXIMUM + 1,
+    logs: [
+      {
+        timestamp: "unsafe-time\u001b[31m\ninjected-time",
+        eventName: "failed\u0007event\u0085\ninjected-event",
+        category: "error\u2028injected-category",
+        severity: "warn\u2029injected-severity",
+      },
+    ],
+  });
+
+  assert.match(output, new RegExp(`max ${QUERY_RESULT_COUNT_MAXIMUM}\\)`, "u"));
+  assert.equal(output.split("\n").length, 2);
+  assert.doesNotMatch(output.replaceAll("\n", ""), /[\p{Cc}\p{Zl}\p{Zp}]/u);
+  assert.match(
+    output,
+    /unsafe-time \[31m injected-time failed event injected-event category=error injected-category severity=warn injected-severity/u,
+  );
 });
 
 test("/obs logs rejects unsafe current session ids before querying Loki", async () => {

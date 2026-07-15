@@ -3,7 +3,11 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { getGrafanaHealth } from "../src/query/grafana.ts";
-import { MAX_GRAFANA_RESPONSE_BODY_BYTES } from "../src/query/grafana-transport.ts";
+import {
+  createGrafanaTransport,
+  MAX_GRAFANA_RESPONSE_BODY_BYTES,
+  requiresCustomGrafanaTransport,
+} from "../src/query/grafana-transport.ts";
 import { queryLoki } from "../src/query/loki.ts";
 import { queryPrometheus } from "../src/query/prometheus.ts";
 import { searchTempo } from "../src/query/tempo.ts";
@@ -319,6 +323,67 @@ test("Grafana response-body reads preserve query timeout and cancellation semant
 
   await assert.rejects(runTempoSearch(config, async () => stalled.response), /Tempo search timed out/u);
   assert.equal(stalled.state.cancelled, true);
+});
+
+test("default and custom Grafana transports reject embedded URL credentials before network I/O", async () => {
+  const configuredAuthValues = [
+    "private-bearer-token-value",
+    "private-basic-user-value",
+    "private-basic-password-value",
+  ];
+  const expectedMessage =
+    "query.grafana.url is invalid (embedded_credentials). Configure authentication through query.grafana.token or query.grafana.username/password.";
+  let requestCount = 0;
+
+  await withLocalHttpServer(
+    (_request, response) => {
+      requestCount += 1;
+      response.end("unexpected request");
+    },
+    async baseUrl => {
+      const credentialUrl = `${baseUrl.replace(
+        "http://",
+        "http://private-url-user-value:private-url-password-value@",
+      )}/private-url-path-value?tenant=private-url-query-value`;
+      const sensitiveValues = [
+        "private-url-user-value",
+        "private-url-password-value",
+        "private-url-path-value",
+        "private-url-query-value",
+        ...configuredAuthValues,
+      ];
+
+      for (const preferIPv4 of [false, true]) {
+        const config = cloneReadyConfig();
+        config.query.grafana.url = baseUrl;
+        config.query.grafana.token = configuredAuthValues[0];
+        config.query.grafana.username = configuredAuthValues[1];
+        config.query.grafana.password = configuredAuthValues[2];
+        config.query.grafana.transport.preferIPv4 = preferIPv4;
+        const transport = createGrafanaTransport(config);
+
+        assert.equal(requiresCustomGrafanaTransport(config), preferIPv4);
+        await assert.rejects(transport.fetch(credentialUrl), error => {
+          assert.equal(error.message, expectedMessage);
+          for (const sensitiveValue of sensitiveValues) {
+            assert.equal(error.message.includes(sensitiveValue), false);
+          }
+          return true;
+        });
+
+        config.query.grafana.url = credentialUrl;
+        assert.throws(() => transport.apiUrl("/api/health"), error => {
+          assert.equal(error.message, expectedMessage);
+          for (const sensitiveValue of sensitiveValues) {
+            assert.equal(error.message.includes(sensitiveValue), false);
+          }
+          return true;
+        });
+      }
+    },
+  );
+
+  assert.equal(requestCount, 0);
 });
 
 test("shared Grafana readiness rejects invalid Grafana URLs before health and datasource query fetches", async () => {

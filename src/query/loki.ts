@@ -1,3 +1,4 @@
+import { normalizeQueryResultCount } from "../config/query-limits.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { GrafanaFetch, GrafanaTransportClient } from "./grafana-transport.ts";
 import { createGrafanaTransport } from "./grafana-transport.ts";
@@ -27,7 +28,6 @@ interface NormalizedTimeRange {
   readonly to: Date;
 }
 
-const minimumMaxLogs = 1;
 const maxLogQlQueryLength = 4096;
 const safeLokiAttributeNamePattern = /^[A-Za-z_][A-Za-z0-9_.]*$/u;
 const lokiIdentifierStartPattern = /^[A-Za-z_]$/u;
@@ -326,7 +326,5 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function resolveMaxLogs(config: ObservMeConfig): number {
-  const maxLogs = config.query.maxLogs;
-  if (!Number.isFinite(maxLogs) || maxLogs < minimumMaxLogs) return minimumMaxLogs;
-  return Math.trunc(maxLogs);
+  return normalizeQueryResultCount(config.query.maxLogs);
 }

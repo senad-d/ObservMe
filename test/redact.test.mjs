@@ -194,12 +194,20 @@ test("URL credentials are secret-redacted without corrupting the remaining URL p
 
 test("custom regex redactors from config are applied in addition to built-in patterns", () => {
   const result = redactValue(
-    `Authorization: bearer ${"b".repeat(24)} customerCredential(abc-123)`,
+    `Authorization: bearer ${"b".repeat(24)} customerCredential(abc-123) tenantLabel(XYZ-789) FOObar`,
     defaultOptions({
       customRedactionPatterns: [
         {
           name: "internal-token",
           pattern: "(?i)customercredential\\([a-z0-9-]+\\)",
+        },
+        {
+          name: "safe-alternation",
+          pattern: "(?i)(?:customer|tenant)label\\([a-z0-9-]+\\)",
+        },
+        {
+          name: "safe-quantified-alternation",
+          pattern: "(?i)(?:foo|bar)+",
         },
       ],
     }),
@@ -207,6 +215,8 @@ test("custom regex redactors from config are applied in addition to built-in pat
 
   assert.match(result.value, /Authorization: \[REDACTED:generic_bearer_token:[a-f0-9]{12}\]/u);
   assert.match(result.value, /\[REDACTED:internal_token:[a-f0-9]{12}\]/u);
+  assert.match(result.value, /\[REDACTED:safe_alternation:[a-f0-9]{12}\]/u);
+  assert.match(result.value, /\[REDACTED:safe_quantified_alternation:[a-f0-9]{12}\]/u);
 });
 
 test("unsafe custom regex redactors fail closed without exporting raw content", () => {
@@ -221,6 +231,38 @@ test("unsafe custom regex redactors fail closed without exporting raw content", 
   assert.equal(result.value, undefined);
   assert.equal(result.failureMetrics.redactionFailures, 1);
   assert.match(result.errors[0], /must not repeat a group/u);
+});
+
+test("ambiguous quantified alternation redactors fail closed without evaluating captured content", () => {
+  const rawValue = `${"a".repeat(64)}! raw content must not export`;
+  const result = redactValue(
+    rawValue,
+    defaultOptions({
+      customRedactionPatterns: [{ name: "ambiguous", pattern: "^(?:a|aa)+$" }],
+    }),
+  );
+
+  assert.equal(result.dropped, true);
+  assert.equal(result.value, undefined);
+  assert.equal(result.failureMetrics.redactionFailures, 1);
+  assert.match(result.errors[0], /alternatives must begin with provably disjoint characters/u);
+  assert.equal(result.errors.some(error => error.includes(rawValue)), false);
+});
+
+test("overlapping sequential repetitions fail closed without exporting raw content", () => {
+  const rawValue = `${"a".repeat(64)}! adjacent repetition content must not export`;
+  const result = redactValue(
+    rawValue,
+    defaultOptions({
+      customRedactionPatterns: [{ name: "overlapping", pattern: "^a+a+$" }],
+    }),
+  );
+
+  assert.equal(result.dropped, true);
+  assert.equal(result.value, undefined);
+  assert.equal(result.failureMetrics.redactionFailures, 1);
+  assert.match(result.errors[0], /repetitions with overlapping starting characters/u);
+  assert.equal(result.errors.some(error => error.includes(rawValue)), false);
 });
 
 test("invalid custom regex redactors fail closed without exporting raw content", () => {

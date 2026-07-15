@@ -15,6 +15,7 @@ import {
   formatGrafanaFetchFailure,
   requiresCustomGrafanaTransport,
 } from "../src/query/grafana-transport.ts";
+import { getGrafanaQueryReadiness } from "../src/query/grafana-readiness.ts";
 
 const sampleTraceId = "4bf92f3577b34da6a3ce929d0e0e4736";
 const telemetrySourceRoots = ["src/events", "src/otel", "src/pi"];
@@ -255,9 +256,77 @@ test("Grafana transport failure formatting distinguishes TLS and DNS failures", 
   assert.match(formatGrafanaFetchFailure(dnsError), /DNS lookup failed/u);
 });
 
+test("Grafana readiness rejects embedded URL credentials with one safe diagnostic contract", async () => {
+  const credentialCases = [
+    {
+      url: "https://private-url-user-value@private-url-host-value.local/private-url-path-value?tenant=private-url-query-value",
+      sensitiveValues: [
+        "private-url-user-value",
+        "private-url-host-value",
+        "private-url-path-value",
+        "private-url-query-value",
+      ],
+    },
+    {
+      url: "https://:private-url-password-value@private-password-host-value.local/private-password-path-value?tenant=private-password-query-value",
+      sensitiveValues: [
+        "private-url-password-value",
+        "private-password-host-value",
+        "private-password-path-value",
+        "private-password-query-value",
+      ],
+    },
+  ];
+  const configuredAuthValues = [
+    "private-bearer-token-value",
+    "private-basic-user-value",
+    "private-basic-password-value",
+  ];
+  const expectedMessage =
+    "query.grafana.url is invalid (embedded_credentials). Configure authentication through query.grafana.token or query.grafana.username/password.";
+  let fetchCalls = 0;
+  const fetcher = async () => {
+    fetchCalls += 1;
+    throw new Error("fetch should not run for credential-bearing Grafana URLs");
+  };
+
+  for (const credentialCase of credentialCases) {
+    const config = cloneDefaultConfig();
+    config.query.grafana.url = credentialCase.url;
+    config.query.grafana.token = configuredAuthValues[0];
+    config.query.grafana.username = configuredAuthValues[1];
+    config.query.grafana.password = configuredAuthValues[2];
+
+    assert.deepEqual(getGrafanaQueryReadiness(config), {
+      status: "not_ready",
+      issues: [
+        {
+          code: "embedded_grafana_url_credentials",
+          key: "query.grafana.url",
+          message: expectedMessage,
+        },
+      ],
+    });
+
+    const health = await getGrafanaHealth(config, { fetch: fetcher });
+    assert.deepEqual(
+      health.checks.map(check => check.status),
+      ["failed", "failed", "failed", "failed"],
+    );
+    for (const check of health.checks) {
+      assert.match(check.detail, /query\.grafana\.url is invalid \(embedded_credentials\)/u);
+      for (const sensitiveValue of [...credentialCase.sensitiveValues, ...configuredAuthValues]) {
+        assert.equal(check.detail.includes(sensitiveValue), false);
+      }
+    }
+  }
+
+  assert.equal(fetchCalls, 0);
+});
+
 test("Grafana health sanitizes transport failure details", async () => {
   const config = cloneDefaultConfig();
-  config.query.grafana.url = "https://admin:secret@grafana.local?token=url-token";
+  config.query.grafana.url = "https://grafana.local";
   config.query.grafana.token = "grafana-token";
 
   const health = await getGrafanaHealth(config, {

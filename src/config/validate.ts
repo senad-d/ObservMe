@@ -7,6 +7,10 @@ import {
 import type { ObservMeConfig } from "./schema.ts";
 import { validateCustomRedactionPatterns } from "../privacy/redact.ts";
 import { classifyOtlpEndpointFailure } from "../otel/otlp-endpoint.ts";
+import {
+  classifyGrafanaUrlSecurityFailure,
+  formatGrafanaUrlSecurityFailure,
+} from "../query/grafana-url.ts";
 
 export interface ValidationIssue {
   code: string;
@@ -65,12 +69,15 @@ const knownConfigValidationIssueCodes = new Set([
   "insecure_production_transport",
   "invalid_otlp_endpoint",
   "invalid_signal_endpoint_path",
+  "embedded_grafana_url_credentials",
   "high_cardinality_metric_label",
   "active_agent_lease_too_short_for_export_interval",
   "custom_redaction_pattern_limit",
   "custom_redaction_pattern_too_long",
   "custom_redaction_pattern_unsupported_construct",
   "custom_redaction_pattern_nested_quantifier",
+  "custom_redaction_pattern_ambiguous_alternation",
+  "custom_redaction_pattern_ambiguous_repetition",
   "custom_redaction_pattern_empty_match",
   "invalid_custom_redaction_pattern",
   "untrusted_project_config_read",
@@ -90,6 +97,7 @@ export function validateObservMeConfig(
     ...validateRedactionBoundary(config),
     ...validateTransportSecurity(config),
     ...validateOtlpEndpoints(config),
+    ...validateGrafanaUrl(config),
     ...validateMetricLabels(config),
     ...validateActiveAgentLeaseDuration(config),
     ...validateCustomRedactionPatternConfig(config),
@@ -339,6 +347,18 @@ function endpointPathMatches(endpoint: string, requiredPath: string): boolean {
   } catch {
     return false;
   }
+}
+
+function validateGrafanaUrl(config: ObservMeConfig): ValidationIssue[] {
+  const failureClass = classifyGrafanaUrlSecurityFailure(config.query.grafana.url);
+  if (!failureClass) return [];
+
+  return [
+    {
+      code: "embedded_grafana_url_credentials",
+      message: formatGrafanaUrlSecurityFailure(failureClass),
+    },
+  ];
 }
 
 function validateMetricLabels(config: ObservMeConfig): ValidationIssue[] {

@@ -169,6 +169,27 @@ GitHub-hosted runners satisfy the supported clock expectation. A self-hosted run
 
 ## 5. Common Incidents
 
+### Grafana-Backed Commands Reject the Base URL
+
+If `/obs status`, `/obs health`, or a query-backed command reports `embedded_grafana_url_credentials` or `embedded_credentials`:
+
+1. Configure `query.grafana.url` as an absolute HTTP(S) base URL without an embedded username or password component.
+2. Put bearer authentication in `query.grafana.token`, or configure both `query.grafana.username` and `query.grafana.password`. Prefer environment-variable references rather than secret values in YAML.
+3. Restart Pi, then rerun `/obs status` and `/obs health`.
+
+ObservMe rejects this URL class before default-fetch or custom-transport network I/O. Diagnostics intentionally identify only the safe failure class and setting names, never the rejected URL or credentials.
+
+### Project Config or `.env` Is Rejected
+
+Project-local configuration is loaded only for a trusted project and only while its lexical and canonical paths remain inside the stable canonical project root.
+
+1. Confirm Pi marks the project trusted.
+2. Use a normal in-root config directory and `.env` file, or symlinks whose existing targets also remain inside the same project root.
+3. Replace out-of-root, dangling, or changing symlinks and retry the session start. Do not bypass the containment check.
+4. Review `/obs status` for `config_source_rejected`; bootstrap failures appear as a bounded warning.
+
+ObservMe fails closed if it cannot verify the root, target, or opened-file identity. A rejected project config or `.env` is not read, starter creation never overwrites an existing target, and diagnostics omit canonical and external path details. Other accepted configuration layers continue to apply.
+
 ### No Traces in Tempo
 
 Check:

@@ -31,7 +31,7 @@ import type { ObservMeConfig } from "../../config/schema.ts";
 import { emitUnsafeCaptureWarning, normalizeConfigRejectionDiagnostic } from "../../config/validate.ts";
 import { EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE } from "../../constants.ts";
 import { ObservMeOtelStartupError } from "../../otel/sdk.ts";
-import type { BoundedOtelOperationResult } from "../../otel/shutdown.ts";
+import type { BoundedOtelOperationResult, OtelOperationSettlement } from "../../otel/shutdown.ts";
 import {
   AGENT_LINEAGE_ATTRIBUTES,
   CONFIG_ATTRIBUTES,
@@ -183,8 +183,10 @@ async function handleSessionStart(
   event: SessionStartEvent,
   ctx: ExtensionContext,
 ): Promise<void> {
+  if (!(await resolvePendingTelemetryCleanupBeforeStart(state, ctx))) return;
+
   const previousSession = state.session;
-  if (previousSession) await shutDownPreviousSessionBeforeDuplicateStart(previousSession, ctx, state);
+  if (previousSession && !(await shutDownPreviousSessionBeforeDuplicateStart(previousSession, ctx, state))) return;
 
   await ensureProjectConfigForHandler(options, ctx);
   const loadedConfig = await loadSessionConfigForHandler(loadConfigFn, options, ctx);
@@ -423,17 +425,82 @@ async function shutDownPreviousSessionBeforeDuplicateStart(
   session: ObservMeTelemetrySession,
   ctx: ObservMeHandlerContext,
   state: HandlerSessionState,
-): Promise<void> {
+): Promise<boolean> {
   emitLifecycleLog(session.logger, LOG_EVENT_NAMES.SESSION_DUPLICATE_START, buildDuplicateSessionStartAttributes(session));
 
   try {
-    await shutDownTelemetrySession(session, duplicateSessionStartShutdownEvent(), ctx, state);
+    const result = await shutDownTelemetrySession(session, duplicateSessionStartShutdownEvent(), ctx, state);
+    if (otelCleanupCompleted(result)) return true;
+    notifyPendingTelemetryCleanup(ctx);
+    return false;
   } catch (error) {
     recordDuplicateSessionStartShutdownError(session, error);
     clearObsSessionRuntimeState();
     clearObsAgentsRuntimeState();
     state.session = undefined;
+    state.pendingCleanup = session;
+    notifyPendingTelemetryCleanup(ctx);
+    return false;
   }
+}
+
+async function resolvePendingTelemetryCleanupBeforeStart(
+  state: HandlerSessionState,
+  ctx: ObservMeHandlerContext,
+): Promise<boolean> {
+  const pendingSession = state.pendingCleanup;
+  if (!pendingSession) return true;
+
+  const result = await recordControllerOperationResult(pendingSession, "shutdown");
+  if (otelCleanupCompleted(result)) {
+    if (state.pendingCleanup === pendingSession) state.pendingCleanup = undefined;
+    return true;
+  }
+
+  retainUnresolvedTelemetryCleanup(state, pendingSession, result);
+  notifyPendingTelemetryCleanup(ctx);
+  return false;
+}
+
+function retainUnresolvedTelemetryCleanup(
+  state: HandlerSessionState,
+  session: ObservMeTelemetrySession,
+  result: BoundedOtelOperationResult | undefined,
+): void {
+  if (!result || otelCleanupCompleted(result)) return;
+
+  state.pendingCleanup = session;
+  void result.settlement?.then(releaseSettledTelemetryCleanup.bind(undefined, state, session));
+}
+
+function releaseSettledTelemetryCleanup(
+  state: HandlerSessionState,
+  session: ObservMeTelemetrySession,
+  settlement: OtelOperationSettlement,
+): void {
+  if (!otelCleanupCompleted(settlement) || state.pendingCleanup !== session) return;
+  state.pendingCleanup = undefined;
+}
+
+function otelCleanupCompleted(
+  result: Pick<BoundedOtelOperationResult, "completed" | "timedOut" | "error">,
+): boolean {
+  return result.completed && !result.timedOut && !result.error;
+}
+
+function notifyPendingTelemetryCleanup(ctx: ObservMeHandlerContext): void {
+  if (ctx.hasUI === false || !ctx.ui?.notify) return;
+
+  const message = "ObservMe telemetry startup was deferred because prior OTEL shutdown cleanup is still unresolved.";
+  try {
+    void Promise.resolve(ctx.ui.notify(message, "warning")).catch(ignorePendingCleanupDiagnosticError);
+  } catch {
+    return;
+  }
+}
+
+function ignorePendingCleanupDiagnosticError(): undefined {
+  return undefined;
 }
 
 function buildDuplicateSessionStartAttributes(session: ObservMeTelemetrySession): AttributeMap {
@@ -470,6 +537,7 @@ async function cleanUpFailedSessionStart(
   state: HandlerSessionState,
 ): Promise<void> {
   const labels = metricLabels(session.config, session.lineage);
+  let shutdownResult: BoundedOtelOperationResult | undefined;
 
   try {
     deactivateSessionActiveAgent(session, labels);
@@ -477,10 +545,11 @@ async function cleanUpFailedSessionStart(
     endActiveSpan(session, session.sessionSpan);
     await clearExtensionStatus(ctx);
     await recordControllerOperationResult(session, "flush");
-    await recordControllerOperationResult(session, "shutdown");
+    shutdownResult = await recordControllerOperationResult(session, "shutdown");
   } finally {
     disposeSessionActiveAgentLease(session);
     clearTelemetrySessionRuntimeState(session, state);
+    retainUnresolvedTelemetryCleanup(state, session, shutdownResult);
   }
 }
 
@@ -489,10 +558,11 @@ async function shutDownTelemetrySession(
   event: unknown,
   ctx: ObservMeHandlerContext,
   state: HandlerSessionState,
-): Promise<void> {
+): Promise<BoundedOtelOperationResult> {
   const labels = metricLabels(session.config, session.lineage);
   const shutdownAttributes = buildShutdownAttributes(event, session);
   const failed = workflowFailed(event);
+  let shutdownResult: BoundedOtelOperationResult | undefined;
 
   try {
     deactivateSessionActiveAgent(session, labels);
@@ -504,10 +574,12 @@ async function shutDownTelemetrySession(
     endActiveSpan(session, session.sessionSpan);
     await clearExtensionStatus(ctx);
     await recordControllerOperationResult(session, "flush");
-    await recordControllerOperationResult(session, "shutdown");
+    shutdownResult = await recordControllerOperationResult(session, "shutdown");
+    return shutdownResult;
   } finally {
     disposeSessionActiveAgentLease(session);
     clearTelemetrySessionRuntimeState(session, state);
+    retainUnresolvedTelemetryCleanup(state, session, shutdownResult);
   }
 }
 
@@ -590,10 +662,11 @@ async function clearExtensionStatus(ctx: ObservMeHandlerContext): Promise<void> 
 async function recordControllerOperationResult(
   session: ObservMeTelemetrySession,
   operation: BoundedOtelOperationResult["operation"],
-): Promise<void> {
+): Promise<BoundedOtelOperationResult> {
   const result = await runControllerOperation(session, operation);
   recordObsStatusExportResult(result);
   recordExportOperationResult(session, result);
+  return result;
 }
 
 async function runControllerOperation(

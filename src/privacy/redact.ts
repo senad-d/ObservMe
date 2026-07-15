@@ -89,21 +89,81 @@ export interface CustomRedactionPatternSafetyIssue {
     | "custom_redaction_pattern_too_long"
     | "custom_redaction_pattern_unsupported_construct"
     | "custom_redaction_pattern_nested_quantifier"
+    | "custom_redaction_pattern_ambiguous_alternation"
+    | "custom_redaction_pattern_ambiguous_repetition"
     | "custom_redaction_pattern_empty_match"
     | "invalid_custom_redaction_pattern";
   readonly message: string;
 }
 
-interface RegexGroupScanState {
-  hasQuantifier: boolean;
+interface RegexCharacterRange {
+  readonly start: number;
+  readonly end: number;
 }
 
-interface RegexGroupScanContext {
-  readonly groupStack: RegexGroupScanState[];
-  escaped: boolean;
-  inCharacterClass: boolean;
-  lastClosedGroupHadQuantifier: boolean;
+type RegexCharacterDomain = readonly RegexCharacterRange[];
+
+type RegexSafetyNode =
+  | RegexEmptyNode
+  | RegexCharacterNode
+  | RegexSequenceNode
+  | RegexAlternationNode
+  | RegexRepetitionNode;
+
+interface RegexEmptyNode {
+  readonly kind: "empty";
 }
+
+interface RegexCharacterNode {
+  readonly kind: "character";
+  readonly domain: RegexCharacterDomain | undefined;
+}
+
+interface RegexSequenceNode {
+  readonly kind: "sequence";
+  readonly children: readonly RegexSafetyNode[];
+}
+
+interface RegexAlternationNode {
+  readonly kind: "alternation";
+  readonly branches: readonly RegexSafetyNode[];
+}
+
+interface RegexRepetitionNode {
+  readonly kind: "repetition";
+  readonly child: RegexSafetyNode;
+  readonly minimum: number;
+  readonly maximum: number;
+  readonly variable: boolean;
+}
+
+interface RegexSafetyParserState {
+  readonly source: string;
+  readonly caseInsensitive: boolean;
+  index: number;
+  failed: boolean;
+}
+
+interface RegexQuantifier {
+  readonly minimum: number;
+  readonly maximum: number;
+  readonly end: number;
+}
+
+interface RegexEscapeToken {
+  readonly end: number;
+  readonly assertion: boolean;
+  readonly domain: RegexCharacterDomain | undefined;
+  readonly singleton: number | undefined;
+}
+
+interface RegexCharacterClassToken {
+  readonly end: number;
+  readonly domain: RegexCharacterDomain | undefined;
+  readonly singleton: number | undefined;
+}
+
+type UnsafeQuantifiedGroupKind = "nested_quantifier" | "ambiguous_alternation" | "ambiguous_repetition";
 
 export function redactValue(rawValue: string, options: RedactionOptions): RedactionResult {
   const stages: RedactionStage[] = [];
@@ -396,7 +456,7 @@ export function validateCustomRedactionPattern(pattern: string): CustomRedaction
   if (pattern.length > MAX_CUSTOM_REDACTION_PATTERN_CHARS) return [createCustomRedactionPatternTooLongIssue()];
 
   const source = normalizeCustomRedactionPatternSource(pattern);
-  const unsafeIssue = detectUnsafeCustomRedactionPattern(source);
+  const unsafeIssue = detectUnsafeCustomRedactionPattern(source, pattern.startsWith("(?i)"));
   if (unsafeIssue) return [unsafeIssue];
 
   return validateCustomRedactionPatternSyntax(source);
@@ -407,9 +467,16 @@ export function normalizeCustomRedactionPatternSource(pattern: string): string {
   return pattern;
 }
 
-export function detectUnsafeCustomRedactionPattern(source: string): CustomRedactionPatternSafetyIssue | undefined {
+export function detectUnsafeCustomRedactionPattern(
+  source: string,
+  caseInsensitive = false,
+): CustomRedactionPatternSafetyIssue | undefined {
   if (hasUnsupportedCustomRedactionConstruct(source)) return createCustomRedactionPatternUnsupportedConstructIssue();
-  if (hasNestedQuantifiedGroup(source)) return createCustomRedactionPatternNestedQuantifierIssue();
+
+  const unsafeQuantifiedGroup = detectUnsafeQuantifiedGroup(source, caseInsensitive);
+  if (unsafeQuantifiedGroup === "nested_quantifier") return createCustomRedactionPatternNestedQuantifierIssue();
+  if (unsafeQuantifiedGroup === "ambiguous_alternation") return createCustomRedactionPatternAmbiguousAlternationIssue();
+  if (unsafeQuantifiedGroup === "ambiguous_repetition") return createCustomRedactionPatternAmbiguousRepetitionIssue();
   return undefined;
 }
 
@@ -436,68 +503,511 @@ export function hasUnsupportedCustomRedactionConstruct(source: string): boolean 
   return false;
 }
 
-export function hasNestedQuantifiedGroup(source: string): boolean {
-  const context = createRegexGroupScanContext();
+export function hasNestedQuantifiedGroup(source: string, caseInsensitive = false): boolean {
+  const tree = parseRegexSafetyPattern(source, caseInsensitive);
+  return tree ? hasNestedRegexRepetition(tree) : false;
+}
 
-  for (let index = 0; index < source.length; index += 1) {
-    if (scanRegexEscape(source[index], context)) continue;
-    if (scanRegexCharacterClass(source[index], context)) continue;
-    if (context.inCharacterClass) continue;
-    if (scanRegexGroupBoundary(source[index], context)) continue;
-    if (scanRegexQuantifier(source, index, context)) return true;
-    context.lastClosedGroupHadQuantifier = false;
+export function hasQuantifiedAlternationGroup(source: string, caseInsensitive = false): boolean {
+  const tree = parseRegexSafetyPattern(source, caseInsensitive);
+  return tree ? hasAmbiguousRepeatedAlternation(tree) : false;
+}
+
+export function detectUnsafeQuantifiedGroup(
+  source: string,
+  caseInsensitive = false,
+): UnsafeQuantifiedGroupKind | undefined {
+  const tree = parseRegexSafetyPattern(source, caseInsensitive);
+  if (!tree) return undefined;
+  if (hasNestedRegexRepetition(tree)) return "nested_quantifier";
+  if (hasAmbiguousRepeatedAlternation(tree)) return "ambiguous_alternation";
+  if (hasAmbiguousSequentialRepetition(tree)) return "ambiguous_repetition";
+  return undefined;
+}
+
+function parseRegexSafetyPattern(source: string, caseInsensitive: boolean): RegexSafetyNode | undefined {
+  const state: RegexSafetyParserState = { source, caseInsensitive, index: 0, failed: false };
+  const tree = parseRegexSafetyAlternation(state);
+  if (state.failed || state.index !== source.length) return undefined;
+  return tree;
+}
+
+function parseRegexSafetyAlternation(state: RegexSafetyParserState): RegexSafetyNode {
+  const branches: RegexSafetyNode[] = [parseRegexSafetySequence(state)];
+  while (!state.failed && state.source[state.index] === "|") {
+    state.index += 1;
+    branches.push(parseRegexSafetySequence(state));
+  }
+  if (branches.length === 1) return branches[0];
+  return { kind: "alternation", branches };
+}
+
+function parseRegexSafetySequence(state: RegexSafetyParserState): RegexSafetyNode {
+  const children: RegexSafetyNode[] = [];
+  while (!state.failed && state.index < state.source.length) {
+    const char = state.source[state.index];
+    if (char === "|" || char === ")") break;
+    children.push(parseRegexSafetyQuantifiedAtom(state));
+  }
+  if (children.length === 0) return { kind: "empty" };
+  if (children.length === 1) return children[0];
+  return { kind: "sequence", children };
+}
+
+function parseRegexSafetyQuantifiedAtom(state: RegexSafetyParserState): RegexSafetyNode {
+  const atom = parseRegexSafetyAtom(state);
+  if (state.failed) return atom;
+
+  const quantifier = readRegexQuantifier(state.source, state.index);
+  if (!quantifier) return atom;
+  state.index = quantifier.end;
+  if (state.source[state.index] === "?") state.index += 1;
+  if (quantifier.minimum === 1 && quantifier.maximum === 1) return atom;
+  if (quantifier.maximum === 0) return { kind: "empty" };
+  return {
+    kind: "repetition",
+    child: atom,
+    minimum: quantifier.minimum,
+    maximum: quantifier.maximum,
+    variable: quantifier.minimum !== quantifier.maximum,
+  };
+}
+
+function parseRegexSafetyAtom(state: RegexSafetyParserState): RegexSafetyNode {
+  const char = state.source[state.index];
+  if (char === "(") return parseRegexSafetyGroup(state);
+  if (char === "[") return parseRegexSafetyCharacterClass(state);
+  if (char === "\\") return parseRegexSafetyEscape(state);
+  if (char === ".") {
+    state.index += 1;
+    return { kind: "character", domain: undefined };
+  }
+  if (char === "^" || char === "$") {
+    state.index += 1;
+    return { kind: "empty" };
+  }
+  if (char === undefined || "*+?{})".includes(char)) {
+    state.failed = true;
+    return { kind: "empty" };
   }
 
+  const codePoint = state.source.codePointAt(state.index);
+  if (codePoint === undefined) {
+    state.failed = true;
+    return { kind: "empty" };
+  }
+  state.index += codePoint > 0xffff ? 2 : 1;
+  return { kind: "character", domain: createRegexCharacterDomain(codePoint, state.caseInsensitive) };
+}
+
+function parseRegexSafetyGroup(state: RegexSafetyParserState): RegexSafetyNode {
+  if (state.source.startsWith("(?:", state.index)) state.index += 3;
+  else state.index += 1;
+
+  const child = parseRegexSafetyAlternation(state);
+  if (state.source[state.index] !== ")") {
+    state.failed = true;
+    return child;
+  }
+  state.index += 1;
+  return child;
+}
+
+function parseRegexSafetyCharacterClass(state: RegexSafetyParserState): RegexSafetyNode {
+  const closeIndex = findRegexCharacterClassEnd(state.source, state.index + 1);
+  if (closeIndex === -1) {
+    state.failed = true;
+    return { kind: "empty" };
+  }
+
+  const domain = readRegexCharacterClassDomain(
+    state.source,
+    state.index + 1,
+    closeIndex,
+    state.caseInsensitive,
+  );
+  state.index = closeIndex + 1;
+  return { kind: "character", domain };
+}
+
+function parseRegexSafetyEscape(state: RegexSafetyParserState): RegexSafetyNode {
+  const token = readRegexEscapeToken(state.source, state.index, false, state.caseInsensitive);
+  state.index = token.end;
+  if (token.assertion) return { kind: "empty" };
+  return { kind: "character", domain: token.domain };
+}
+
+function readRegexQuantifier(source: string, index: number): RegexQuantifier | undefined {
+  const char = source[index];
+  if (char === "*") return { minimum: 0, maximum: Number.POSITIVE_INFINITY, end: index + 1 };
+  if (char === "+") return { minimum: 1, maximum: Number.POSITIVE_INFINITY, end: index + 1 };
+  if (char === "?") return { minimum: 0, maximum: 1, end: index + 1 };
+  if (char !== "{") return undefined;
+
+  const closeIndex = source.indexOf("}", index + 1);
+  if (closeIndex === -1) return undefined;
+  const body = source.slice(index + 1, closeIndex);
+  if (!/^\d+(?:,\d*)?$/u.test(body)) return undefined;
+
+  const commaIndex = body.indexOf(",");
+  if (commaIndex === -1) {
+    const exact = Number(body);
+    return { minimum: exact, maximum: exact, end: closeIndex + 1 };
+  }
+  const minimum = Number(body.slice(0, commaIndex));
+  const maximumSource = body.slice(commaIndex + 1);
+  const maximum = maximumSource.length === 0 ? Number.POSITIVE_INFINITY : Number(maximumSource);
+  return { minimum, maximum, end: closeIndex + 1 };
+}
+
+function findRegexCharacterClassEnd(source: string, start: number): number {
+  let escaped = false;
+  for (let index = start; index < source.length; index += 1) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (source[index] === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (source[index] === "]") return index;
+  }
+  return -1;
+}
+
+function readRegexCharacterClassDomain(
+  source: string,
+  start: number,
+  end: number,
+  caseInsensitive: boolean,
+): RegexCharacterDomain | undefined {
+  if (source[start] === "^") return undefined;
+
+  const ranges: RegexCharacterRange[] = [];
+  let index = start;
+  while (index < end) {
+    const left = readRegexCharacterClassToken(source, index);
+    if (!left.domain) return undefined;
+    index = left.end;
+    if (source[index] === "-" && index + 1 < end) {
+      const right = readRegexCharacterClassToken(source, index + 1);
+      if (left.singleton === undefined || right.singleton === undefined || left.singleton > right.singleton) {
+        return undefined;
+      }
+      ranges.push({ start: left.singleton, end: right.singleton });
+      index = right.end;
+      continue;
+    }
+    ranges.push(...left.domain);
+  }
+
+  const domain = mergeRegexCharacterRanges(ranges);
+  return caseInsensitive ? addAsciiCaseVariants(domain) : domain;
+}
+
+function readRegexCharacterClassToken(source: string, index: number): RegexCharacterClassToken {
+  if (source[index] === "\\") {
+    const token = readRegexEscapeToken(source, index, true, false);
+    return { end: token.end, domain: token.domain, singleton: token.singleton };
+  }
+
+  const codePoint = source.codePointAt(index);
+  if (codePoint === undefined) return { end: index + 1, domain: undefined, singleton: undefined };
+  const end = index + (codePoint > 0xffff ? 2 : 1);
+  return { end, domain: [{ start: codePoint, end: codePoint }], singleton: codePoint };
+}
+
+function readRegexEscapeToken(
+  source: string,
+  index: number,
+  inCharacterClass: boolean,
+  caseInsensitive: boolean,
+): RegexEscapeToken {
+  const escaped = source[index + 1];
+  const end = findRegexEscapeEnd(source, index, escaped);
+  if (!inCharacterClass && (escaped === "b" || escaped === "B")) {
+    return { end, assertion: true, domain: [], singleton: undefined };
+  }
+
+  const shorthandDomain = regexShorthandDomain(escaped);
+  if (shorthandDomain) return { end, assertion: false, domain: shorthandDomain, singleton: undefined };
+  const singleton = decodeRegexEscapeCodePoint(source, index, escaped, inCharacterClass);
+  const domain = singleton === undefined ? undefined : createRegexCharacterDomain(singleton, caseInsensitive);
+  return { end, assertion: false, domain, singleton };
+}
+
+function findRegexEscapeEnd(source: string, index: number, escaped: string | undefined): number {
+  if (escaped === undefined) return source.length;
+  if ((escaped === "p" || escaped === "P") && source[index + 2] === "{") {
+    const closeIndex = source.indexOf("}", index + 3);
+    return closeIndex === -1 ? source.length : closeIndex + 1;
+  }
+  if (escaped === "u" && source[index + 2] === "{") {
+    const closeIndex = source.indexOf("}", index + 3);
+    return closeIndex === -1 ? source.length : closeIndex + 1;
+  }
+  if (escaped === "u") return Math.min(source.length, index + 6);
+  if (escaped === "x") return Math.min(source.length, index + 4);
+  if (escaped === "c") return Math.min(source.length, index + 3);
+  return Math.min(source.length, index + 2);
+}
+
+function regexShorthandDomain(escaped: string | undefined): RegexCharacterDomain | undefined {
+  if (escaped === "d") return [{ start: 0x30, end: 0x39 }];
+  if (escaped === "w") {
+    return [
+      { start: 0x30, end: 0x39 },
+      { start: 0x41, end: 0x5a },
+      { start: 0x5f, end: 0x5f },
+      { start: 0x61, end: 0x7a },
+    ];
+  }
+  if (escaped === "s") {
+    return [
+      { start: 0x09, end: 0x0d },
+      { start: 0x20, end: 0x20 },
+      { start: 0xa0, end: 0xa0 },
+      { start: 0x1680, end: 0x1680 },
+      { start: 0x2000, end: 0x200a },
+      { start: 0x2028, end: 0x2029 },
+      { start: 0x202f, end: 0x202f },
+      { start: 0x205f, end: 0x205f },
+      { start: 0x3000, end: 0x3000 },
+      { start: 0xfeff, end: 0xfeff },
+    ];
+  }
+  return undefined;
+}
+
+function decodeRegexEscapeCodePoint(
+  source: string,
+  index: number,
+  escaped: string | undefined,
+  inCharacterClass: boolean,
+): number | undefined {
+  if (escaped === undefined) return undefined;
+  const simpleEscapes: Readonly<Record<string, number>> = {
+    "0": 0x00,
+    b: inCharacterClass ? 0x08 : 0x62,
+    f: 0x0c,
+    n: 0x0a,
+    r: 0x0d,
+    t: 0x09,
+    v: 0x0b,
+  };
+  if (simpleEscapes[escaped] !== undefined) return simpleEscapes[escaped];
+  if (escaped === "x") return parseRegexHexEscape(source.slice(index + 2, index + 4));
+  if (escaped === "u" && source[index + 2] === "{") {
+    const closeIndex = source.indexOf("}", index + 3);
+    return closeIndex === -1 ? undefined : parseRegexHexEscape(source.slice(index + 3, closeIndex));
+  }
+  if (escaped === "u") return parseRegexHexEscape(source.slice(index + 2, index + 6));
+  if (escaped === "c") {
+    const controlCodePoint = source.codePointAt(index + 2);
+    return controlCodePoint === undefined ? undefined : controlCodePoint % 32;
+  }
+  if ("dDsSwWpPkK123456789".includes(escaped)) return undefined;
+  return escaped.codePointAt(0);
+}
+
+function parseRegexHexEscape(source: string): number | undefined {
+  if (!/^[\da-f]+$/iu.test(source)) return undefined;
+  const codePoint = Number.parseInt(source, 16);
+  return Number.isFinite(codePoint) ? codePoint : undefined;
+}
+
+function createRegexCharacterDomain(codePoint: number, caseInsensitive: boolean): RegexCharacterDomain | undefined {
+  const domain = [{ start: codePoint, end: codePoint }];
+  return caseInsensitive ? addAsciiCaseVariants(domain) : domain;
+}
+
+function addAsciiCaseVariants(domain: RegexCharacterDomain): RegexCharacterDomain | undefined {
+  const ranges: RegexCharacterRange[] = [...domain];
+  for (const range of domain) {
+    if (range.end > 0x7f) return undefined;
+    const upperStart = Math.max(range.start, 0x41);
+    const upperEnd = Math.min(range.end, 0x5a);
+    if (upperStart <= upperEnd) ranges.push({ start: upperStart + 0x20, end: upperEnd + 0x20 });
+    const lowerStart = Math.max(range.start, 0x61);
+    const lowerEnd = Math.min(range.end, 0x7a);
+    if (lowerStart <= lowerEnd) ranges.push({ start: lowerStart - 0x20, end: lowerEnd - 0x20 });
+  }
+  return mergeRegexCharacterRanges(ranges);
+}
+
+function mergeRegexCharacterRanges(ranges: readonly RegexCharacterRange[]): RegexCharacterDomain {
+  const sorted = [...ranges].sort(compareRegexCharacterRanges);
+  const merged: RegexCharacterRange[] = [];
+  for (const range of sorted) {
+    const previous = merged.at(-1);
+    if (!previous || range.start > previous.end + 1) {
+      merged.push(range);
+      continue;
+    }
+    if (range.end > previous.end) merged[merged.length - 1] = { start: previous.start, end: range.end };
+  }
+  return merged;
+}
+
+function compareRegexCharacterRanges(left: RegexCharacterRange, right: RegexCharacterRange): number {
+  if (left.start !== right.start) return left.start - right.start;
+  return left.end - right.end;
+}
+
+function regexNodeCanMatchEmpty(node: RegexSafetyNode): boolean {
+  if (node.kind === "empty") return true;
+  if (node.kind === "character") return false;
+  if (node.kind === "repetition") return node.minimum === 0 || regexNodeCanMatchEmpty(node.child);
+  if (node.kind === "alternation") {
+    for (const branch of node.branches) if (regexNodeCanMatchEmpty(branch)) return true;
+    return false;
+  }
+  for (const child of node.children) if (!regexNodeCanMatchEmpty(child)) return false;
+  return true;
+}
+
+function regexNodeFirstDomain(node: RegexSafetyNode): RegexCharacterDomain | undefined {
+  if (node.kind === "empty") return [];
+  if (node.kind === "character") return node.domain;
+  if (node.kind === "repetition") return regexNodeFirstDomain(node.child);
+  if (node.kind === "alternation") return unionRegexNodeDomains(node.branches, false);
+  return unionRegexNodeDomains(node.children, true);
+}
+
+function unionRegexNodeDomains(
+  nodes: readonly RegexSafetyNode[],
+  stopAfterRequiredNode: boolean,
+): RegexCharacterDomain | undefined {
+  const ranges: RegexCharacterRange[] = [];
+  for (const node of nodes) {
+    const domain = regexNodeFirstDomain(node);
+    if (!domain) return undefined;
+    ranges.push(...domain);
+    if (stopAfterRequiredNode && !regexNodeCanMatchEmpty(node)) break;
+  }
+  return mergeRegexCharacterRanges(ranges);
+}
+
+function regexDomainsAreProvablyDisjoint(
+  left: RegexCharacterDomain | undefined,
+  right: RegexCharacterDomain | undefined,
+): boolean {
+  if (!left || !right) return false;
+  for (const leftRange of left) {
+    for (const rightRange of right) {
+      if (leftRange.start <= rightRange.end && rightRange.start <= leftRange.end) return false;
+    }
+  }
+  return true;
+}
+
+function regexNodeHasRepetition(node: RegexSafetyNode): boolean {
+  if (node.kind === "repetition") return true;
+  if (node.kind === "sequence") {
+    for (const child of node.children) if (regexNodeHasRepetition(child)) return true;
+  }
+  if (node.kind === "alternation") {
+    for (const branch of node.branches) if (regexNodeHasRepetition(branch)) return true;
+  }
   return false;
 }
 
-function createRegexGroupScanContext(): RegexGroupScanContext {
-  return { groupStack: [], escaped: false, inCharacterClass: false, lastClosedGroupHadQuantifier: false };
-}
-
-function scanRegexEscape(char: string, context: RegexGroupScanContext): boolean {
-  if (context.escaped) {
-    context.escaped = false;
-    context.lastClosedGroupHadQuantifier = false;
-    return true;
+function hasNestedRegexRepetition(node: RegexSafetyNode): boolean {
+  if (node.kind === "repetition") {
+    if (regexNodeHasRepetition(node.child)) return true;
+    return hasNestedRegexRepetition(node.child);
   }
-
-  if (char !== "\\") return false;
-  context.escaped = true;
-  context.lastClosedGroupHadQuantifier = false;
-  return true;
-}
-
-function scanRegexCharacterClass(char: string, context: RegexGroupScanContext): boolean {
-  if (char === "[" && !context.inCharacterClass) {
-    context.inCharacterClass = true;
-    context.lastClosedGroupHadQuantifier = false;
-    return true;
+  if (node.kind === "sequence") {
+    for (const child of node.children) if (hasNestedRegexRepetition(child)) return true;
   }
-
-  if (char !== "]" || !context.inCharacterClass) return false;
-  context.inCharacterClass = false;
-  return true;
-}
-
-function scanRegexGroupBoundary(char: string, context: RegexGroupScanContext): boolean {
-  if (char === "(") {
-    context.groupStack.push({ hasQuantifier: false });
-    context.lastClosedGroupHadQuantifier = false;
-    return true;
+  if (node.kind === "alternation") {
+    for (const branch of node.branches) if (hasNestedRegexRepetition(branch)) return true;
   }
-
-  if (char !== ")") return false;
-  context.lastClosedGroupHadQuantifier = context.groupStack.pop()?.hasQuantifier === true;
-  return true;
+  return false;
 }
 
-function scanRegexQuantifier(source: string, index: number, context: RegexGroupScanContext): boolean {
-  if (!isRegexQuantifierStart(source, index)) return false;
-  if (context.lastClosedGroupHadQuantifier) return true;
+function hasAmbiguousRepeatedAlternation(node: RegexSafetyNode): boolean {
+  if (node.kind === "repetition") {
+    if (hasAmbiguousAlternationWithin(node.child)) return true;
+    return hasAmbiguousRepeatedAlternation(node.child);
+  }
+  if (node.kind === "sequence") {
+    for (const child of node.children) if (hasAmbiguousRepeatedAlternation(child)) return true;
+  }
+  if (node.kind === "alternation") {
+    for (const branch of node.branches) if (hasAmbiguousRepeatedAlternation(branch)) return true;
+  }
+  return false;
+}
 
-  markCurrentRegexGroupQuantified(context.groupStack);
-  context.lastClosedGroupHadQuantifier = false;
+function hasAmbiguousAlternationWithin(node: RegexSafetyNode): boolean {
+  if (node.kind === "alternation") {
+    if (regexAlternationBranchesOverlap(node)) return true;
+    for (const branch of node.branches) if (hasAmbiguousAlternationWithin(branch)) return true;
+  }
+  if (node.kind === "sequence") {
+    for (const child of node.children) if (hasAmbiguousAlternationWithin(child)) return true;
+  }
+  if (node.kind === "repetition") return hasAmbiguousAlternationWithin(node.child);
+  return false;
+}
+
+function regexAlternationBranchesOverlap(node: RegexAlternationNode): boolean {
+  for (const branch of node.branches) if (regexNodeCanMatchEmpty(branch)) return true;
+  for (let leftIndex = 0; leftIndex < node.branches.length; leftIndex += 1) {
+    const leftDomain = regexNodeFirstDomain(node.branches[leftIndex]);
+    for (let rightIndex = leftIndex + 1; rightIndex < node.branches.length; rightIndex += 1) {
+      const rightDomain = regexNodeFirstDomain(node.branches[rightIndex]);
+      if (!regexDomainsAreProvablyDisjoint(leftDomain, rightDomain)) return true;
+    }
+  }
+  return false;
+}
+
+function hasAmbiguousSequentialRepetition(node: RegexSafetyNode): boolean {
+  if (node.kind === "sequence") return regexSequenceHasAmbiguousRepetition(node);
+  if (node.kind === "alternation") {
+    for (const branch of node.branches) if (hasAmbiguousSequentialRepetition(branch)) return true;
+  }
+  if (node.kind === "repetition") return hasAmbiguousSequentialRepetition(node.child);
+  return false;
+}
+
+function regexSequenceHasAmbiguousRepetition(node: RegexSequenceNode): boolean {
+  const previousRepetitions: RegexRepetitionNode[] = [];
+  for (const child of node.children) {
+    if (hasAmbiguousSequentialRepetition(child)) return true;
+    const currentRepetitions = collectVariableRegexRepetitions(child);
+    if (regexRepetitionCollectionsOverlap(previousRepetitions, currentRepetitions)) return true;
+    previousRepetitions.push(...currentRepetitions);
+  }
+  return false;
+}
+
+function collectVariableRegexRepetitions(node: RegexSafetyNode): RegexRepetitionNode[] {
+  if (node.kind === "repetition") return node.variable ? [node] : [];
+  const repetitions: RegexRepetitionNode[] = [];
+  if (node.kind === "sequence") {
+    for (const child of node.children) repetitions.push(...collectVariableRegexRepetitions(child));
+  }
+  if (node.kind === "alternation") {
+    for (const branch of node.branches) repetitions.push(...collectVariableRegexRepetitions(branch));
+  }
+  return repetitions;
+}
+
+function regexRepetitionCollectionsOverlap(
+  left: readonly RegexRepetitionNode[],
+  right: readonly RegexRepetitionNode[],
+): boolean {
+  for (const leftRepetition of left) {
+    const leftDomain = regexNodeFirstDomain(leftRepetition.child);
+    for (const rightRepetition of right) {
+      const rightDomain = regexNodeFirstDomain(rightRepetition.child);
+      if (!regexDomainsAreProvablyDisjoint(leftDomain, rightDomain)) return true;
+    }
+  }
   return false;
 }
 
@@ -514,24 +1024,6 @@ export function validateCustomRedactionPatternSyntax(source: string): CustomReda
 export function isBackreferenceEscape(source: string, index: number): boolean {
   const char = source[index];
   return /[1-9]/u.test(char) || (char === "k" && source[index + 1] === "<");
-}
-
-export function isRegexQuantifierStart(source: string, index: number): boolean {
-  const char = source[index];
-  if (char === "?" && source[index - 1] === "(") return false;
-  return char === "*" || char === "+" || char === "?" || isBraceQuantifierStart(source, index);
-}
-
-export function isBraceQuantifierStart(source: string, index: number): boolean {
-  if (source[index] !== "{") return false;
-  const closeIndex = source.indexOf("}", index + 1);
-  if (closeIndex === -1) return false;
-  return /^\d+(?:,\d*)?$/u.test(source.slice(index + 1, closeIndex));
-}
-
-export function markCurrentRegexGroupQuantified(groupStack: RegexGroupScanState[]): void {
-  const currentGroup = groupStack.at(-1);
-  if (currentGroup) currentGroup.hasQuantifier = true;
 }
 
 export function addCustomRedactionPatternIndex(
@@ -569,6 +1061,20 @@ export function createCustomRedactionPatternNestedQuantifierIssue(): CustomRedac
   return {
     code: "custom_redaction_pattern_nested_quantifier",
     message: "Custom redaction patterns must not repeat a group that already contains a quantifier.",
+  };
+}
+
+export function createCustomRedactionPatternAmbiguousAlternationIssue(): CustomRedactionPatternSafetyIssue {
+  return {
+    code: "custom_redaction_pattern_ambiguous_alternation",
+    message: "Repeated custom redaction alternatives must begin with provably disjoint characters.",
+  };
+}
+
+export function createCustomRedactionPatternAmbiguousRepetitionIssue(): CustomRedactionPatternSafetyIssue {
+  return {
+    code: "custom_redaction_pattern_ambiguous_repetition",
+    message: "Custom redaction patterns must not combine repetitions with overlapping starting characters.",
   };
 }
 
