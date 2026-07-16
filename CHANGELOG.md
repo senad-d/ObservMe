@@ -42,6 +42,7 @@
 
 ### Fixed
 
+- Simplified Pi SemVer validation into focused numeric-core and metadata checks, and made missing project-path component reversal explicit.
 - Accepted supported stable Pi versions with SemVer build metadata while preserving bounded diagnostics and prerelease rejection.
 - Rejected prerelease Pi builds excluded by the declared stable compatibility range before extension registration.
 - Applied one control-safe 64-row/8,192-character policy to every `/obs` notification and capped query result counts at configuration and runtime boundaries.

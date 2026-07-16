@@ -315,7 +315,8 @@ async function resolveCanonicalPathWithMissingComponents(candidatePath: string):
   while (true) {
     try {
       const canonicalExistingPath = await realpath(currentPath);
-      return resolve(canonicalExistingPath, ...missingComponents.reverse());
+      missingComponents.reverse();
+      return resolve(canonicalExistingPath, ...missingComponents);
     } catch (error) {
       if (!isMissingPathError(error) || await pathEntryExists(currentPath)) throw error;
       const parentPath = dirname(currentPath);

@@ -9,8 +9,8 @@ export const SUPPORTED_PI_VERSION_RANGE =
 
 const compatibilityErrorPrefix = "ObservMe/Pi API compatibility error";
 const MAX_DETECTED_PI_VERSION_LENGTH = 128;
-const piVersionPattern =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+const piVersionCorePattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+const semanticVersionIdentifierPattern = /^[0-9A-Za-z-]+$/u;
 const numericIdentifierPattern = /^\d+$/u;
 const requiredPiMethods = ["on", "registerCommand", "appendEntry", "getThinkingLevel"] as const;
 
@@ -70,8 +70,22 @@ interface PiVersion {
 }
 
 function parsePiVersion(version: string): PiVersion | undefined {
-  const match = piVersionPattern.exec(version);
-  if (!match || hasInvalidNumericPrereleaseIdentifier(match[4])) return undefined;
+  const buildSeparatorIndex = version.indexOf("+");
+  const versionAndPrerelease = buildSeparatorIndex === -1 ? version : version.slice(0, buildSeparatorIndex);
+  const build = buildSeparatorIndex === -1 ? undefined : version.slice(buildSeparatorIndex + 1);
+  if (build !== undefined && !hasValidSemanticVersionIdentifiers(build, true)) return undefined;
+
+  const prereleaseSeparatorIndex = versionAndPrerelease.indexOf("-");
+  const coreVersion = prereleaseSeparatorIndex === -1
+    ? versionAndPrerelease
+    : versionAndPrerelease.slice(0, prereleaseSeparatorIndex);
+  const prerelease = prereleaseSeparatorIndex === -1
+    ? undefined
+    : versionAndPrerelease.slice(prereleaseSeparatorIndex + 1);
+  if (prerelease !== undefined && !hasValidSemanticVersionIdentifiers(prerelease, false)) return undefined;
+
+  const match = piVersionCorePattern.exec(coreVersion);
+  if (!match) return undefined;
 
   const major = Number(match[1]);
   const minor = Number(match[2]);
@@ -84,19 +98,20 @@ function parsePiVersion(version: string): PiVersion | undefined {
     major,
     minor,
     patch,
-    ...(match[4] === undefined ? {} : { prerelease: match[4] }),
+    ...(prerelease === undefined ? {} : { prerelease }),
   };
 }
 
-function hasInvalidNumericPrereleaseIdentifier(prerelease: string | undefined): boolean {
-  if (prerelease === undefined) return false;
-
-  for (const identifier of prerelease.split(".")) {
-    if (identifier.length > 1 && identifier.startsWith("0") && numericIdentifierPattern.test(identifier)) {
-      return true;
-    }
+function hasValidSemanticVersionIdentifiers(value: string, allowLeadingZeros: boolean): boolean {
+  for (const identifier of value.split(".")) {
+    if (!semanticVersionIdentifierPattern.test(identifier)) return false;
+    if (!allowLeadingZeros && hasInvalidNumericIdentifier(identifier)) return false;
   }
-  return false;
+  return true;
+}
+
+function hasInvalidNumericIdentifier(identifier: string): boolean {
+  return identifier.length > 1 && identifier.startsWith("0") && numericIdentifierPattern.test(identifier);
 }
 
 function comparePiVersions(left: PiVersion, right: PiVersion): number {

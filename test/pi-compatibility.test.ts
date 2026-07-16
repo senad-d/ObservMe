@@ -28,7 +28,12 @@ test("Pi compatibility policy accepts the declared minimum and release-resolved 
 test("Pi compatibility policy accepts supported stable versions with build metadata", () => {
   const pi = createCompatibleApi();
 
-  for (const version of ["0.80.5+build.1", "0.80.6+sha.abcdef", "0.80.42+build.001"]) {
+  for (const version of [
+    "0.80.5+build.1",
+    "0.80.6+sha.abcdef",
+    "0.80.42+build.001",
+    "0.80.5+build-with-hyphen",
+  ]) {
     assert.doesNotThrow(() => assertObservMePiCompatibility(pi, version));
   }
 });
@@ -89,7 +94,16 @@ test("Pi compatibility policy rejects versions outside the supported minor line"
 test("Pi compatibility policy rejects malformed versions without echoing unbounded input", () => {
   const pi = createCompatibleApi();
 
-  for (const malformed of ["v0.80.5", "0.80.05", "0.80.5-01", "0.80.5+", "0.80.5+build..1"]) {
+  for (const malformed of [
+    "v0.80.5",
+    "0.80.05",
+    "0.80.5-01",
+    "0.80.5+",
+    "0.80.5+build..1",
+    "0.80.5-alpha..1",
+    "0.80.5-alpha+build+2",
+    "0.80.5+build_1",
+  ]) {
     assert.throws(
       () => assertObservMePiCompatibility(pi, malformed),
       /requires @earendil-works\/pi-coding-agent >=0\.80\.5 <0\.81\.0; detected Pi unknown/u,
