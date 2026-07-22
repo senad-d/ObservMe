@@ -65,8 +65,8 @@ import type { AgentWaitJoinState, SubagentSpawnState } from "./subagent-types.ts
 
 export const OBSERVME_SEMCONV_VERSION = "0.1.0";
 
-const piApiCompatibilityErrorMessage =
-  "ObservMe/Pi API compatibility error: expected Pi ExtensionAPI with on(eventName, handler) before registering ObservMe handlers.";
+const piApiCapabilityErrorMessage =
+  "ObservMe/Pi API capability error: expected Pi ExtensionAPI with on(eventName, handler) before registering ObservMe handlers.";
 const eventRegistrationOrder = [
   "session_start",
   "session_info_changed",
@@ -143,10 +143,10 @@ export class SerializedLifecycleQueue {
 }
 
 export function resolveObservMePiApi(pi: unknown): ObservMePiApi {
-  if (!isRecord(pi)) throw new TypeError(piApiCompatibilityErrorMessage);
+  if (!isRecord(pi)) throw new TypeError(piApiCapabilityErrorMessage);
 
   const on = pi.on;
-  if (typeof on !== "function") throw new TypeError(piApiCompatibilityErrorMessage);
+  if (typeof on !== "function") throw new TypeError(piApiCapabilityErrorMessage);
 
   const appendEntry = typeof pi.appendEntry === "function"
     ? (pi.appendEntry.bind(pi) as NonNullable<ObservMePiApi["appendEntry"]>)

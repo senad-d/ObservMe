@@ -76,9 +76,9 @@
   },
   "observmeCompatibility": {
     "pi": {
-      "minimumVersion": "0.80.5",
-      "releaseTestedVersion": "0.80.6",
-      "supportedRange": ">=0.80.5 <0.81.0"
+      "earliestTestedVersion": "0.80.5",
+      "releaseTestedVersion": "0.81.1",
+      "runtimePolicy": "required-api-capabilities"
     }
   },
   "pi": {
@@ -96,8 +96,8 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.80.6",
-    "@earendil-works/pi-coding-agent": "0.80.6",
+    "@earendil-works/pi-ai": "0.81.1",
+    "@earendil-works/pi-coding-agent": "0.81.1",
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.1",
     "c8": "^11.0.0",

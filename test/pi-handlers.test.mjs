@@ -352,10 +352,10 @@ test("registerHandlers validates Pi event API shape before registration", () => 
 
   assert.throws(
     () => registerHandlers(pi),
-    /ObservMe\/Pi API compatibility error: expected Pi ExtensionAPI with on\(eventName, handler\) before registering ObservMe handlers\./u,
+    /ObservMe\/Pi API capability error: expected Pi ExtensionAPI with on\(eventName, handler\) before registering ObservMe handlers\./u,
   );
   assert.equal(pi.handlers.size, 0);
-  assert.throws(() => registerHandlers(undefined), /ObservMe\/Pi API compatibility error/u);
+  assert.throws(() => registerHandlers(undefined), /ObservMe\/Pi API capability error/u);
 });
 
 test("registerHandlers propagates Pi event registration failures", () => {

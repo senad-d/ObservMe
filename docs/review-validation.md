@@ -93,6 +93,16 @@ This sanitized record covers the production active-agent lease release candidate
 
 Post-run cleanup check found no containers or networks labeled for the active-agent lease integration and no `observme-grafana-it-*` containers or networks. Release remains blocked on the unrelated broad Grafana-stack validation unless the release owner accepts the explicitly allowed pre-existing blocker; all lease-specific release criteria passed.
 
+## Pi 0.81.1 compatibility validation — 2026-07-22
+
+This sanitized record covers the compatibility-policy correction against exact `@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai` 0.81.1 development dependencies on local Node.js v26.0.0 and npm 11.12.1. No project, model, Grafana, or registry credentials were required or printed.
+
+| Command | Result | Evidence and notes |
+| --- | --- | --- |
+| `npm run validate:pi-compatibility` | Pass | Source/test typechecks, compatibility and event-mapping tests, packaged-install smoke, handler and lifecycle smoke, and the real Pi RPC runtime passed against Pi 0.81.1. |
+| `npm run validate` | Pass | ESLint, formatting, script checks, 618 unit/contract tests, package-content validation, packaged-install smoke, handler smoke, Pi lifecycle smoke, and real Pi runtime smoke passed. |
+| `npm audit --omit=dev` | Pass | The production dependency tree reported no vulnerabilities. |
+
 ## Review-closure evidence categories
 
 - **Read-only/check-only** — commands that inspect, type-check, lint, audit, run tests, dry-run packaging, or smoke local deterministic fixtures without publishing or writing tracked files.

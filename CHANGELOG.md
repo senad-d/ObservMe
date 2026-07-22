@@ -21,8 +21,9 @@
 
 ### Changed
 
+- Raised the release-tested Pi and exact compatibility CI target to 0.81.1 while retaining 0.80.5 as the earliest validated target.
 - Made the 0.1.5 hardening patch self-contained with explicit review units, all imported production modules included, and unrelated specification history preserved.
-- Established a typed Pi event registration contract, removed non-event legacy registrations, pinned the release-resolved Pi API, and added minimum/release compatibility validation with pre-registration diagnostics.
+- Established a typed Pi event registration contract, removed non-event legacy registrations, pinned the release-tested Pi API for validation, and added capability-based pre-registration diagnostics.
 - Centralized embedded-credential Grafana URL diagnostics so configuration validation, readiness checks, URL construction, and transports share one safe failure class and operator guidance.
 - Documented credential-free Grafana base URLs and the fail-closed canonical project-file boundary across configuration, security, query, and troubleshooting guidance.
 - Completed production active-agent lease documentation, raw-query migration guidance, GitHub Actions/self-hosted clock and cleanup runbooks, missing/expired-lease troubleshooting, Collector restart semantics, and sanitized release-validation evidence.
@@ -42,9 +43,8 @@
 
 ### Fixed
 
-- Simplified Pi SemVer validation into focused numeric-core and metadata checks, and made missing project-path component reversal explicit.
-- Accepted supported stable Pi versions with SemVer build metadata while preserving bounded diagnostics and prerelease rejection.
-- Rejected prerelease Pi builds excluded by the declared stable compatibility range before extension registration.
+- Removed Pi version gating from extension startup entirely; tested versions are evidence only, essential ExtensionAPI capabilities are checked before registration, and optional APIs remain feature-detected.
+- Made missing project-path component reversal explicit.
 - Applied one control-safe 64-row/8,192-character policy to every `/obs` notification and capped query result counts at configuration and runtime boundaries.
 - Coupled canonical project config, `.env`, and starter-config I/O to identity-verified file handles so concurrent symlink and ancestor swaps fail closed without exposing external paths.
 - Rejected credentials embedded in Grafana base URLs during config validation, query readiness, and transport preflight without exposing their values.

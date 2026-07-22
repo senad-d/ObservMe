@@ -2,43 +2,43 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
-  MINIMUM_SUPPORTED_PI_VERSION,
+  EARLIEST_TESTED_PI_VERSION,
+  PI_RUNTIME_COMPATIBILITY_POLICY,
   RELEASE_TESTED_PI_VERSION,
-  SUPPORTED_PI_VERSION_RANGE,
-  assertObservMePiCompatibility,
+  assertObservMePiCapabilities,
 } from "../src/pi/compatibility.ts";
 
 function createCompatibleApi() {
   return {
     on: () => undefined,
     registerCommand: () => undefined,
-    appendEntry: () => undefined,
-    getThinkingLevel: () => "medium",
   };
 }
 
-test("Pi compatibility policy accepts the declared minimum and release-resolved versions", () => {
+test("Pi runtime preflight is version-independent", async () => {
   const pi = createCompatibleApi();
-
-  assert.doesNotThrow(() => assertObservMePiCompatibility(pi, MINIMUM_SUPPORTED_PI_VERSION));
-  assert.doesNotThrow(() => assertObservMePiCompatibility(pi, RELEASE_TESTED_PI_VERSION));
-  assert.equal(SUPPORTED_PI_VERSION_RANGE, ">=0.80.5 <0.81.0");
-});
-
-test("Pi compatibility policy accepts supported stable versions with build metadata", () => {
-  const pi = createCompatibleApi();
+  const invokeWithIgnoredVersion = assertObservMePiCapabilities as unknown as (
+    api: unknown,
+    ignoredVersion: unknown,
+  ) => void;
 
   for (const version of [
-    "0.80.5+build.1",
-    "0.80.6+sha.abcdef",
-    "0.80.42+build.001",
-    "0.80.5+build-with-hyphen",
+    "0.1.0",
+    "0.81.1-rc.1",
+    "1.0.0",
+    "not-a-version",
+    `future-${"x".repeat(512)}`,
+    undefined,
   ]) {
-    assert.doesNotThrow(() => assertObservMePiCompatibility(pi, version));
+    assert.doesNotThrow(() => invokeWithIgnoredVersion(pi, version));
   }
+
+  const source = await readFile(new URL("../src/pi/compatibility.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /import\s*\{\s*VERSION/u);
+  assert.doesNotMatch(source, /parsePiVersion|supportedRange|minimumVersion/u);
 });
 
-test("package metadata pins release tooling while retaining Pi-mandated wildcard peers", async () => {
+test("package metadata separates tested versions from the runtime capability policy", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as {
     devDependencies?: Record<string, string>;
     observmeCompatibility?: { pi?: Record<string, string> };
@@ -46,9 +46,9 @@ test("package metadata pins release tooling while retaining Pi-mandated wildcard
   };
 
   assert.deepEqual(packageJson.observmeCompatibility?.pi, {
-    minimumVersion: MINIMUM_SUPPORTED_PI_VERSION,
+    earliestTestedVersion: EARLIEST_TESTED_PI_VERSION,
     releaseTestedVersion: RELEASE_TESTED_PI_VERSION,
-    supportedRange: SUPPORTED_PI_VERSION_RANGE,
+    runtimePolicy: PI_RUNTIME_COMPATIBILITY_POLICY,
   });
   assert.equal(packageJson.devDependencies?.["@earendil-works/pi-coding-agent"], RELEASE_TESTED_PI_VERSION);
   assert.equal(packageJson.devDependencies?.["@earendil-works/pi-ai"], RELEASE_TESTED_PI_VERSION);
@@ -56,88 +56,24 @@ test("package metadata pins release tooling while retaining Pi-mandated wildcard
   assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-ai"], "*");
 });
 
-test("Pi compatibility policy rejects prereleases below or within the supported stable line", () => {
-  const pi = createCompatibleApi();
-
-  for (const prerelease of ["0.80.5-beta.1", "0.80.6-rc.1", "0.80.6-rc.1+build.2"]) {
-    assert.throws(
-      () => assertObservMePiCompatibility(pi, prerelease),
-      new RegExp(
-        `requires @earendil-works/pi-coding-agent >=0\\.80\\.5 <0\\.81\\.0; detected Pi ${prerelease.replaceAll(".", "\\.").replaceAll("+", "\\+")}`,
-        "u",
-      ),
-    );
-  }
+test("optional Pi APIs do not block ObservMe startup", () => {
+  assert.doesNotThrow(() => assertObservMePiCapabilities(createCompatibleApi()));
 });
 
-test("Pi compatibility policy rejects versions outside the supported minor line", () => {
-  const pi = createCompatibleApi();
-
-  assert.throws(
-    () => assertObservMePiCompatibility(pi, "0.80.2"),
-    /requires @earendil-works\/pi-coding-agent >=0\.80\.5 <0\.81\.0; detected Pi 0\.80\.2/u,
-  );
-  assert.throws(
-    () => assertObservMePiCompatibility(pi, "0.81.0"),
-    /requires @earendil-works\/pi-coding-agent >=0\.80\.5 <0\.81\.0; detected Pi 0\.81\.0/u,
-  );
-  assert.throws(
-    () => assertObservMePiCompatibility(pi, "0.80.4+build.1"),
-    /requires @earendil-works\/pi-coding-agent >=0\.80\.5 <0\.81\.0; detected Pi 0\.80\.4\+build\.1/u,
-  );
-  assert.throws(
-    () => assertObservMePiCompatibility(pi, "0.81.0+build.1"),
-    /requires @earendil-works\/pi-coding-agent >=0\.80\.5 <0\.81\.0; detected Pi 0\.81\.0\+build\.1/u,
-  );
-});
-
-test("Pi compatibility policy rejects malformed versions without echoing unbounded input", () => {
-  const pi = createCompatibleApi();
-
-  for (const malformed of [
-    "v0.80.5",
-    "0.80.05",
-    "0.80.5-01",
-    "0.80.5+",
-    "0.80.5+build..1",
-    "0.80.5-alpha..1",
-    "0.80.5-alpha+build+2",
-    "0.80.5+build_1",
-  ]) {
-    assert.throws(
-      () => assertObservMePiCompatibility(pi, malformed),
-      /requires @earendil-works\/pi-coding-agent >=0\.80\.5 <0\.81\.0; detected Pi unknown/u,
-    );
-  }
-
-  const privateMarker = "private-unbounded-version-marker";
-  const malformedUnboundedVersion = `0.80.5+${"x".repeat(512)}_${privateMarker}`;
-  let error: unknown;
-  try {
-    assertObservMePiCompatibility(pi, malformedUnboundedVersion);
-  } catch (caught) {
-    error = caught;
-  }
-
-  assert.ok(error instanceof TypeError);
-  assert.match(error.message, /detected Pi unknown/u);
-  assert.match(error.message, /requires @earendil-works\/pi-coding-agent >=0\.80\.5 <0\.81\.0/u);
-  assert.doesNotMatch(error.message, new RegExp(privateMarker, "u"));
-  assert.ok(error.message.length < 512);
-});
-
-test("Pi compatibility policy reports required APIs once without inspecting unsafe values", () => {
+test("Pi capability preflight reports only essential missing methods without inspecting values", () => {
   const unsafeValue = "token=private-compatibility-value";
   let error: unknown;
 
   try {
-    assertObservMePiCompatibility({ on: () => undefined, registerCommand: unsafeValue }, RELEASE_TESTED_PI_VERSION);
+    assertObservMePiCapabilities({ on: () => undefined, registerCommand: unsafeValue });
   } catch (caught) {
     error = caught;
   }
 
   assert.ok(error instanceof TypeError);
-  assert.match(error.message, /missing required API method\(s\): registerCommand, appendEntry, getThinkingLevel/u);
+  assert.match(error.message, /requires ExtensionAPI method\(s\): registerCommand/u);
+  assert.match(error.message, /Pi version is not used as a startup gate/u);
   assert.match(error.message, /No ObservMe event handlers or commands were registered/u);
+  assert.doesNotMatch(error.message, /appendEntry|getThinkingLevel/u);
   assert.doesNotMatch(error.message, /private-compatibility-value/u);
 });
