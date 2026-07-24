@@ -633,18 +633,15 @@ observme_subagent_spawn_duration_ms
 Expected labels:
 
 ```text
-agent_role
-subagent_depth
-spawn_type
-spawn_reason
-error_class only on failures
+agent_role, subagent_depth, spawn_type, spawn_reason   # spawned_total and spawn_duration_ms
+spawn_type, error_class                                 # spawn_failures_total only
 ```
 
 Dashboard examples:
 
 ```promql
 sum(rate(observme_subagents_spawned_total[$__rate_interval])) by (subagent_depth, spawn_type, spawn_reason)
-sum(rate(observme_subagent_spawn_failures_total[$__rate_interval])) by (subagent_depth, spawn_type, spawn_reason, error_class)
+sum(rate(observme_subagent_spawn_failures_total[$__rate_interval])) by (spawn_type, error_class)
 histogram_quantile(0.95, sum(rate(observme_subagent_spawn_duration_ms_bucket[$__rate_interval])) by (agent_role, spawn_type, spawn_reason, le))
 ```
 
@@ -691,15 +688,14 @@ observme_trace_context_propagation_failures_total
 Expected labels:
 
 ```text
-agent_role
-subagent_depth
-reason/status as bounded enums
+status, reason                        # orphan_agents_total
+agent_role, subagent_depth, reason    # trace_context_propagation_failures_total
 ```
 
 Dashboard examples:
 
 ```promql
-sum(rate(observme_orphan_agents_total[$__rate_interval])) by (agent_role, subagent_depth)
+sum(rate(observme_orphan_agents_total[$__rate_interval])) by (status, reason)
 sum(rate(observme_trace_context_propagation_failures_total[$__rate_interval])) by (agent_role, subagent_depth)
 ```
 
@@ -802,8 +798,8 @@ Current PromQL used by `/obs agents`:
 
 ```promql
 sum(rate(observme_subagents_spawned_total[1h])) by (agent_role, subagent_depth, spawn_type, spawn_reason)
-histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket[1h])) by (subagent_depth, le))
-sum(rate(observme_orphan_agents_total[1h])) by (agent_role, subagent_depth)
+histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket{subagent_depth!=""}[1h])) by (subagent_depth, le))
+sum(rate(observme_orphan_agents_total[1h])) by (status, reason)
 ```
 
 Tempo drill-down uses span attributes:
@@ -908,7 +904,7 @@ Prometheus:
 
 ```promql
 sum(rate(observme_subagents_spawned_total[5m])) by (agent_role, subagent_depth, spawn_type, spawn_reason)
-sum(rate(observme_orphan_agents_total[5m])) by (agent_role, subagent_depth)
+sum(rate(observme_orphan_agents_total[5m])) by (status, reason)
 sum(rate(observme_trace_context_propagation_failures_total[5m])) by (agent_role, subagent_depth)
 ```
 
@@ -970,11 +966,11 @@ These checkpoints reflect the current code and dashboards after source-review re
    - The Pi example subagent extension currently spawns child Pi processes without ObservMe env propagation.
    - A future tmux orchestration extension must own this wrapping and lifecycle tracking.
 
-2. **Some dashboard label expectations remain broader than current emitted labels.**
+2. **Some metric label sets remain narrower than a full dashboard contract might want.**
    - `observme_active_agents` currently carries `environment` and `agent_role`, not `subagent_depth`.
-   - `observme_subagent_spawn_failures_total` carries `spawn_type` and `error_class`, while some dashboard queries also group by depth/reason.
-   - Orphan signals emitted by tracker and session-propagation paths do not yet share one identical label set.
-   - These missing dimensions do not introduce high cardinality, but affected grouped panels may show blank label values until the metric contract is aligned.
+   - `observme_subagent_spawn_failures_total` carries only `spawn_type` and `error_class`; shipped dashboards, alerts, and SLOs no longer select or group on other labels for it (a dashboard test enforces this).
+   - Orphan signals from the tracker and session-propagation paths share the `{status, reason}` label keys but use different bounded values per path.
+   - The agent-tree depth/width/fan-out histograms are recorded from two paths with disjoint label sets (`agent_role`/`subagent_depth`/`spawn_type`/`spawn_reason` from spawns vs `status`/`reason` from lineage observations); dashboards grouping on spawn-path labels filter with `subagent_depth!=""` to exclude blank-label lineage samples.
 
 3. **Agent capability is not automatically derived from Pi markdown agent definitions.**
    - If dashboards should show `agent_capability`, the subagent launcher must map agent names/capabilities into a documented bounded enum before metrics use them.

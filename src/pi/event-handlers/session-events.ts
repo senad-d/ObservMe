@@ -25,6 +25,7 @@ import {
   startActiveChildSpan,
   thinkingLevelChangeMetricLabels,
   updateCurrentSessionAttributes,
+  withSpanCorrelationLogAttributes,
 } from "../handler-internals.ts";
 import type { HandlerRegistrar } from "../handler-runtime.ts";
 import type {
@@ -148,7 +149,7 @@ function recordBranch(session: ObservMeTelemetrySession, event: SessionTreeEvent
   span.setStatus({ code: SpanStatusCode.OK });
   endActiveSpan(session, span);
   session.metrics.branches.add(1, labels);
-  emitStructuredLog(session.logger, LOG_EVENT_NAMES.BRANCH_CREATED, "branch", attributes);
+  emitStructuredLog(session.logger, LOG_EVENT_NAMES.BRANCH_CREATED, "branch", withSpanCorrelationLogAttributes(span, attributes));
 }
 
 function createCompactionHandler(state: HandlerSessionState): PiHandler<"session_compact"> {
@@ -178,7 +179,7 @@ function recordCompaction(session: ObservMeTelemetrySession, event: SessionCompa
   endActiveSpan(session, span);
   session.metrics.compactions.add(1, labels);
   recordCompactionTokensBefore(session, attributes, labels);
-  emitStructuredLog(session.logger, LOG_EVENT_NAMES.COMPACTION_CREATED, "compaction", attributes);
+  emitStructuredLog(session.logger, LOG_EVENT_NAMES.COMPACTION_CREATED, "compaction", withSpanCorrelationLogAttributes(span, attributes));
 }
 
 function recordCompactionTokensBefore(

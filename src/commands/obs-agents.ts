@@ -114,8 +114,8 @@ export interface RegisterObsAgentsCommandOptions extends ObsAgentsSnapshotOption
 export const OBS_AGENTS_SPAWNED_PROMQL =
   "sum(rate(observme_subagents_spawned_total[1h])) by (agent_role, subagent_depth, spawn_type, spawn_reason)";
 export const OBS_AGENTS_FANOUT_P95_PROMQL =
-  "histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket[1h])) by (subagent_depth, le))";
-export const OBS_AGENTS_ORPHAN_PROMQL = "sum(rate(observme_orphan_agents_total[1h])) by (agent_role, subagent_depth)";
+  'histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket{subagent_depth!=""}[1h])) by (subagent_depth, le))';
+export const OBS_AGENTS_ORPHAN_PROMQL = "sum(rate(observme_orphan_agents_total[1h])) by (status, reason)";
 export const OBS_AGENTS_TEMPO_DRILLDOWN_ATTRIBUTE_KEYS = [
   COMMON_SPAN_ATTRIBUTES.PI_AGENT_ID,
   COMMON_SPAN_ATTRIBUTES.PI_WORKFLOW_ID,

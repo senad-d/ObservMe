@@ -24,7 +24,6 @@ groups:
       - alert: ObservMeSubagentSpawnFailures
         expr: >-
           sum(rate(observme_subagent_spawn_failures_total[10m])) > 0
-        for: 10m
         labels:
           severity: warning
         annotations:
@@ -34,7 +33,6 @@ groups:
       - alert: ObservMeExportDropsDetected
         expr: >-
           sum(rate(observme_telemetry_dropped_total[5m])) > 0
-        for: 5m
         labels:
           severity: warning
         annotations:
@@ -54,7 +52,6 @@ groups:
       - alert: ObservMeRedactionFailures
         expr: >-
           sum(rate(observme_redaction_failures_total[5m])) > 0
-        for: 5m
         labels:
           severity: critical
         annotations:
@@ -84,7 +81,6 @@ groups:
       - alert: ObservMeOrphanAgentsDetected
         expr: >-
           sum(rate(observme_orphan_agents_total[10m])) > 0
-        for: 10m
         labels:
           severity: warning
         annotations:
@@ -94,7 +90,6 @@ groups:
       - alert: ObservMeTraceContextPropagationFailures
         expr: >-
           sum(rate(observme_trace_context_propagation_failures_total[10m])) > 0
-        for: 10m
         labels:
           severity: warning
         annotations:

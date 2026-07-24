@@ -404,13 +404,13 @@ export function failSubagentSpawn(
 }
 
 export function interruptActiveSubagentOperations(session: SubagentTelemetrySession): void {
-  for (const [spawnId, state] of [...session.spans.activeSubagentSpawns.entries()]) {
+  for (const [spawnId, state] of session.spans.activeSubagentSpawns.entries()) {
     recordSubagentSpawnTerminal(session, spawnId, state, state.childAgentId, "cancelled", {});
   }
-  for (const [waitId, state] of [...session.spans.activeAgentWaits.entries()]) {
+  for (const [waitId, state] of session.spans.activeAgentWaits.entries()) {
     cancelActiveWaitJoin(session, waitId, state, "wait");
   }
-  for (const [joinId, state] of [...session.spans.activeAgentJoins.entries()]) {
+  for (const [joinId, state] of session.spans.activeAgentJoins.entries()) {
     cancelActiveWaitJoin(session, joinId, state, "join");
   }
 }

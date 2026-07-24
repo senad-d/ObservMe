@@ -3888,6 +3888,8 @@ test("session_compact emits compaction span, log, counter, and tokens-before his
   assert.ok(compactionSpan.events.some(event => event.name === LOG_EVENT_NAMES.COMPACTION_CREATED));
   assert.equal(compactionLog.attributes["event.category"], "compaction");
   assert.equal(compactionLog.attributes["pi.compaction.first_kept_entry_id"], "entry-kept-123");
+  assert.equal(compactionLog.attributes[LOG_ATTRIBUTES.TRACE_ID], compactionSpan.spanContext().traceId);
+  assert.equal(compactionLog.attributes[LOG_ATTRIBUTES.SPAN_ID], compactionSpan.spanContext().spanId);
   assertMetricIncrementedWithoutIds(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.COMPACTIONS_TOTAL);
   assertHistogramRecordedWithoutIds(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.COMPACTION_TOKENS_BEFORE, 50_000);
 });
@@ -3933,6 +3935,8 @@ test("session_tree emits basic branch span, log, and counter", async () => {
   assert.ok(branchSpan.events.some(event => event.name === LOG_EVENT_NAMES.BRANCH_CREATED));
   assert.equal(branchLog.attributes["event.category"], "branch");
   assert.equal(branchLog.attributes["pi.branch.from_id"], "entry-old-1");
+  assert.equal(branchLog.attributes[LOG_ATTRIBUTES.TRACE_ID], branchSpan.spanContext().traceId);
+  assert.equal(branchLog.attributes[LOG_ATTRIBUTES.SPAN_ID], branchSpan.spanContext().spanId);
   assertMetricIncrementedWithoutIds(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.BRANCHES_TOTAL);
 });
 

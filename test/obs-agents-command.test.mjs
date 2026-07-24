@@ -195,7 +195,7 @@ function responseForPrometheusQuery(query) {
   }
 
   if (query === OBS_AGENTS_FANOUT_P95_PROMQL) return createPrometheusResponse({ subagent_depth: "1" }, "4");
-  if (query === OBS_AGENTS_ORPHAN_PROMQL) return createPrometheusResponse({ agent_role: "worker", subagent_depth: "1" }, "0");
+  if (query === OBS_AGENTS_ORPHAN_PROMQL) return createPrometheusResponse({ status: "orphaned", reason: "orphaned" }, "0");
   throw new Error(`Unexpected PromQL query: ${query}`);
 }
 

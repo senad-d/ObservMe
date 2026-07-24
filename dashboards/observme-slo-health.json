@@ -192,7 +192,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "30-day Agent Lineage SLO from observme-slos.yaml (objective: >=99%). Failures include missing-lineage spawn failures, orphan agents, and trace-context propagation failures over known subagent spawns. No data means no known spawn workload or missing telemetry, not a healthy score.",
+      "description": "30-day Agent Lineage SLO from observme-slos.yaml (objective: >=99%). Failures include all subagent spawn failures, orphan agents, and trace-context propagation failures over known subagent spawns. No data means no known spawn workload or missing telemetry, not a healthy score.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -259,7 +259,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(clamp_max(clamp_min(1 - (((sum(rate(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[30d])) or vector(0)) + (sum(rate(observme_orphan_agents_total[30d])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_subagents_spawned_total[30d])), 1e-9)), 0), 1)) and on() (sum(rate(observme_subagents_spawned_total[30d])) > 0)",
+          "expr": "(clamp_max(clamp_min(1 - (((sum(rate(observme_subagent_spawn_failures_total[30d])) or vector(0)) + (sum(rate(observme_orphan_agents_total[30d])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_subagents_spawned_total[30d])), 1e-9)), 0), 1)) and on() (sum(rate(observme_subagents_spawned_total[30d])) > 0)",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -533,7 +533,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(((((sum(rate(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[1h])) or vector(0)) + (sum(rate(observme_orphan_agents_total[1h])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[1h])) or vector(0))) / clamp_min(sum(rate(observme_subagents_spawned_total[1h])), 1e-9)) / 0.01) and on() (sum(rate(observme_subagents_spawned_total[1h])) > 0))",
+          "expr": "(((((sum(rate(observme_subagent_spawn_failures_total[1h])) or vector(0)) + (sum(rate(observme_orphan_agents_total[1h])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[1h])) or vector(0))) / clamp_min(sum(rate(observme_subagents_spawned_total[1h])), 1e-9)) / 0.01) and on() (sum(rate(observme_subagents_spawned_total[1h])) > 0))",
           "instant": true,
           "legendFormat": "agent lineage",
           "range": false,
@@ -557,7 +557,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "((clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[1h])) or vector(0)) / clamp_min(sum(rate(observme_handler_duration_ms_count[1h])), 1e-9)), 0) / 0.01) and on() (sum(rate(observme_handler_duration_ms_count[1h])) > 0))",
+          "expr": "((clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=~\"10(\\\\.0)?\"}[1h])) or vector(0)) / clamp_min(sum(rate(observme_handler_duration_ms_count[1h])), 1e-9)), 0) / 0.01) and on() (sum(rate(observme_handler_duration_ms_count[1h])) > 0))",
           "instant": true,
           "legendFormat": "handler >10ms",
           "range": false,
@@ -645,7 +645,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(((((sum(rate(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[30d])) or vector(0)) + (sum(rate(observme_orphan_agents_total[30d])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_subagents_spawned_total[30d])), 1e-9)) / 0.01) and on() (sum(rate(observme_subagents_spawned_total[30d])) > 0))",
+          "expr": "(((((sum(rate(observme_subagent_spawn_failures_total[30d])) or vector(0)) + (sum(rate(observme_orphan_agents_total[30d])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_subagents_spawned_total[30d])), 1e-9)) / 0.01) and on() (sum(rate(observme_subagents_spawned_total[30d])) > 0))",
           "instant": true,
           "legendFormat": "agent lineage",
           "range": false,
@@ -669,7 +669,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "((clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=\"10\"}[30d])) or vector(0)) / clamp_min(sum(rate(observme_handler_duration_ms_count[30d])), 1e-9)), 0) / 0.01) and on() (sum(rate(observme_handler_duration_ms_count[30d])) > 0))",
+          "expr": "((clamp_min(1 - ((sum(rate(observme_handler_duration_ms_bucket{le=~\"10(\\\\.0)?\"}[30d])) or vector(0)) / clamp_min(sum(rate(observme_handler_duration_ms_count[30d])), 1e-9)), 0) / 0.01) and on() (sum(rate(observme_handler_duration_ms_count[30d])) > 0))",
           "instant": true,
           "legendFormat": "handler >10ms",
           "range": false,
@@ -707,7 +707,7 @@
           "showLineNumbers": false,
           "showMiniMap": false
         },
-        "content": "### Runtime alert threshold reference (YAML defaults)\n\n- **ObservMeHighLlmErrorRate:** 10m LLM error ratio > **5%** for 10m.\n- **ObservMeHighToolFailureRate:** 10m per-tool failure ratio > **10%** for 10m.\n- **ObservMeSubagentSpawnFailures:** 10m spawn-failure rate > **0** for 10m.\n- **ObservMeExportDropsDetected:** 5m telemetry-drop rate > **0** for 5m.\n- **ObservMeCostSpike:** 1h LLM spend increase > **$50** for 15m; **tune per budget**.\n- **ObservMeRedactionFailures:** 5m redaction-failure rate > **0** for 5m; critical when capture is enabled.\n- **ObservMeRunawayAgentFanOut:** 10m p95 fan-out > **20** for 10m; **tune to normal orchestration load**.\n- **ObservMeExcessiveAgentTreeDepth:** 10m p95 tree depth > **5** for 10m; **tune to expected delegation depth**.\n- **ObservMeOrphanAgentsDetected:** 10m orphan-agent rate > **0** for 10m.\n- **ObservMeTraceContextPropagationFailures:** 10m propagation-failure rate > **0** for 10m.\n- **ObservMeActiveAgentsStuckHigh:** active agents > **100** for 30m; **tune per deployment**.",
+        "content": "### Runtime alert threshold reference (YAML defaults)\n\n- **ObservMeHighLlmErrorRate:** 10m LLM error ratio > **5%** for 10m.\n- **ObservMeHighToolFailureRate:** 10m per-tool failure ratio > **10%** for 10m.\n- **ObservMeSubagentSpawnFailures:** 10m spawn-failure rate > **0** (no pending duration; fires on any failure).\n- **ObservMeExportDropsDetected:** 5m telemetry-drop rate > **0** (no pending duration).\n- **ObservMeCostSpike:** 1h LLM spend increase > **$50** for 15m; **tune per budget**.\n- **ObservMeRedactionFailures:** 5m redaction-failure rate > **0** (no pending duration); critical when capture is enabled.\n- **ObservMeRunawayAgentFanOut:** 10m p95 fan-out > **20** for 10m; **tune to normal orchestration load**.\n- **ObservMeExcessiveAgentTreeDepth:** 10m p95 tree depth > **5** for 10m; **tune to expected delegation depth**.\n- **ObservMeOrphanAgentsDetected:** 10m orphan-agent rate > **0** (no pending duration).\n- **ObservMeTraceContextPropagationFailures:** 10m propagation-failure rate > **0** (no pending duration).\n- **ObservMeActiveAgentsStuckHigh:** active agents > **100** for 30m; **tune per deployment**.\n- **ObservMeExpiredActiveAgentClaims:** expired unexpired-claim count > **5** for 15m; deployment-tunable diagnostic.",
         "mode": "markdown"
       },
       "pluginVersion": "11.1.0",

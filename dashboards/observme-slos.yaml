@@ -10,7 +10,7 @@ slos:
     indicator:
       type: promql
       expr: >-
-        1 - (sum(rate(observme_telemetry_dropped_total[30d])) / clamp_min(sum(rate(observme_events_observed_total[30d])), 1e-9))
+        1 - ((sum(rate(observme_telemetry_dropped_total[30d])) or vector(0)) / clamp_min(sum(rate(observme_events_observed_total[30d])), 1e-9))
   - id: agent-lineage
     name: Agent Lineage SLO
     objective: 99% of known subagent spawns produce either propagated trace context or parent/child lineage attributes.
@@ -20,7 +20,7 @@ slos:
     indicator:
       type: promql
       expr: >-
-        1 - ((sum(rate(observme_subagent_spawn_failures_total{reason="lineage_missing"}[30d])) + sum(rate(observme_orphan_agents_total[30d])) + sum(rate(observme_trace_context_propagation_failures_total[30d]))) / clamp_min(sum(rate(observme_subagents_spawned_total[30d])), 1e-9))
+        clamp_min(1 - (((sum(rate(observme_subagent_spawn_failures_total[30d])) or vector(0)) + (sum(rate(observme_orphan_agents_total[30d])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_subagents_spawned_total[30d])), 1e-9)), 0)
   - id: workflow-completion
     name: Workflow Completion SLO
     objective: 99% of started workflows complete or explicitly fail with terminal telemetry over 30 days.
@@ -30,7 +30,7 @@ slos:
     indicator:
       type: promql
       expr: >-
-        (sum(rate(observme_workflows_completed_total[30d])) + sum(rate(observme_workflow_errors_total[30d]))) / clamp_min(sum(rate(observme_workflows_started_total[30d])), 1e-9)
+        clamp_max(((sum(rate(observme_workflows_completed_total[30d])) or vector(0)) + (sum(rate(observme_workflow_errors_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_workflows_started_total[30d])), 1e-9), 1)
   - id: instrumentation-overhead
     name: Instrumentation Overhead SLO
     objective: 99% of event handlers complete in under 10ms.
@@ -43,7 +43,7 @@ slos:
       threshold_ms: 10
       percentile: 0.99
       suggested_promql: >-
-        histogram_quantile(0.99, sum(rate(observme_handler_duration_ms_bucket[30d])) by (le)) < 10
+        histogram_quantile(0.99, sum(rate(observme_handler_duration_ms_bucket[30d])) by (le)) < bool 10
   - id: redaction
     name: Redaction SLO
     objective: 100% of configured secret test patterns are redacted in CI.

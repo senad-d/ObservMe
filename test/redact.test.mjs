@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS } from "../src/config/schema.ts";
 import {
+  applyCustomRedactionPattern,
   DEFAULT_MAX_INPUT_CHARS,
   formatCustomReplacement,
   MAX_CUSTOM_REDACTION_INTERMEDIATE_CHARS,
@@ -250,6 +251,21 @@ test("custom regex redactors from config are applied in addition to built-in pat
   assert.match(result.value, /\[REDACTED:internal_token:[a-f0-9]{12}\]/u);
   assert.match(result.value, /\[REDACTED:safe_alternation:[a-f0-9]{12}\]/u);
   assert.match(result.value, /\[REDACTED:safe_quantified_alternation:[a-f0-9]{12}\]/u);
+});
+
+test("custom redaction work state applies property defaults and preserves cumulative match limits", () => {
+  const pattern = { name: "internal_token", pattern: "x" };
+  const expected = formatCustomReplacement(pattern.name, "x", tenantSaltSource);
+
+  assert.equal(applyCustomRedactionPattern("x", pattern, tenantSaltSource), expected);
+  assert.equal(applyCustomRedactionPattern("x", pattern, tenantSaltSource, {}), expected);
+
+  const workState = { matchCounter: { value: MAX_CUSTOM_REDACTION_MATCHES - 1 } };
+  assert.equal(applyCustomRedactionPattern("x", pattern, tenantSaltSource, workState), expected);
+  assert.throws(
+    () => applyCustomRedactionPattern("x", pattern, tenantSaltSource, workState),
+    /custom redaction budget exceeded/u,
+  );
 });
 
 test("custom redaction budgets accept exact boundaries and fail closed one unit beyond them", () => {

@@ -1285,8 +1285,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(sum by (operation, error_class) (rate(observme_handler_errors_total[$__rate_interval])) or on() vector(0))",
-          "legendFormat": "{{operation}} / {{error_class}}",
+          "expr": "(sum by (operation) (rate(observme_handler_errors_total[$__rate_interval])) or on() vector(0))",
+          "legendFormat": "{{operation}}",
           "range": true,
           "refId": "A"
         }

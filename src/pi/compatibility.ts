@@ -1,5 +1,5 @@
 export const EARLIEST_TESTED_PI_VERSION = "0.80.5";
-export const RELEASE_TESTED_PI_VERSION = "0.81.1";
+export const RELEASE_TESTED_PI_VERSION = "0.82.0";
 export const PI_RUNTIME_COMPATIBILITY_POLICY = "required-api-capabilities" as const;
 
 const capabilityErrorPrefix = "ObservMe/Pi API capability error";

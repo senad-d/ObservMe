@@ -963,7 +963,49 @@ async function nodeGraphDashboardUsesGrafanaFrameTargets() {
 
       if (target.refId === "nodes") assert.match(target.expr, /"id".*"title"/u, `${nodeGraphDashboardFile}: nodes query must expose id and title fields`);
       if (target.refId === "edges") assert.match(target.expr, /"source".*"target"/u, `${nodeGraphDashboardFile}: edges query must expose source and target fields`);
+      assert.equal(
+        target.expr.includes('"subtitle"'),
+        false,
+        `${nodeGraphDashboardFile}: ${panel.title} ${target.refId} must use the node-graph field name subTitle, not lowercase subtitle`,
+      );
     }
+
+    const organize = (panel.transformations ?? []).find(transformation => transformation.id === "organize");
+    assert.ok(organize, `${nodeGraphDashboardFile}: ${panel.title} must have an organize transformation`);
+    const renames = organize.options?.renameByName ?? {};
+    assert.equal(
+      renames["Value #nodes"],
+      "mainStat",
+      `${nodeGraphDashboardFile}: ${panel.title} must rename "Value #nodes" to mainStat; multi-query table responses never produce a plain "Value" field`,
+    );
+    assert.equal(
+      renames["Value #edges"],
+      "mainStat",
+      `${nodeGraphDashboardFile}: ${panel.title} must rename "Value #edges" to mainStat`,
+    );
+  }
+}
+
+async function dashboardArtifactsAvoidNonEmittedSpawnFailureLabels() {
+  const artifactFiles = [...dashboardFiles, "dashboards/observme-alerts.yaml", "dashboards/observme-slos.yaml"];
+  const emittedSpawnFailureLabels = new Set(["spawn_type", "error_class"]);
+
+  for (const file of artifactFiles) {
+    const text = await readFile(file, "utf8");
+    for (const selector of text.matchAll(/observme_subagent_spawn_failures_total\{(?<matchers>[^}]*)\}/gu)) {
+      const labelKeys = [...(selector.groups?.matchers ?? "").matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=~|!~|!=|=)/gu)];
+      for (const [, labelKey] of labelKeys) {
+        assert.ok(
+          emittedSpawnFailureLabels.has(labelKey),
+          `${file}: observme_subagent_spawn_failures_total carries only spawn_type and error_class labels; a "${labelKey}" matcher never matches any series`,
+        );
+      }
+    }
+    assert.equal(
+      text.includes("observme_agent_lifetime_duration_ms"),
+      false,
+      `${file}: observme_agent_lifetime_duration_ms is registered but never recorded; queries using it are permanently empty`,
+    );
   }
 }
 
@@ -1626,6 +1668,10 @@ test(
 test("dashboard Loki targets use normalized OTLP attribute names", lokiDashboardTargetsUseNormalizedAttributeNames);
 test("dashboard Loki targets use labels provisioned by the local Collector", lokiDashboardTargetsUseProvisionedLabels);
 test("node graph dashboard uses Grafana nodes and edges frame targets", nodeGraphDashboardUsesGrafanaFrameTargets);
+test(
+  "dashboard artifacts avoid non-emitted spawn-failure labels and never-recorded metrics",
+  dashboardArtifactsAvoidNonEmittedSpawnFailureLabels,
+);
 test("export health dashboard uses healthy zero-state queries", exportHealthDashboardUsesHealthyZeroStateQueries);
 test(
   "export health dashboard shows composite health inputs, SLO links, and alert thresholds",

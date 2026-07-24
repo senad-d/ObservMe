@@ -21,6 +21,7 @@
 
 ### Changed
 
+- Raised the release-tested Pi and exact compatibility CI target to 0.82.0, updating the shrinkwrapped `protobufjs` dependency to 7.6.5 and resolving GHSA-j3f2-48v5-ccww.
 - Accepted a complete propagated lineage envelope without `traceparent` instead of failing open to an orphaned root: the child now joins the parent workflow at the correct depth, starts a new trace with the bounded `trace_context.propagation_failed` fallback, and still rejects present-but-malformed W3C context.
 - Added a "Troubleshooting: every agent appears as its own root" guide to the extension-integration documentation, with ranked causes, verification queries, a symptom table, and skill/index routing.
 - Made the packaged `observme-docs` skill implementation-aware: exact answers now verify the smallest owning source slice, code wins over stale design notes, and current backfill, path-capture, PII, reserved-telemetry, and subagent limitations are explicit.
@@ -48,6 +49,17 @@
 
 ### Fixed
 
+- Replaced the anchored-create helper's immediately invoked async initializer with top-level await while retaining startup failure handling.
+- Combined consecutive custom-redaction chunk appends while preserving replacement order and output-budget enforcement.
+- Applied property-level defaults to custom-redaction work state while preserving cumulative match-budget enforcement.
+- Iterated directly over active subagent spawns, waits, and joins during shutdown cancellation instead of allocating intermediate entries arrays.
+- Removed the nonexistent `reason="lineage_missing"` matcher from the Agent Lineage SLO, burn-rate panels, Overview lineage-health stat, and documentation so subagent spawn failures actually count against lineage health instead of silently matching no series.
+- Guarded the SLO specification indicators against empty-vector arithmetic and clamped their bounds so healthy zero-failure states read as attainment instead of no data, and made the instrumentation-overhead check return 0/1 instead of an empty vector on breach.
+- Removed pending durations from the five any-failure alerts (spawn, drop, redaction, orphan, propagation) whose `for:` equaled the rate window and therefore could never fire on isolated events; documented the rationale and the previously undocumented expired-claims alert.
+- Renamed the node-graph value fields to the multi-query `Value #nodes`/`Value #edges` form and unified `subTitle` casing so both agent node-graph panels display their counts and subtitles.
+- Filtered agent-tree depth/width/fan-out histogram panels and `/obs agents` queries to the spawn-path label variant, and grouped orphan-agent queries by their emitted `status`/`reason` labels instead of labels the metric never carries.
+- Dropped the dead `error_class` grouping from the export-health handler-error panel, emitted `trace_id`/`span_id` on `branch.created`/`compaction.created` logs so their dashboard Tempo links resolve, and promoted `pi.agent.child.id` to a local-stack Loki label so parent/child handoff tables populate the child column.
+- Combined consecutive backfill cancellation entries and all five core delivery summaries into multi-value array appends while preserving notification output.
 - Cancelled Collector health response bodies after status inspection so success, HTTP failure, and repeated stalled-body checks release network resources without changing bounded health output.
 - Ran independent `/obs tools` and `/obs agents` enrichment queries concurrently within one configured request-timeout window while preserving deterministic results and subsystem warnings.
 - Anchored exclusive project-config creation to a verified canonical parent directory so ancestor swaps cannot create outside files, with fail-closed cleanup diagnostics.

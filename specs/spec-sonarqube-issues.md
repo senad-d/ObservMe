@@ -4,202 +4,222 @@ This task spec was generated from active SonarQube issues.
 
 - Sonar project: `senad-d_ObservMe`
 - Organization: `senad-d`
-- Active issues read: 10
+- Active issues read: 11
 
-### 1. Replace the deprecated tracing provider API at line 1
+### 1. Combine consecutive array pushes at line 1363
 
-- [x] Resolve Sonar issue `AZ9h5y6keo9PQlbZrIme`: 'ProxyTracerProvider' is deprecated.
+- [x] Resolve Sonar issue `AZ-VSi2pkBUjH0c7pNiZ`: Do not call `Array#push()` multiple times.
 
 #### Why
-`ProxyTracerProvider` is deprecated and is no longer recommended for use. Deprecated APIs may eventually be removed and should be phased out to avoid relying on obsolete or potentially problematic behavior.
+Multiple consecutive calls to a method that accepts multiple arguments create unnecessary invocation overhead, reduce readability, and use the API inconsistently. Combining the calls primarily improves maintainability, with a minor performance benefit.
 
 #### How
-Check the API documentation or deprecation message for the recommended replacement, then migrate this reference to the supported tracing provider API.
+Combine the consecutive `Array#push()` calls into one call that passes all values as arguments.
 
 #### Where
-- `src/otel/traces.ts:1`
-- Rule: `typescript:S1874`
-- Type/severity: `CODE_SMELL; MINOR; MAINTAINABILITY:LOW`
+- `src/commands/obs-backfill.ts:1363`
+- Rule: `typescript:S7778`
+- Type/severity: `CODE_SMELL; MINOR (MAINTAINABILITY:LOW)`
 
 #### Acceptance criteria
 - The flagged Sonar issue is remediated at the listed location.
 - Intended behavior is preserved.
 - Tests passing.
 
-### 2. Replace the deprecated tracing provider API at line 16
+### 2. Combine consecutive array pushes at line 1372
 
-- [x] Resolve Sonar issue `AZ9h5y6keo9PQlbZrImf`: 'ProxyTracerProvider' is deprecated.
+- [x] Resolve Sonar issue `AZ-VSi2pkBUjH0c7pNia`: Do not call `Array#push()` multiple times.
 
 #### Why
-`ProxyTracerProvider` is deprecated and is no longer recommended for use. Deprecated APIs may eventually be removed and should be phased out to avoid relying on obsolete or potentially problematic behavior.
+Multiple consecutive calls to a method that accepts multiple arguments create unnecessary invocation overhead, reduce readability, and use the API inconsistently. Combining the calls primarily improves maintainability, with a minor performance benefit.
 
 #### How
-Check the API documentation or deprecation message for the recommended replacement, then migrate this reference to the supported tracing provider API.
+Combine the consecutive `Array#push()` calls into one call that passes all values as arguments.
 
 #### Where
-- `src/otel/traces.ts:16`
-- Rule: `typescript:S1874`
-- Type/severity: `CODE_SMELL; MINOR; MAINTAINABILITY:LOW`
+- `src/commands/obs-backfill.ts:1372`
+- Rule: `typescript:S7778`
+- Type/severity: `CODE_SMELL; MINOR (MAINTAINABILITY:LOW)`
 
 #### Acceptance criteria
 - The flagged Sonar issue is remediated at the listed location.
 - Intended behavior is preserved.
 - Tests passing.
 
-### 3. Correct the non-Promise await in the lifecycle handler
+### 3. Combine consecutive array pushes at line 1373
 
-- [x] Resolve Sonar issue `AZ9h5y35eo9PQlbZrImW`: Unexpected `await` of a non-Promise (non-"Thenable") value.
+- [x] Resolve Sonar issue `AZ-VSi2pkBUjH0c7pNib`: Do not call `Array#push()` multiple times.
 
 #### Why
-`await` is intended for promises. Awaiting a non-Promise is redundant, does not pause for asynchronous work, and may indicate that an expected promise is not being returned.
+Multiple consecutive calls to a method that accepts multiple arguments create unnecessary invocation overhead, reduce readability, and use the API inconsistently. Combining the calls primarily improves maintainability, with a minor performance benefit.
 
 #### How
-Remove `await` if the operation is synchronous. If asynchronous behavior is intended, ensure the called function returns a Promise and that its TypeScript or JSDoc return type accurately declares that Promise.
+Combine the consecutive `Array#push()` calls into one call that passes all values as arguments.
 
 #### Where
-- `src/pi/event-handlers/lifecycle.ts:265`
-- Rule: `typescript:S4123`
-- Type/severity: `CODE_SMELL; CRITICAL; MAINTAINABILITY:HIGH`
+- `src/commands/obs-backfill.ts:1373`
+- Rule: `typescript:S7778`
+- Type/severity: `CODE_SMELL; MINOR (MAINTAINABILITY:LOW)`
 
 #### Acceptance criteria
 - The flagged Sonar issue is remediated at the listed location.
 - Intended behavior is preserved.
 - Tests passing.
 
-### 4. Extract the nested lifecycle ternary into a separate statement
+### 4. Combine consecutive array pushes at line 1374
 
-- [x] Resolve Sonar issue `AZ9h5y35eo9PQlbZrImX`: Extract this nested ternary operation into an independent statement.
+- [x] Resolve Sonar issue `AZ-VSi2pkBUjH0c7pNic`: Do not call `Array#push()` multiple times.
 
 #### Why
-Nested ternaries are hard to read and make the order of operations difficult to understand, increasing maintenance risk.
+Multiple consecutive calls to a method that accepts multiple arguments create unnecessary invocation overhead, reduce readability, and use the API inconsistently. Combining the calls primarily improves maintainability, with a minor performance benefit.
 
 #### How
-Move the nested conditional into an independent statement, such as an `if` branch or an intermediate value, so the remaining expression contains no nested ternary.
+Combine the consecutive `Array#push()` calls into one call that passes all values as arguments.
 
 #### Where
-- `src/pi/event-handlers/lifecycle.ts:301`
-- Rule: `typescript:S3358`
-- Type/severity: `CODE_SMELL; MAJOR; MAINTAINABILITY:MEDIUM`
+- `src/commands/obs-backfill.ts:1374`
+- Rule: `typescript:S7778`
+- Type/severity: `CODE_SMELL; MINOR (MAINTAINABILITY:LOW)`
 
 #### Acceptance criteria
 - The flagged Sonar issue is remediated at the listed location.
 - Intended behavior is preserved.
 - Tests passing.
 
-### 5. Remove the redundant undefined syntax from the optional property
+### 5. Combine consecutive array pushes at line 1375
 
-- [x] Resolve Sonar issue `AZ9h5y5heo9PQlbZrImY`: Consider removing 'undefined' type or '?' specifier, one of them is redundant.
+- [x] Resolve Sonar issue `AZ-VSi2pkBUjH0c7pNid`: Do not call `Array#push()` multiple times.
 
 #### Why
-Using both optional-property syntax (`?`) and a union with `undefined` is redundant. Optional syntax permits omission, while a required property unioned with `undefined` requires the property to be present even when its value is undefined.
+Multiple consecutive calls to a method that accepts multiple arguments create unnecessary invocation overhead, reduce readability, and use the API inconsistently. Combining the calls primarily improves maintainability, with a minor performance benefit.
 
 #### How
-Choose the declaration that matches the contract: retain `?` and remove `| undefined` when the property may be omitted, or remove `?` and retain `| undefined` when callers must provide the property explicitly.
+Combine the consecutive `Array#push()` calls into one call that passes all values as arguments.
 
 #### Where
-- `src/pi/handler-types.ts:87`
-- Rule: `typescript:S4782`
-- Type/severity: `CODE_SMELL; MAJOR; MAINTAINABILITY:MEDIUM`
+- `src/commands/obs-backfill.ts:1375`
+- Rule: `typescript:S7778`
+- Type/severity: `CODE_SMELL; MINOR (MAINTAINABILITY:LOW)`
 
 #### Acceptance criteria
 - The flagged Sonar issue is remediated at the listed location.
 - Intended behavior is preserved.
 - Tests passing.
 
-### 6. Make the cancellation-failure handler's intent explicit
+### 6. Iterate directly over the iterable at line 407
 
-- [x] Resolve Sonar issue `AZ9h5y6Oeo9PQlbZrImd`: Unexpected empty function 'ignoreCancellationFailure'.
+- [x] Resolve Sonar issue `AZ-VSi3xkBUjH0c7pNie`: `for…of` can iterate over iterable, it's unnecessary to convert to an array.
 
 #### Why
-An unexplained empty function can represent an accidental omission and mislead maintainers into believing that it fulfills a requirement.
+Converting an iterable to an array before a `for…of` loop adds no value, creates an unnecessary intermediate array, and makes the code more verbose and less direct.
 
 #### How
-Implement the required behavior, throw an explanatory error if the operation is unsupported, or add an internal comment explaining why the function is intentionally blank.
+Remove the unnecessary spread-based array conversion and let `for…of` iterate over the iterable directly.
 
 #### Where
-- `src/query/grafana-transport.ts:347`
-- Rule: `typescript:S1186`
-- Type/severity: `CODE_SMELL; CRITICAL; MAINTAINABILITY:HIGH`
+- `src/pi/subagent-spawn.ts:407`
+- Rule: `typescript:S7747`
+- Type/severity: `CODE_SMELL; MINOR (MAINTAINABILITY:LOW)`
 
 #### Acceptance criteria
 - The flagged Sonar issue is remediated at the listed location.
 - Intended behavior is preserved.
 - Tests passing.
 
-### 7. Reduce the trace-link regular expression complexity
+### 7. Iterate directly over the iterable at line 410
 
-- [x] Resolve Sonar issue `AZ9h5y55eo9PQlbZrImZ`: Simplify this regular expression to reduce its complexity from 25 to the 20 allowed.
+- [x] Resolve Sonar issue `AZ-VSi3xkBUjH0c7pNif`: `for…of` can iterate over iterable, it's unnecessary to convert to an array.
 
 #### Why
-Overly complex regular expressions are difficult to read and maintain and can introduce hard-to-find matching bugs. This expression exceeds Sonar's allowed complexity threshold of 20.
+Converting an iterable to an array before a `for…of` loop adds no value, creates an unnecessary intermediate array, and makes the code more verbose and less direct.
 
 #### How
-Move part of the validation into regular code or split the expression into multiple simpler patterns so each expression remains within the complexity limit.
+Remove the unnecessary spread-based array conversion and let `for…of` iterate over the iterable directly.
 
 #### Where
-- `src/query/trace-link.ts:44`
-- Rule: `typescript:S5843`
-- Type/severity: `CODE_SMELL; MAJOR; MAINTAINABILITY:MEDIUM`
+- `src/pi/subagent-spawn.ts:410`
+- Rule: `typescript:S7747`
+- Type/severity: `CODE_SMELL; MINOR (MAINTAINABILITY:LOW)`
 
 #### Acceptance criteria
 - The flagged Sonar issue is remediated at the listed location.
 - Intended behavior is preserved.
 - Tests passing.
 
-### 8. Use concise word-character syntax in the first trace-link class
+### 8. Iterate directly over the iterable at line 413
 
-- [x] Resolve Sonar issue `AZ9h5y55eo9PQlbZrIma`: Use concise character class syntax '\w' instead of '[A-Za-z0-9_]'.
+- [x] Resolve Sonar issue `AZ-VSi3xkBUjH0c7pNig`: `for…of` can iterate over iterable, it's unnecessary to convert to an array.
 
 #### Why
-`\w` is equivalent to `[A-Za-z0-9_]` while being shorter and easier to read and maintain.
+Converting an iterable to an array before a `for…of` loop adds no value, creates an unnecessary intermediate array, and makes the code more verbose and less direct.
 
 #### How
-Replace the flagged `[A-Za-z0-9_]` character class with `\w` while preserving the expression's matching behavior.
+Remove the unnecessary spread-based array conversion and let `for…of` iterate over the iterable directly.
 
 #### Where
-- `src/query/trace-link.ts:44`
-- Rule: `typescript:S6353`
-- Type/severity: `CODE_SMELL; MINOR; MAINTAINABILITY:LOW`
+- `src/pi/subagent-spawn.ts:413`
+- Rule: `typescript:S7747`
+- Type/severity: `CODE_SMELL; MINOR (MAINTAINABILITY:LOW)`
 
 #### Acceptance criteria
 - The flagged Sonar issue is remediated at the listed location.
 - Intended behavior is preserved.
 - Tests passing.
 
-### 9. Use concise word-character syntax in the second trace-link class
+### 9. Replace the workState object default with property defaults
 
-- [x] Resolve Sonar issue `AZ9h5y55eo9PQlbZrImb`: Use concise character class syntax '\w' instead of '[A-Za-z0-9_]'.
+- [x] Resolve Sonar issue `AZ-VSizikBUjH0c7pNiW`: Do not use an object literal as default for parameter `workState`.
 
 #### Why
-`\w` is equivalent to `[A-Za-z0-9_]` while being shorter and easier to read and maintain.
+An object literal default is replaced entirely when callers pass a partial object, so expected properties can disappear. This can cause logical errors or runtime failures and makes future additions to the default object unsafe for existing partial callers.
 
 #### How
-Replace the flagged `[A-Za-z0-9_]` character class with `\w` while preserving the expression's matching behavior.
+Replace the object literal parameter default with object destructuring and individual property defaults so omitted properties retain their intended values.
 
 #### Where
-- `src/query/trace-link.ts:44`
-- Rule: `typescript:S6353`
-- Type/severity: `CODE_SMELL; MINOR; MAINTAINABILITY:LOW`
+- `src/privacy/redact.ts:447`
+- Rule: `typescript:S7737`
+- Type/severity: `CODE_SMELL; MINOR (MAINTAINABILITY:MEDIUM, RELIABILITY:MEDIUM)`
 
 #### Acceptance criteria
 - The flagged Sonar issue is remediated at the listed location.
 - Intended behavior is preserved.
 - Tests passing.
 
-### 10. Use concise word-character syntax in the third trace-link class
+### 10. Combine consecutive array pushes in redaction processing
 
-- [x] Resolve Sonar issue `AZ9h5y55eo9PQlbZrImc`: Use concise character class syntax '\w' instead of '[A-Za-z0-9_]'.
+- [x] Resolve Sonar issue `AZ-VSizikBUjH0c7pNiX`: Do not call `Array#push()` multiple times.
 
 #### Why
-`\w` is equivalent to `[A-Za-z0-9_]` while being shorter and easier to read and maintain.
+Multiple consecutive calls to a method that accepts multiple arguments create unnecessary invocation overhead, reduce readability, and use the API inconsistently. Combining the calls primarily improves maintainability, with a minor performance benefit.
 
 #### How
-Replace the flagged `[A-Za-z0-9_]` character class with `\w` while preserving the expression's matching behavior.
+Combine the consecutive `Array#push()` calls into one call that passes all values as arguments.
 
 #### Where
-- `src/query/trace-link.ts:44`
-- Rule: `typescript:S6353`
-- Type/severity: `CODE_SMELL; MINOR; MAINTAINABILITY:LOW`
+- `src/privacy/redact.ts:472`
+- Rule: `typescript:S7778`
+- Type/severity: `CODE_SMELL; MINOR (MAINTAINABILITY:LOW)`
+
+#### Acceptance criteria
+- The flagged Sonar issue is remediated at the listed location.
+- Intended behavior is preserved.
+- Tests passing.
+
+### 11. Replace the initialization wrapper with top-level await
+
+- [x] Resolve Sonar issue `AZ-VSi1ekBUjH0c7pNiY`: Prefer top-level await over an async function `initializeAnchoredCreateHelper` call.
+
+#### Why
+Calling an async wrapper immediately at module level adds boilerplate, obscures intent, and complicates error handling. Top-level await expresses module initialization more directly and can reduce the risk of improperly handled promise rejections.
+
+#### How
+Replace the immediately called async initialization function with top-level `await`, retaining explicit `try`/`catch` handling where initialization errors must be handled.
+
+#### Where
+- `src/config/anchored-exclusive-create-helper.mjs:239`
+- Rule: `javascript:S7785`
+- Type/severity: `CODE_SMELL; MAJOR (MAINTAINABILITY:MEDIUM)`
 
 #### Acceptance criteria
 - The flagged Sonar issue is remediated at the listed location.

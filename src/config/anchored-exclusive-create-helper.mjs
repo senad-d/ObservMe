@@ -4,9 +4,7 @@ import { basename } from "node:path";
 
 let activeCreate;
 
-async function initializeAnchoredCreateHelper() {
-  if (!process.send) return;
-
+if (process.send) {
   try {
     const directoryStats = await stat(".", { bigint: true });
     if (!directoryStats.isDirectory()) throw createHelperError("ENOTDIR");
@@ -235,5 +233,3 @@ function sendMessage(message) {
 function disconnectHelper() {
   process.disconnect?.();
 }
-
-void initializeAnchoredCreateHelper();

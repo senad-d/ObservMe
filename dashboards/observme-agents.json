@@ -1201,7 +1201,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_tree_depth_bucket[$__rate_interval])) by (subagent_depth, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_tree_depth_bucket{subagent_depth!=\"\"}[$__rate_interval])) by (subagent_depth, le))",
           "range": true,
           "refId": "A",
           "legendFormat": "depth p95 {{subagent_depth}}"
@@ -1212,7 +1212,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_tree_width_bucket[$__rate_interval])) by (subagent_depth, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_tree_width_bucket{subagent_depth!=\"\"}[$__rate_interval])) by (subagent_depth, le))",
           "range": true,
           "refId": "B",
           "legendFormat": "width p95 {{subagent_depth}}"
@@ -1299,7 +1299,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket[$__rate_interval])) by (subagent_depth, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket{subagent_depth!=\"\"}[$__rate_interval])) by (subagent_depth, le))",
           "range": true,
           "refId": "A",
           "legendFormat": "depth {{subagent_depth}}"
@@ -1652,7 +1652,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "topk(10, histogram_quantile(0.95, sum(increase(observme_agent_fanout_count_bucket[$__range])) by (agent_role, subagent_depth, le)))",
+          "expr": "topk(10, histogram_quantile(0.95, sum(increase(observme_agent_fanout_count_bucket{subagent_depth!=\"\"}[$__range])) by (agent_role, subagent_depth, le)))",
           "refId": "A",
           "legendFormat": "{{agent_role}} depth {{subagent_depth}}",
           "format": "table",
@@ -1872,7 +1872,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Chronological agent-tree handoffs and lineage failures. A deterministic safe JSON line exposes event, session, workflow, parent, child/agent, run, trace, and span fields; raw/content fields are hidden. trace_id opens Tempo and agent_run opens a filtered Trace Journey when values exist. The default Collector does not promote pi.agent.child.id, so child can be empty while parent/agent context remains available. Empty means no matching handoff or lineage-failure logs in the selected range.",
+      "description": "Chronological agent-tree handoffs and lineage failures. A deterministic safe JSON line exposes event, session, workflow, parent, child/agent, run, trace, and span fields; raw/content fields are hidden. trace_id opens Tempo and agent_run opens a filtered Trace Journey when values exist. child comes from pi.agent.child.id (promoted by the local Collector's Loki label hints); it is present on spawn/wait/join events and empty on events that carry no child correlation. Empty means no matching handoff or lineage-failure logs in the selected range.",
       "fieldConfig": {
         "defaults": {
           "color": {

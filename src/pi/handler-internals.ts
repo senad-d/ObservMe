@@ -480,6 +480,14 @@ export function buildToolLogCorrelationAttributes(
   });
 }
 
+export function withSpanCorrelationLogAttributes(span: Span, attributes: AttributeMap): AttributeMap {
+  return withoutUndefinedAttributes({
+    ...attributes,
+    [LOG_ATTRIBUTES.TRACE_ID]: readSpanTraceId(span),
+    [LOG_ATTRIBUTES.SPAN_ID]: readSpanId(span),
+  });
+}
+
 export function buildToolCompletionLogAttributes(
   state: ToolCallState,
   finalAttributes: AttributeMap,

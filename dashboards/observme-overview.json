@@ -353,7 +353,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "clamp_min(1 - (((sum(rate(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[$__range])) or vector(0)) + (sum(rate(observme_orphan_agents_total[$__range])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[$__range])) or vector(0))) / clamp_min((sum(rate(observme_subagents_spawned_total[$__range])) or vector(0)), 1e-9)), 0)",
+          "expr": "clamp_min(1 - (((sum(rate(observme_subagent_spawn_failures_total[$__range])) or vector(0)) + (sum(rate(observme_orphan_agents_total[$__range])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[$__range])) or vector(0))) / clamp_min((sum(rate(observme_subagents_spawned_total[$__range])) or vector(0)), 1e-9)), 0)",
           "instant": true,
           "range": false,
           "refId": "A"

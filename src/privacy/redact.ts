@@ -175,8 +175,12 @@ interface RegexCharacterClassToken {
 
 type UnsafeQuantifiedGroupKind = "nested_quantifier" | "ambiguous_alternation" | "ambiguous_repetition";
 
+interface CustomRedactionMatchCounter {
+  value: number;
+}
+
 interface CustomRedactionWorkState {
-  matchCount: number;
+  readonly matchCounter?: CustomRedactionMatchCounter;
 }
 
 export function redactValue(rawValue: string, options: RedactionOptions): RedactionResult {
@@ -249,7 +253,7 @@ export function runCustomRegexRedactors(value: string, options: RedactionOptions
   const issues = validateCustomRedactionPatterns(patterns);
   if (issues.length > 0) throw new Error(issues[0].message);
 
-  const workState: CustomRedactionWorkState = { matchCount: 0 };
+  const workState: CustomRedactionWorkState = { matchCounter: { value: 0 } };
   let redactedValue = value;
   for (const pattern of patterns) {
     redactedValue = applyCustomRedactionPattern(redactedValue, pattern, options.tenantSaltSource, workState);
@@ -444,7 +448,7 @@ export function applyCustomRedactionPattern(
   value: string,
   pattern: CustomRedactionPatternConfig,
   tenantSaltSource?: TenantSaltSource,
-  workState: CustomRedactionWorkState = { matchCount: 0 },
+  { matchCounter = { value: 0 } }: CustomRedactionWorkState = {},
 ): string {
   if (value.length > MAX_CUSTOM_REDACTION_INTERMEDIATE_CHARS) {
     throw new Error(CUSTOM_REDACTION_BUDGET_EXCEEDED_ERROR);
@@ -460,16 +464,15 @@ export function applyCustomRedactionPattern(
   let match = expression.exec(value);
 
   while (match) {
-    workState.matchCount += 1;
-    if (workState.matchCount > MAX_CUSTOM_REDACTION_MATCHES) throw new Error(CUSTOM_REDACTION_BUDGET_EXCEEDED_ERROR);
+    matchCounter.value += 1;
+    if (matchCounter.value > MAX_CUSTOM_REDACTION_MATCHES) throw new Error(CUSTOM_REDACTION_BUDGET_EXCEEDED_ERROR);
 
     const unmatchedLength = match.index - cursor;
     if (outputLength + unmatchedLength + replacementLength > MAX_CUSTOM_REDACTION_INTERMEDIATE_CHARS) {
       throw new Error(CUSTOM_REDACTION_BUDGET_EXCEEDED_ERROR);
     }
 
-    chunks.push(value.slice(cursor, match.index));
-    chunks.push(`${replacementPrefix}${sha256Prefix(match[0], tenantSaltSource)}]`);
+    chunks.push(value.slice(cursor, match.index), `${replacementPrefix}${sha256Prefix(match[0], tenantSaltSource)}]`);
     outputLength += unmatchedLength + replacementLength;
     cursor = match.index + match[0].length;
     match = expression.exec(value);

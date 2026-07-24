@@ -9,17 +9,17 @@ const expectedPromqlSlos = [
   {
     id: "observability-export",
     expression:
-      "1 - (sum(rate(observme_telemetry_dropped_total[30d])) / clamp_min(sum(rate(observme_events_observed_total[30d])), 1e-9))",
+      "1 - ((sum(rate(observme_telemetry_dropped_total[30d])) or vector(0)) / clamp_min(sum(rate(observme_events_observed_total[30d])), 1e-9))",
   },
   {
     id: "agent-lineage",
     expression:
-      "1 - ((sum(rate(observme_subagent_spawn_failures_total{reason=\"lineage_missing\"}[30d])) + sum(rate(observme_orphan_agents_total[30d])) + sum(rate(observme_trace_context_propagation_failures_total[30d]))) / clamp_min(sum(rate(observme_subagents_spawned_total[30d])), 1e-9))",
+      "clamp_min(1 - (((sum(rate(observme_subagent_spawn_failures_total[30d])) or vector(0)) + (sum(rate(observme_orphan_agents_total[30d])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_subagents_spawned_total[30d])), 1e-9)), 0)",
   },
   {
     id: "workflow-completion",
     expression:
-      "(sum(rate(observme_workflows_completed_total[30d])) + sum(rate(observme_workflow_errors_total[30d]))) / clamp_min(sum(rate(observme_workflows_started_total[30d])), 1e-9)",
+      "clamp_max(((sum(rate(observme_workflows_completed_total[30d])) or vector(0)) + (sum(rate(observme_workflow_errors_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_workflows_started_total[30d])), 1e-9), 1)",
   },
 ];
 const expectedSloIds = [

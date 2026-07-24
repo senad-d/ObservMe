@@ -44,7 +44,7 @@ jobs:
       matrix:
         pi-version:
           - 0.80.5
-          - 0.81.1
+          - 0.82.0
 
     steps:
       - name: Check out repository

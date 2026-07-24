@@ -103,6 +103,15 @@ This sanitized record covers the compatibility-policy correction against exact `
 | `npm run validate` | Pass | ESLint, formatting, script checks, 618 unit/contract tests, package-content validation, packaged-install smoke, handler smoke, Pi lifecycle smoke, and real Pi runtime smoke passed. |
 | `npm audit --omit=dev` | Pass | The production dependency tree reported no vulnerabilities. |
 
+## Pi 0.82.0 compatibility and audit validation — 2026-07-24
+
+This sanitized record covers the exact `@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai` 0.82.0 development dependencies on local Node.js v26.0.0 and npm 11.12.1. The upgrade replaces the vulnerable shrinkwrapped `protobufjs` 7.6.4 package with 7.6.5. No project, model, Grafana, or registry credentials were required or printed.
+
+| Command | Result | Evidence and notes |
+| --- | --- | --- |
+| `npm run validate:pi-compatibility` | Pass | Source/test typechecks, compatibility and event-mapping tests, packaged-install smoke, handler and lifecycle smoke, and the real Pi RPC runtime passed against Pi 0.82.0. |
+| `npm audit` | Pass | The complete dependency tree reported zero vulnerabilities. |
+
 ## Review-closure evidence categories
 
 - **Read-only/check-only** — commands that inspect, type-check, lint, audit, run tests, dry-run packaging, or smoke local deterministic fixtures without publishing or writing tracked files.

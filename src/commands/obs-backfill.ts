@@ -1359,8 +1359,7 @@ function renderCancelledObsBackfillSummary(summary: ObsBackfillSummary): string 
   const lines = [`ObservMe backfill cancelled: ${summary.reason ?? "user did not confirm"}.`];
   if (summary.entriesScanned === 0) return lines.join("\n");
 
-  lines.push(`Entries scanned: ${summary.entriesScanned}`);
-  lines.push(`Entries eligible: ${summary.entriesEligible}`);
+  lines.push(`Entries scanned: ${summary.entriesScanned}`, `Entries eligible: ${summary.entriesEligible}`);
   appendBackfillDeliveryLines(lines, summary);
   appendBackfillQualityLines(lines, summary);
   appendBackfillRetryGuidance(lines, summary);
@@ -1368,11 +1367,13 @@ function renderCancelledObsBackfillSummary(summary: ObsBackfillSummary): string 
 }
 
 function appendBackfillDeliveryLines(lines: string[], summary: ObsBackfillSummary): void {
-  lines.push(`Records attempted: ${summary.recordsAttempted}`);
-  lines.push(`Records queued: ${summary.recordsQueued}`);
-  lines.push(`Records confirmed exported: ${summary.recordsConfirmed}`);
-  lines.push(`Records with unknown delivery: ${summary.recordsUnknown}`);
-  lines.push(`Records not attempted: ${summary.recordsNotAttempted}`);
+  lines.push(
+    `Records attempted: ${summary.recordsAttempted}`,
+    `Records queued: ${summary.recordsQueued}`,
+    `Records confirmed exported: ${summary.recordsConfirmed}`,
+    `Records with unknown delivery: ${summary.recordsUnknown}`,
+    `Records not attempted: ${summary.recordsNotAttempted}`,
+  );
   const attemptedNotQueued = summary.recordsAttempted - summary.recordsQueued;
   if (attemptedNotQueued > 0) lines.push(`Records without queue acknowledgement: ${attemptedNotQueued}`);
 }

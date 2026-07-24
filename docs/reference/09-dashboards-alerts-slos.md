@@ -618,6 +618,8 @@ Find joins where pi.agent.join.status = timeout or failed
 
 ## 11. Suggested Alerts
 
+The `> 0` detection alerts deliberately have no `for:` pending duration: a single counter increment stays inside a `rate()` window only for that window's length, so a pending duration equal to the window would require sustained failures and could never fire on the isolated events these alerts describe.
+
 ### High LLM Error Rate
 
 ```promql
@@ -718,9 +720,27 @@ Severity: warning.
 
 Severity depends on normal fleet size; tune per deployment. This alert uses leased live agents, not cached raw claims.
 
+### Expired Active-Agent Claims
+
+```promql
+(
+  sum(
+    max by (observme_instance_id) (
+      (observme_active_agents > 0)
+      and on (observme_instance_id)
+      (observme_agent_lease_expires_unixtime_seconds <= time())
+    )
+  ) or vector(0)
+) > 5
+```
+
+Severity is deployment-tunable. This is a diagnostic for stale cached claims left behind by ungraceful producer death, not a liveness alert; the expired claims it counts are excluded from leased active totals.
+
 ## 12. SLOs
 
 The `ObservMe SLO Health` dashboard (`dashboards/observme-slo-health.json`) surfaces runtime SLO scorecards, 1h/30d burn-rate panels, and alert-threshold references. Export Health also links to the SLO dashboard and shows the liveness, drop, export-error, redaction-failure, and handler-overhead inputs separately so healthy idle ranges are distinguishable from unhealthy export behavior.
+
+Failure-side terms are guarded with `or vector(0)`: a counter that has never been incremented has no series, and an unguarded empty vector would propagate through the arithmetic and blank the indicator exactly when the system is healthy. Denominator workload absence still reads as no-data, which is the intended "no workload" state. Bounds are clamped because tiny denominators and window edges can otherwise push ratios outside [0, 1].
 
 ### Observability Export SLO
 
@@ -729,7 +749,7 @@ The `ObservMe SLO Health` dashboard (`dashboards/observme-slo-health.json`) surf
 Indicator:
 
 ```promql
-1 - (sum(rate(observme_telemetry_dropped_total[30d])) / clamp_min(sum(rate(observme_events_observed_total[30d])), 1e-9))
+1 - ((sum(rate(observme_telemetry_dropped_total[30d])) or vector(0)) / clamp_min(sum(rate(observme_events_observed_total[30d])), 1e-9))
 ```
 
 ### Agent Lineage SLO
@@ -739,8 +759,10 @@ Indicator:
 Indicator:
 
 ```promql
-1 - ((sum(rate(observme_subagent_spawn_failures_total{reason="lineage_missing"}[30d])) + sum(rate(observme_orphan_agents_total[30d])) + sum(rate(observme_trace_context_propagation_failures_total[30d]))) / clamp_min(sum(rate(observme_subagents_spawned_total[30d])), 1e-9))
+clamp_min(1 - (((sum(rate(observme_subagent_spawn_failures_total[30d])) or vector(0)) + (sum(rate(observme_orphan_agents_total[30d])) or vector(0)) + (sum(rate(observme_trace_context_propagation_failures_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_subagents_spawned_total[30d])), 1e-9)), 0)
 ```
+
+`observme_subagent_spawn_failures_total` carries only `spawn_type` and `error_class` labels, so all spawn failures count against the SLO; there is no lineage-specific failure reason today.
 
 ### Workflow Completion SLO
 
@@ -749,7 +771,7 @@ Indicator:
 Indicator:
 
 ```promql
-(sum(rate(observme_workflows_completed_total[30d])) + sum(rate(observme_workflow_errors_total[30d]))) / clamp_min(sum(rate(observme_workflows_started_total[30d])), 1e-9)
+clamp_max(((sum(rate(observme_workflows_completed_total[30d])) or vector(0)) + (sum(rate(observme_workflow_errors_total[30d])) or vector(0))) / clamp_min(sum(rate(observme_workflows_started_total[30d])), 1e-9), 1)
 ```
 
 ### Instrumentation Overhead SLO
