@@ -21,6 +21,8 @@
 
 ### Changed
 
+- Accepted a complete propagated lineage envelope without `traceparent` instead of failing open to an orphaned root: the child now joins the parent workflow at the correct depth, starts a new trace with the bounded `trace_context.propagation_failed` fallback, and still rejects present-but-malformed W3C context.
+- Added a "Troubleshooting: every agent appears as its own root" guide to the extension-integration documentation, with ranked causes, verification queries, a symptom table, and skill/index routing.
 - Made the packaged `observme-docs` skill implementation-aware: exact answers now verify the smallest owning source slice, code wins over stale design notes, and current backfill, path-capture, PII, reserved-telemetry, and subagent limitations are explicit.
 - Reconciled user, operator, security, architecture, telemetry, command, integration, and contributor documentation with the current command registry, config loader, event handlers, recording points, and privacy pipeline.
 - Aligned the generated starter, local example, validation script, environment examples, and local-stack guide on the Compose-backed `http://localhost` Nginx/Grafana profile with no TLS bypass or forced IPv4.

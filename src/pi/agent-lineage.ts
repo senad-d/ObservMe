@@ -154,6 +154,9 @@ function assertCompletePropagationEnvelope(config: ObservMeConfig, env: NodeJS.P
     throwPropagationError("stale_envelope", `${config.agent.idEnv} must not be inherited by a child process.`);
   }
 
+  // traceparent is deliberately not required: a missing W3C context degrades to the
+  // trace_context_unavailable fallback downstream instead of severing agent lineage.
+  // A present-but-malformed traceparent still invalidates the envelope.
   const requiredNames = [
     config.workflow.idEnv,
     config.agent.parentIdEnv,
@@ -161,7 +164,6 @@ function assertCompletePropagationEnvelope(config: ObservMeConfig, env: NodeJS.P
     config.agent.depthEnv,
     config.agent.spawnIdEnv,
   ];
-  if (config.agent.propagateTraceContext) requiredNames.push("traceparent");
 
   const missingNames = requiredNames.filter(name => !env[name]);
   if (missingNames.length > 0) {

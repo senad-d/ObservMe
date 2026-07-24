@@ -251,7 +251,7 @@ Rules:
 - Generate a random `pi.agent.id` and `pi.workflow.id` when no trusted value is supplied.
 - For root agents, set `pi.agent.root_id = pi.agent.id`, `pi.workflow.root_agent_id = pi.agent.id`, and `pi.agent.depth = 0`.
 - For subagents, accept parent/root/depth values only from the Pi process environment supplied by a trusted ObservMe-aware launcher or from explicit runtime overrides. Project-local `.env` values may configure ObservMe but must not establish lineage provenance.
-- Require a complete validated workflow, parent agent, root agent, depth, and spawn envelope. When `propagateTraceContext` is true, also require a valid W3C `traceparent`; validate optional `tracestate` and require duplicate parent trace/span metadata to match it.
+- Require a complete validated workflow, parent agent, root agent, depth, and spawn envelope. A supplied `traceparent` must be valid W3C, optional `tracestate` must validate and requires `traceparent`, and duplicate parent trace/span metadata must match. A missing `traceparent` degrades trace continuity with a bounded fallback signal without invalidating the lineage envelope.
 - Reject partial, malformed, oversized, or stale propagation fail-open: generate root/orphan identity, emit only bounded sanitized failure telemetry, and never include rejected raw environment values.
 - Continue a valid W3C parent context explicitly on the child `pi.session` span. If trusted lineage has no usable continuation, start a new trace and add a validated parent span link when metadata exists, otherwise emit the documented propagation-failure log/counter fallback.
 - When `propagateTraceContext` is true, propagate W3C `traceparent`/`tracestate` to child processes launched by ObservMe-aware subagent wrappers.

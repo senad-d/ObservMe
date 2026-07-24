@@ -1539,7 +1539,6 @@ test("trusted lineage without W3C continuation starts a new trace with a validat
   registerHandlers(pi, {
     env,
     trustedParentContext: true,
-    requireCompleteParentEnvelope: false,
     loadConfig,
     startTelemetry: async ({ lineage }) => {
       telemetry = createFakeTelemetry(lineage);
@@ -1554,7 +1553,11 @@ test("trusted lineage without W3C continuation starts a new trace with a validat
   assert.equal(sessionSpan.links.length, 1);
   assert.equal(sessionSpan.links[0].context.traceId, env.OBSERVME_PARENT_TRACE_ID);
   assert.equal(sessionSpan.links[0].context.spanId, env.OBSERVME_PARENT_SPAN_ID);
+  assert.equal(telemetry.lineage.parentAgentId, env.OBSERVME_PARENT_AGENT_ID);
+  assert.equal(telemetry.lineage.rootAgentId, env.OBSERVME_ROOT_AGENT_ID);
+  assert.equal(telemetry.lineage.orphaned, false);
   assert.equal(metricTotal(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TRACE_CONTEXT_PROPAGATION_FAILURES_TOTAL), 1);
+  assert.equal(metricTotal(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.ORPHAN_AGENTS_TOTAL), 0);
   assert.ok(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.TRACE_CONTEXT_PROPAGATION_FAILED));
 });
 

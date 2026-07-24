@@ -234,6 +234,59 @@ test("partial, malformed, oversized, and stale process envelopes fail open witho
   }
 });
 
+test("complete lineage envelope without traceparent keeps parent lineage instead of failing open", () => {
+  const lineage = createAgentLineageContext({
+    config: defaultObservMeConfig,
+    env: {
+      OBSERVME_WORKFLOW_ID: "workflow-trace-degraded",
+      OBSERVME_PARENT_AGENT_ID: "agent-parent-trace-degraded",
+      OBSERVME_ROOT_AGENT_ID: "agent-root-trace-degraded",
+      OBSERVME_PARENT_TRACE_ID: "4bf92f3577b34da6a3ce929d0e0e4736",
+      OBSERVME_PARENT_SPAN_ID: "00f067aa0ba902b7",
+      OBSERVME_AGENT_DEPTH: "1",
+      OBSERVME_SPAWN_ID: "spawn-trace-degraded",
+    },
+    trustedParentContext: true,
+    requireCompletePropagationEnvelope: true,
+    failOpenInvalidPropagation: true,
+    generateId: () => "trace-degraded-child",
+  });
+
+  assert.equal(lineage.workflowId, "workflow-trace-degraded");
+  assert.equal(lineage.parentAgentId, "agent-parent-trace-degraded");
+  assert.equal(lineage.rootAgentId, "agent-root-trace-degraded");
+  assert.equal(lineage.depth, 2);
+  assert.equal(lineage.role, "subagent");
+  assert.equal(lineage.spawnId, "spawn-trace-degraded");
+  assert.equal(lineage.propagatedTraceContext, undefined);
+  assert.equal(lineage.parentTraceId, "4bf92f3577b34da6a3ce929d0e0e4736");
+  assert.equal(lineage.parentSpanId, "00f067aa0ba902b7");
+  assert.equal(lineage.propagationFailure, undefined);
+  assert.equal(lineage.orphaned, false);
+});
+
+test("tracestate without traceparent still invalidates the envelope", () => {
+  const lineage = createAgentLineageContext({
+    config: defaultObservMeConfig,
+    env: {
+      OBSERVME_WORKFLOW_ID: "workflow-tracestate-only",
+      OBSERVME_PARENT_AGENT_ID: "agent-parent-tracestate-only",
+      OBSERVME_ROOT_AGENT_ID: "agent-root-tracestate-only",
+      OBSERVME_AGENT_DEPTH: "1",
+      OBSERVME_SPAWN_ID: "spawn-tracestate-only",
+      tracestate: "vendor=value",
+    },
+    trustedParentContext: true,
+    requireCompletePropagationEnvelope: true,
+    failOpenInvalidPropagation: true,
+    generateId: () => "tracestate-only-child",
+  });
+
+  assert.equal(lineage.parentAgentId, undefined);
+  assert.equal(lineage.propagationFailure, "partial_envelope");
+  assert.equal(lineage.orphaned, true);
+});
+
 test("trace-disabled child propagation accepts complete lineage and records no synthetic W3C parent", () => {
   const config = structuredClone(defaultObservMeConfig);
   config.agent.propagateTraceContext = false;

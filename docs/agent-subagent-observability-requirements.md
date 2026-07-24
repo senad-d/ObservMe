@@ -210,7 +210,7 @@ Expected behavior:
 
 The shipped extension registers session handlers with `trustedParentContext: true`, making the Pi process environment eligible for launcher-provided lineage. Trusted project `.env` values are loaded into ObservMe configuration but are not copied into this lineage input, so a project file cannot establish parent provenance.
 
-Eligibility is not blind acceptance. When any propagation value is present, `src/pi/agent-lineage.ts` requires a complete validated workflow, parent agent, root agent, parent depth, and spawn envelope. Trace-enabled propagation also requires valid W3C `traceparent`; optional `tracestate` and duplicate parent trace/span metadata must validate and agree. A stale inherited child agent id is rejected. Partial, malformed, oversized, or stale envelopes fail open to root/orphan lineage with bounded diagnostics that never include raw inherited values.
+Eligibility is not blind acceptance. When any propagation value is present, `src/pi/agent-lineage.ts` requires a complete validated workflow, parent agent, root agent, parent depth, and spawn envelope. A `traceparent` that is present must be valid W3C; a missing `traceparent` does not invalidate the envelope — lineage connects and trace continuity degrades to the bounded `trace_context.propagation_failed` fallback. Optional `tracestate` and duplicate parent trace/span metadata must validate and agree. A stale inherited child agent id is rejected. Partial, malformed, oversized, or stale envelopes fail open to root/orphan lineage with bounded diagnostics that never include raw inherited values.
 
 ObservMe validates the process envelope but does not cryptographically authenticate the launcher. An ObservMe-aware launcher remains responsible for constructing the envelope immediately before child startup and clearing stale propagation variables. Explicit runtime lineage options remain available to tests and embedders.
 
@@ -293,8 +293,8 @@ Important details:
 - This sanitization only happens on the ObservMe spawn path. A subagent process that launches a further child by passing its own `process.env` directly hands down the envelope *it received*: the grandchild then validates successfully but attaches as a **sibling** of its parent (same parent agent id, same spawn id, same depth) with no orphan signal. Every spawn must go through `startSubagent()` (or otherwise rebuild the envelope) — never reuse an inherited envelope.
 - `OBSERVME_AGENT_DEPTH` carries the parent depth. The child increments it when creating its own lineage.
 - `traceparent` and `tracestate` let the child continue the same distributed trace when possible.
-- If W3C trace context cannot be propagated, the parent still propagates workflow/parent/root ids and emits `trace_context.propagation_failed` fallback telemetry. However, a child whose own configuration has `agent.propagateTraceContext: true` treats a missing `traceparent` as an incomplete envelope and rejects the entire envelope, falling open to an orphaned root-like runtime. Parent and child must therefore agree on `agent.propagateTraceContext` — remember that a child launched in a different project directory loads that project's ObservMe configuration.
-- Note that with `traces.enabled: false` the extension still generates valid (unsampled) span contexts, so `traceparent` continues to propagate; disabling traces does not break lineage.
+- If W3C trace context cannot be propagated, the parent still propagates workflow/parent/root ids and emits `trace_context.propagation_failed` fallback telemetry. The child accepts the complete lineage envelope even without `traceparent`: it joins the workflow at the correct depth, starts a new trace (with a validated span link when duplicate parent trace/span metadata is available), and emits its own bounded `trace_context.propagation_failed` signal. Only a present-but-malformed `traceparent` invalidates the envelope.
+- Note that with `traces.enabled: false` the extension still generates valid (unsampled) span contexts, so `traceparent` continues to propagate; disabling traces does not break lineage or trace continuity variables.
 - Raw commands, prompts, cwd, usernames, hostnames, PIDs, and inherited environment values must not be used to derive lineage ids.
 - In tmux mode, env propagation must be explicit per child command or per tmux session. Do not assume the parent process environment reaches a pane through an already-running tmux server.
 - If the orchestrator stores tmux metadata, store only safe names, hashed values, or bounded status enums in telemetry.
@@ -313,7 +313,7 @@ Validation gates:
 
 - Workflow, parent-agent, root-agent, depth, and spawn values must be present together when any propagated value is supplied.
 - Lineage env values must be short and match the safe character pattern.
-- Trace-enabled propagation must include a valid W3C `traceparent`; optional `tracestate` is bounded and structurally validated.
+- A supplied `traceparent` must be valid W3C; a missing `traceparent` degrades trace continuity without invalidating the lineage envelope. Optional `tracestate` is bounded, structurally validated, and requires `traceparent`.
 - Parent trace id must be 32 hex characters and parent span id must be 16 hex characters when duplicate metadata is supplied; both must match `traceparent`.
 - Depth must be an integer between 0 and 64.
 - A stale inherited child agent id or uppercase W3C propagation variable invalidates the envelope.
