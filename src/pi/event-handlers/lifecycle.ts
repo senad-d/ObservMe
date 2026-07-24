@@ -1,5 +1,4 @@
 import { open } from "node:fs/promises";
-import { SpanStatusCode } from "@opentelemetry/api";
 import type {
   ExtensionContext,
   SessionShutdownEvent,
@@ -73,12 +72,12 @@ import {
   isRootWorkflow,
   monotonicNowMs,
   startSessionTelemetry,
-  workflowFailed,
 } from "../handler-runtime.ts";
 import {
   appendSessionCorrelationEntry,
   readLatestSessionCorrelation,
 } from "../session-correlation.ts";
+import { interruptActiveSubagentOperations } from "../subagent-spawn.ts";
 import type { HandlerRegistrar, SerializedLifecycleQueue } from "../handler-runtime.ts";
 import type {
   AttributeMap,
@@ -93,7 +92,9 @@ import type {
   SessionRecoveryHeader,
   StartSessionTelemetry,
   StartupRecoveryState,
+  TerminalOutcome,
 } from "../handler-types.ts";
+import { deriveWorkflowOutcome, setTerminalSpanStatus } from "../terminal-outcome.ts";
 
 export function registerLifecycleHandlers(
   registrar: HandlerRegistrar,
@@ -285,7 +286,10 @@ async function handleSessionShutdown(
   ctx: ExtensionContext,
 ): Promise<void> {
   const session = state.session;
-  if (!session) return;
+  if (!session) {
+    state.integrationSessionPhase = undefined;
+    return;
+  }
 
   await shutDownTelemetrySession(session, event, ctx, state);
 }
@@ -429,17 +433,17 @@ async function shutDownPreviousSessionBeforeDuplicateStart(
   emitLifecycleLog(session.logger, LOG_EVENT_NAMES.SESSION_DUPLICATE_START, buildDuplicateSessionStartAttributes(session));
 
   try {
-    const result = await shutDownTelemetrySession(session, duplicateSessionStartShutdownEvent(), ctx, state);
-    if (otelCleanupCompleted(result)) return true;
-    notifyPendingTelemetryCleanup(ctx);
+    await shutDownTelemetrySession(session, duplicateSessionStartShutdownEvent(), ctx, state);
+    if (!state.otelOperationOwnership.hasUnresolvedOperations) return true;
+    notifyPendingTelemetryCleanupOnce(state, ctx);
     return false;
   } catch (error) {
     recordDuplicateSessionStartShutdownError(session, error);
     clearObsSessionRuntimeState();
     clearObsAgentsRuntimeState();
     state.session = undefined;
-    state.pendingCleanup = session;
-    notifyPendingTelemetryCleanup(ctx);
+    retainControllerOperationFailure(state, session, "shutdown", error);
+    notifyPendingTelemetryCleanupOnce(state, ctx);
     return false;
   }
 }
@@ -448,50 +452,23 @@ async function resolvePendingTelemetryCleanupBeforeStart(
   state: HandlerSessionState,
   ctx: ObservMeHandlerContext,
 ): Promise<boolean> {
-  const pendingSession = state.pendingCleanup;
-  if (!pendingSession) return true;
-
-  const result = await recordControllerOperationResult(pendingSession, "shutdown");
-  if (otelCleanupCompleted(result)) {
-    if (state.pendingCleanup === pendingSession) state.pendingCleanup = undefined;
-    return true;
-  }
-
-  retainUnresolvedTelemetryCleanup(state, pendingSession, result);
-  notifyPendingTelemetryCleanup(ctx);
+  if (await state.otelOperationOwnership.resolveBeforeStart()) return true;
+  notifyPendingTelemetryCleanupOnce(state, ctx);
   return false;
 }
 
-function retainUnresolvedTelemetryCleanup(
+function notifyPendingTelemetryCleanupOnce(
   state: HandlerSessionState,
-  session: ObservMeTelemetrySession,
-  result: BoundedOtelOperationResult | undefined,
+  ctx: ObservMeHandlerContext,
 ): void {
-  if (!result || otelCleanupCompleted(result)) return;
-
-  state.pendingCleanup = session;
-  void result.settlement?.then(releaseSettledTelemetryCleanup.bind(undefined, state, session));
-}
-
-function releaseSettledTelemetryCleanup(
-  state: HandlerSessionState,
-  session: ObservMeTelemetrySession,
-  settlement: OtelOperationSettlement,
-): void {
-  if (!otelCleanupCompleted(settlement) || state.pendingCleanup !== session) return;
-  state.pendingCleanup = undefined;
-}
-
-function otelCleanupCompleted(
-  result: Pick<BoundedOtelOperationResult, "completed" | "timedOut" | "error">,
-): boolean {
-  return result.completed && !result.timedOut && !result.error;
+  if (!state.otelOperationOwnership.takeStartupDiagnostic()) return;
+  notifyPendingTelemetryCleanup(ctx);
 }
 
 function notifyPendingTelemetryCleanup(ctx: ObservMeHandlerContext): void {
   if (ctx.hasUI === false || !ctx.ui?.notify) return;
 
-  const message = "ObservMe telemetry startup was deferred because prior OTEL shutdown cleanup is still unresolved.";
+  const message = "ObservMe telemetry startup was deferred because prior OTEL flush or shutdown cleanup is still unresolved.";
   try {
     void Promise.resolve(ctx.ui.notify(message, "warning")).catch(ignorePendingCleanupDiagnosticError);
   } catch {
@@ -514,10 +491,10 @@ function buildDuplicateSessionStartAttributes(session: ObservMeTelemetrySession)
   });
 }
 
-function duplicateSessionStartShutdownEvent(): Record<string, unknown> {
+function duplicateSessionStartShutdownEvent(): SessionShutdownEvent {
   return {
-    duplicateSessionStart: true,
-    status: "ok",
+    type: "session_shutdown",
+    reason: "reload",
   };
 }
 
@@ -537,49 +514,48 @@ async function cleanUpFailedSessionStart(
   state: HandlerSessionState,
 ): Promise<void> {
   const labels = metricLabels(session.config, session.lineage);
-  let shutdownResult: BoundedOtelOperationResult | undefined;
 
   try {
+    state.integrationSessionPhase = "closing";
     deactivateSessionActiveAgent(session, labels);
+    interruptActiveSubagentOperations(session);
     endAllActiveSpans(session);
     endActiveSpan(session, session.sessionSpan);
     await clearExtensionStatus(ctx);
-    await recordControllerOperationResult(session, "flush");
-    shutdownResult = await recordControllerOperationResult(session, "shutdown");
+    await recordOwnedControllerOperation(state, session, "flush");
+    await recordOwnedControllerOperation(state, session, "shutdown");
   } finally {
     disposeSessionActiveAgentLease(session);
     clearTelemetrySessionRuntimeState(session, state);
-    retainUnresolvedTelemetryCleanup(state, session, shutdownResult);
   }
 }
 
 async function shutDownTelemetrySession(
   session: ObservMeTelemetrySession,
-  event: unknown,
+  event: SessionShutdownEvent,
   ctx: ObservMeHandlerContext,
   state: HandlerSessionState,
 ): Promise<BoundedOtelOperationResult> {
+  state.integrationSessionPhase = "closing";
   const labels = metricLabels(session.config, session.lineage);
-  const shutdownAttributes = buildShutdownAttributes(event, session);
-  const failed = workflowFailed(event);
-  let shutdownResult: BoundedOtelOperationResult | undefined;
+  const outcome = deriveWorkflowOutcome(event, session.workflowOutcome);
+  const shutdownAttributes = buildShutdownAttributes(event, session, outcome);
 
   try {
     deactivateSessionActiveAgent(session, labels);
     session.metrics.sessionsShutdown.add(1, labels);
-    recordWorkflowShutdownTelemetry(session, shutdownAttributes, failed, labels);
+    recordWorkflowShutdownTelemetry(session, shutdownAttributes, outcome, labels);
+    interruptActiveSubagentOperations(session);
     endAllActiveSpans(session);
     session.sessionSpan?.addEvent(LOG_EVENT_NAMES.SESSION_SHUTDOWN, shutdownAttributes);
-    if (failed) session.sessionSpan?.setStatus({ code: SpanStatusCode.ERROR });
+    if (session.sessionSpan) setTerminalSpanStatus(session.sessionSpan, outcome);
     endActiveSpan(session, session.sessionSpan);
     await clearExtensionStatus(ctx);
-    await recordControllerOperationResult(session, "flush");
-    shutdownResult = await recordControllerOperationResult(session, "shutdown");
-    return shutdownResult;
+    await recordOwnedControllerOperation(state, session, "flush");
+    return await recordOwnedControllerOperation(state, session, "shutdown");
   } finally {
     disposeSessionActiveAgentLease(session);
     clearTelemetrySessionRuntimeState(session, state);
-    retainUnresolvedTelemetryCleanup(state, session, shutdownResult);
   }
 }
 
@@ -615,11 +591,15 @@ function clearTelemetrySessionRuntimeState(
 ): void {
   clearObsSessionRuntimeState();
   clearObsAgentsRuntimeState();
-  if (state.session === session) state.session = undefined;
+  if (state.session === session) {
+    state.session = undefined;
+    state.integrationSessionPhase = undefined;
+  }
 }
 
 function clearDisabledTelemetryRuntimeState(state: HandlerSessionState): void {
   state.session = undefined;
+  state.integrationSessionPhase = undefined;
   clearObsSessionRuntimeState();
   clearObsAgentsRuntimeState();
 }
@@ -657,6 +637,50 @@ async function clearExtensionStatus(ctx: ObservMeHandlerContext): Promise<void> 
   } catch {
     return;
   }
+}
+
+async function recordOwnedControllerOperation(
+  state: HandlerSessionState,
+  session: ObservMeTelemetrySession,
+  operation: BoundedOtelOperationResult["operation"],
+): Promise<BoundedOtelOperationResult> {
+  const result = await recordControllerOperationResult(session, operation);
+  retainControllerOperationResult(state, session, result);
+  return result;
+}
+
+function retainControllerOperationFailure(
+  state: HandlerSessionState,
+  session: ObservMeTelemetrySession,
+  operation: BoundedOtelOperationResult["operation"],
+  error: unknown,
+): void {
+  retainControllerOperationResult(state, session, {
+    operation,
+    completed: false,
+    timedOut: false,
+    error,
+  });
+}
+
+function retainControllerOperationResult(
+  state: HandlerSessionState,
+  session: ObservMeTelemetrySession,
+  result: BoundedOtelOperationResult,
+): void {
+  state.otelOperationOwnership.retain(
+    result,
+    recordControllerOperationResult.bind(undefined, session, result.operation),
+    recordLateControllerOperationSettlement.bind(undefined, session),
+  );
+}
+
+function recordLateControllerOperationSettlement(
+  session: ObservMeTelemetrySession,
+  settlement: OtelOperationSettlement,
+): void {
+  recordObsStatusExportResult(settlement);
+  recordExportOperationResult(session, settlement);
 }
 
 async function recordControllerOperationResult(
@@ -767,7 +791,7 @@ function ignoreConfigDiagnosticError(): undefined {
 function recordWorkflowShutdownTelemetry(
   session: ObservMeTelemetrySession,
   attributes: AttributeMap,
-  failed: boolean,
+  outcome: TerminalOutcome,
   labels: Record<string, string>,
 ): void {
   emitLifecycleLog(session.logger, LOG_EVENT_NAMES.SESSION_SHUTDOWN, attributes);
@@ -775,12 +799,20 @@ function recordWorkflowShutdownTelemetry(
 
   const durationMs = attributes[WORKFLOW_ATTRIBUTES.PI_WORKFLOW_DURATION_MS];
   if (typeof durationMs === "number") {
-    session.metrics.workflowDurationMs.record(durationMs, { ...labels, status: failed ? "error" : "ok" });
+    session.metrics.workflowDurationMs.record(durationMs, { ...labels, status: outcome });
   }
 
-  if (failed) {
+  if (outcome === "error") {
     session.metrics.workflowErrors.add(1, labels);
     emitLifecycleLog(session.logger, LOG_EVENT_NAMES.WORKFLOW_FAILED, attributes, "ERROR");
+    return;
+  }
+  if (outcome === "cancelled") {
+    emitLifecycleLog(session.logger, LOG_EVENT_NAMES.WORKFLOW_CANCELLED, attributes);
+    return;
+  }
+  if (outcome === "unknown") {
+    emitLifecycleLog(session.logger, LOG_EVENT_NAMES.WORKFLOW_UNKNOWN, attributes);
     return;
   }
 
@@ -823,16 +855,23 @@ function exportFailureErrorClass(result: BoundedOtelOperationResult): string {
   return normalizeMetricValue(errorClass(result.error), "error");
 }
 
-function buildShutdownAttributes(event: unknown, session: ObservMeTelemetrySession): AttributeMap {
-  return withoutUndefinedAttributes({
+function buildShutdownAttributes(
+  event: SessionShutdownEvent,
+  session: ObservMeTelemetrySession,
+  outcome: TerminalOutcome,
+): AttributeMap {
+  const attributes = withoutUndefinedAttributes({
     [LOG_ATTRIBUTES.PI_SESSION_ID]: readString(session.sessionAttributes, SESSION_ATTRIBUTES.PI_SESSION_ID),
     [LOG_ATTRIBUTES.PI_WORKFLOW_ID]: session.lineage.workflowId,
     [LOG_ATTRIBUTES.PI_WORKFLOW_ROOT_AGENT_ID]: session.lineage.workflowRootAgentId,
     [LOG_ATTRIBUTES.PI_AGENT_ID]: session.lineage.agentId,
     [LOG_ATTRIBUTES.PI_AGENT_ROOT_ID]: session.lineage.rootAgentId,
     [WORKFLOW_ATTRIBUTES.PI_WORKFLOW_DURATION_MS]: resolveWorkflowDurationMs(session),
-    [WORKFLOW_ATTRIBUTES.PI_WORKFLOW_STATUS]: workflowFailed(event) ? "error" : "ok",
+    [WORKFLOW_ATTRIBUTES.PI_WORKFLOW_STATUS]: outcome,
+    reason: event.reason,
   });
+  session.sessionSpan?.setAttribute(WORKFLOW_ATTRIBUTES.PI_WORKFLOW_STATUS, outcome);
+  return attributes;
 }
 
 function resolveWorkflowDurationMs(session: ObservMeTelemetrySession): number | undefined {

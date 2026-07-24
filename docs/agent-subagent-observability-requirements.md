@@ -290,9 +290,11 @@ Important details:
 
 - `OBSERVME_AGENT_ID` is not normally propagated from parent to child; the child should generate its own `pi.agent.id`.
 - Inherited ObservMe and W3C propagation variables are cleared before current child lineage is written, so stale agent IDs, spawn IDs, parent trace/span IDs, `traceparent`, or `tracestate` never leak into a new child environment.
+- This sanitization only happens on the ObservMe spawn path. A subagent process that launches a further child by passing its own `process.env` directly hands down the envelope *it received*: the grandchild then validates successfully but attaches as a **sibling** of its parent (same parent agent id, same spawn id, same depth) with no orphan signal. Every spawn must go through `startSubagent()` (or otherwise rebuild the envelope) — never reuse an inherited envelope.
 - `OBSERVME_AGENT_DEPTH` carries the parent depth. The child increments it when creating its own lineage.
 - `traceparent` and `tracestate` let the child continue the same distributed trace when possible.
-- If W3C trace context cannot be propagated, ObservMe must still propagate workflow/parent/root ids and emit fallback telemetry.
+- If W3C trace context cannot be propagated, the parent still propagates workflow/parent/root ids and emits `trace_context.propagation_failed` fallback telemetry. However, a child whose own configuration has `agent.propagateTraceContext: true` treats a missing `traceparent` as an incomplete envelope and rejects the entire envelope, falling open to an orphaned root-like runtime. Parent and child must therefore agree on `agent.propagateTraceContext` — remember that a child launched in a different project directory loads that project's ObservMe configuration.
+- Note that with `traces.enabled: false` the extension still generates valid (unsampled) span contexts, so `traceparent` continues to propagate; disabling traces does not break lineage.
 - Raw commands, prompts, cwd, usernames, hostnames, PIDs, and inherited environment values must not be used to derive lineage ids.
 - In tmux mode, env propagation must be explicit per child command or per tmux session. Do not assume the parent process environment reaches a pane through an already-running tmux server.
 - If the orchestrator stores tmux metadata, store only safe names, hashed values, or bounded status enums in telemetry.
@@ -491,15 +493,17 @@ Allowed approaches:
 - operator marks a tmux-interactive child as joined/cancelled
 - backend query confirms terminal telemetry, with timeout fallback
 
-The parent `join` record should include:
+The ObservMe API accepts separate bounded status fields:
 
 ```text
-child status: ok|error|cancelled|timeout|partial|unknown
-failure propagated: true|false
+childStatus: starting|active|completed|failed|cancelled|orphaned
+joinStatus: waiting|completed|failed|cancelled|timeout|unknown
+failurePropagated: true|false
 active children count
 child count / fan-out count
-safe result summary hash/length when available
 ```
+
+Terminal `completeSubagent()` transitions accept only `completed`, `failed`, or `cancelled`; `partial`, `ok`, and `error` are not valid API values. Result summary transport remains the orchestrator's responsibility and is not a field in the current ObservMe integration API.
 
 ### Trust model for propagated lineage
 

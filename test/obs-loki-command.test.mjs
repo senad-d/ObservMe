@@ -3,7 +3,12 @@ import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { QUERY_RESULT_COUNT_MAXIMUM } from "../src/config/query-limits.ts";
 import { getObsRootCommandArgumentCompletions, registerObsCommand } from "../src/commands/obs.ts";
-import { OBS_ERRORS_LOGQL, getObsErrorsSnapshot, renderObsErrors } from "../src/commands/obs-errors.ts";
+import {
+  OBS_ERRORS_LOGQL,
+  getObsErrorsSnapshot,
+  handleObsErrorsCommand,
+  renderObsErrors,
+} from "../src/commands/obs-errors.ts";
 import {
   buildObsLogsLogQl,
   getObsLogsSnapshot,
@@ -12,6 +17,7 @@ import {
 } from "../src/commands/obs-logs.ts";
 
 const fixedNow = new Date("2026-07-07T11:00:00.000Z");
+const responseFragmentMarker = "private-loki-command-response-fragment";
 
 function cloneDefaultConfig() {
   return structuredClone(defaultObservMeConfig);
@@ -191,6 +197,51 @@ test("Loki summaries clamp row counts and neutralize terminal controls and injec
     output,
     /unsafe-time \[31m injected-time failed event injected-event category=error injected-category severity=warn injected-severity/u,
   );
+});
+
+test("/obs errors reports malformed Loki responses as backend failures without body fragments", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const notifications = [];
+
+  await handleObsErrorsCommand("errors", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: async () => new Response(responseFragmentMarker, { status: 200 }),
+  });
+
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].type, "error");
+  assert.match(notifications[0].message, /Loki query failed: backend schema error: response body must be valid JSON/u);
+  assert.doesNotMatch(notifications[0].message, /No error logs found/u);
+  assert.doesNotMatch(notifications[0].message, new RegExp(responseFragmentMarker, "u"));
+});
+
+test("/obs errors keeps no-data guidance for legitimate empty Loki responses", async () => {
+  const config = cloneDefaultConfig();
+  config.query.maxLogs = 20;
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const notifications = [];
+
+  await handleObsErrorsCommand("errors", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: async () =>
+      new Response(
+        JSON.stringify({ status: "success", data: { resultType: "streams", result: [] } }),
+        { status: 200 },
+      ),
+  });
+
+  assert.deepEqual(notifications, [
+    {
+      message: [
+        "Recent error events (last 1h, max 20)",
+        "No error logs found. Next: generate error telemetry, then verify Loki labels and datasource with /obs health.",
+      ].join("\n"),
+      type: "info",
+    },
+  ]);
 });
 
 test("/obs logs rejects unsafe current session ids before querying Loki", async () => {

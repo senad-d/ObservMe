@@ -3,14 +3,18 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { metrics, trace } from "@opentelemetry/api";
 import { logs } from "@opentelemetry/api-logs";
+import { SimpleLogRecordProcessor } from "@opentelemetry/sdk-logs";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { getObsRootCommandArgumentCompletions, registerObsCommand } from "../src/commands/obs.ts";
 import {
+  ObsBackfillLogExporter,
   buildObsBackfillRecords,
   createObsBackfillLogExporter,
   handleObsBackfillCommand,
+  renderObsBackfillSummary,
   runObsBackfill,
 } from "../src/commands/obs-backfill.ts";
+import { ObservMeLogSdk } from "../src/otel/logs.ts";
 import {
   emitUnrelatedGlobalTelemetry,
   installSentinelGlobalProviders,
@@ -177,6 +181,62 @@ function bashEntry(id, parentId, timestamp, output) {
   };
 }
 
+function hrTimeToEpochMilliseconds(hrTime) {
+  return hrTime[0] * 1000 + hrTime[1] / 1_000_000;
+}
+
+test("production backfill exporter confirms records only after flush and preserves source occurrence times", async t => {
+  const config = cloneDefaultConfig();
+  const exported = [];
+  const retainingExporter = {
+    export: (records, callback) => {
+      exported.push(...records);
+      callback({ code: 0 });
+    },
+    shutdown: async () => undefined,
+  };
+  const sdk = new ObservMeLogSdk({
+    config,
+    exporterFactory: () => retainingExporter,
+    processorFactory: exporter => new SimpleLogRecordProcessor({ exporter }),
+  });
+  sdk.start();
+
+  const exporter = new ObsBackfillLogExporter(sdk, 100);
+  t.after(async () => exporter.shutdown());
+  const entries = [
+    userEntry("a1", "2026-07-07T11:10:00.000Z", "one"),
+    userEntry("a2", "2026-07-07T11:20:00.000Z", "two"),
+    userEntry("a3", "not-a-timestamp", "three"),
+    userEntry("a4", undefined, "four"),
+  ];
+
+  const replayStartedMs = Date.now();
+  const summary = await runObsBackfill(createContext(entries, []), { currentSession: true }, {
+    loadConfig: async () => config,
+    createExporter: () => exporter,
+    maxRecords: 10,
+  });
+  const replayFinishedMs = Date.now();
+  const occurrenceTimes = exported.map(record => hrTimeToEpochMilliseconds(record.hrTime));
+
+  assert.equal(summary.status, "completed");
+  assert.equal(summary.recordsAttempted, 4);
+  assert.equal(summary.recordsQueued, 4);
+  assert.equal(summary.recordsConfirmed, 4);
+  assert.equal(summary.recordsUnknown, 0);
+  assert.equal(summary.recordsNotAttempted, 0);
+  assert.equal(exported.length, 4);
+  assert.deepEqual(occurrenceTimes.slice(0, 2), [
+    Date.parse("2026-07-07T11:10:00.000Z"),
+    Date.parse("2026-07-07T11:20:00.000Z"),
+  ]);
+  assert.ok(occurrenceTimes[0] < occurrenceTimes[1]);
+  assert.deepEqual(exported[2].hrTime, exported[2].hrTimeObserved);
+  assert.deepEqual(exported[3].hrTime, exported[3].hrTimeObserved);
+  assert.ok(occurrenceTimes.slice(2).every(timestamp => timestamp >= replayStartedMs && timestamp <= replayFinishedMs));
+});
+
 test("backfill keeps pre-existing process-global providers untouched", { concurrency: false }, async t => {
   const sentinel = installSentinelGlobalProviders();
   const config = cloneDefaultConfig();
@@ -224,7 +284,8 @@ test("/obs backfill requires confirmation before exporting replayed telemetry", 
   });
 
   assert.equal(summary.status, "cancelled");
-  assert.equal(summary.recordsExported, 0);
+  assert.equal(summary.recordsAttempted, 0);
+  assert.equal(summary.recordsConfirmed, 0);
   assert.equal(records.length, 0);
   assert.equal(notifications[0].type, "confirm");
   assert.match(notifications[0].message, /observme\.replayed=true/u);
@@ -287,7 +348,11 @@ test("/obs backfill proceeds when Pi has no waitForIdle command capability", asy
   });
 
   assert.equal(summary.status, "completed");
-  assert.equal(summary.recordsExported, 1);
+  assert.equal(summary.recordsAttempted, 1);
+  assert.equal(summary.recordsQueued, 1);
+  assert.equal(summary.recordsConfirmed, 1);
+  assert.equal(summary.recordsUnknown, 0);
+  assert.equal(summary.recordsNotAttempted, 0);
   assert.equal(records.filter(record => record.eventName).length, 1);
 });
 
@@ -310,8 +375,9 @@ test("/obs backfill marks exported records as replayed and redacts captured cont
   const exported = records.filter(record => record.eventName);
 
   assert.equal(summary.status, "completed");
-  assert.equal(summary.recordsExported, 1);
+  assert.equal(summary.recordsConfirmed, 1);
   assert.equal(exported.length, 1);
+  assert.equal(exported[0].timestamp.getTime(), Date.parse("2026-07-07T11:30:00.000Z"));
   assert.equal(exported[0].attributes["observme.replayed"], true);
   assert.match(exported[0].attributes["pi.llm.prompt.redacted"], /\[REDACTED:/u);
   assert.doesNotMatch(exported[0].attributes["pi.llm.prompt.redacted"], /abc123/u);
@@ -401,15 +467,17 @@ test("/obs backfill unsafe capture uses the shared raw truncation policy for pro
   assert.equal(result.records[2].attributes["observme.truncated"], true);
 });
 
-test("/obs backfill drops prompt, tool result, and bash output when redaction fails", () => {
-  const previousSalt = process.env.OBSERVME_HASH_SALT;
-  delete process.env.OBSERVME_HASH_SALT;
+test("/obs backfill redaction-failure records are secret-free when the configured tenant salt is missing", () => {
+  const tenantSaltEnv = "PRIVATE_BACKFILL_CAPTURE_SALT";
+  const previousSalt = process.env[tenantSaltEnv];
+  delete process.env[tenantSaltEnv];
 
   try {
     const config = cloneDefaultConfig();
     config.capture.prompts = true;
     config.capture.toolResults = true;
     config.capture.bashOutput = true;
+    config.privacy.tenantSaltEnv = tenantSaltEnv;
 
     const result = buildObsBackfillRecords([
       userEntry("a1", "2026-07-07T11:10:00.000Z", "password=prompt-secret"),
@@ -429,9 +497,13 @@ test("/obs backfill drops prompt, tool result, and bash output when redaction fa
     assert.equal(result.records[0].attributes["pi.llm.prompt.redacted"], undefined);
     assert.equal(result.records[1].attributes["pi.tool.result.redacted"], undefined);
     assert.equal(result.records[2].attributes["pi.bash.output.redacted"], undefined);
+    assert.doesNotMatch(
+      JSON.stringify(result),
+      /PRIVATE_BACKFILL_CAPTURE_SALT|prompt-secret|tool-secret|bash-secret/u,
+    );
   } finally {
-    if (previousSalt === undefined) delete process.env.OBSERVME_HASH_SALT;
-    else process.env.OBSERVME_HASH_SALT = previousSalt;
+    if (previousSalt === undefined) delete process.env[tenantSaltEnv];
+    else process.env[tenantSaltEnv] = previousSalt;
   }
 });
 
@@ -457,6 +529,30 @@ test("backfill record building enforces export rate limits", () => {
   assert.equal(result.entriesEligible, 3);
   assert.equal(result.rateLimited, true);
   assert.equal(result.recordsSkipped, 1);
+});
+
+test("/obs backfill keeps rate-limit skips separate from confirmed delivery outcomes", async () => {
+  const records = [];
+  const config = cloneDefaultConfig();
+  const summary = await runObsBackfill(createContext([
+    userEntry("a1", "2026-07-07T11:10:00.000Z", "one"),
+    userEntry("a2", "2026-07-07T11:20:00.000Z", "two"),
+    userEntry("a3", "2026-07-07T11:30:00.000Z", "three"),
+  ], []), { currentSession: true }, {
+    loadConfig: async () => config,
+    createExporter: () => createExporter(records),
+    maxRecords: 2,
+  });
+
+  assert.equal(summary.status, "completed");
+  assert.equal(summary.recordsAttempted, 2);
+  assert.equal(summary.recordsQueued, 2);
+  assert.equal(summary.recordsConfirmed, 2);
+  assert.equal(summary.recordsUnknown, 0);
+  assert.equal(summary.recordsNotAttempted, 0);
+  assert.equal(summary.recordsSkipped, 1);
+  assert.equal(summary.rateLimited, true);
+  assert.match(renderObsBackfillSummary(summary), /Rate limit: applied; skipped 1 eligible record\(s\)/u);
 });
 
 test("/obs backfill rejects oversized --since before scanning session entries", async () => {
@@ -501,7 +597,11 @@ test("/obs backfill accepts maximum --since boundary durations", async () => {
         since: request.since,
         entriesScanned: 0,
         entriesEligible: 0,
-        recordsExported: 0,
+        recordsAttempted: 0,
+        recordsQueued: 0,
+        recordsConfirmed: 0,
+        recordsUnknown: 0,
+        recordsNotAttempted: 0,
         recordsSkipped: 0,
         rateLimited: false,
         contentCaptured: false,
@@ -542,9 +642,49 @@ test("/obs backfill cancellation before confirmation does not export", async () 
 
   assert.equal(summary.status, "cancelled");
   assert.equal(summary.reason, "operation cancelled");
-  assert.equal(summary.recordsExported, 0);
+  assert.equal(summary.recordsAttempted, 0);
+  assert.equal(summary.recordsConfirmed, 0);
   assert.equal(records.length, 0);
   assert.equal(notifications.length, 0);
+});
+
+test("/obs backfill cancellation after scanning preserves exact not-attempted counts", async () => {
+  const config = cloneDefaultConfig();
+  const controller = new AbortController();
+  const entries = [
+    userEntry("a1", "2026-07-07T11:20:00.000Z", "one"),
+    userEntry("a2", "2026-07-07T11:30:00.000Z", "two"),
+  ];
+  const sessionManager = createSessionManager(entries);
+  const ctx = {
+    ...createContext(entries, []),
+    signal: controller.signal,
+    sessionManager: {
+      ...sessionManager,
+      getBranch: () => {
+        controller.abort();
+        return entries;
+      },
+    },
+  };
+  let exporterCalls = 0;
+
+  const summary = await runObsBackfill(ctx, { currentSession: true }, {
+    loadConfig: async () => config,
+    createExporter: () => {
+      exporterCalls += 1;
+      return createExporter([]);
+    },
+  });
+
+  assert.equal(summary.status, "cancelled");
+  assert.equal(summary.recordsAttempted, 0);
+  assert.equal(summary.recordsQueued, 0);
+  assert.equal(summary.recordsConfirmed, 0);
+  assert.equal(summary.recordsUnknown, 0);
+  assert.equal(summary.recordsNotAttempted, 2);
+  assert.equal(summary.recordsSkipped, 0);
+  assert.equal(exporterCalls, 0);
 });
 
 test("/obs backfill cancellation during export attempts shutdown and reports partial summary", async () => {
@@ -590,8 +730,12 @@ test("/obs backfill cancellation during export attempts shutdown and reports par
   assert.equal(summary.status, "cancelled");
   assert.equal(summary.reason, "operation cancelled");
   assert.equal(summary.entriesEligible, 2);
-  assert.equal(summary.recordsExported, 1);
-  assert.equal(summary.recordsSkipped, 1);
+  assert.equal(summary.recordsAttempted, 2);
+  assert.equal(summary.recordsQueued, 1);
+  assert.equal(summary.recordsConfirmed, 0);
+  assert.equal(summary.recordsUnknown, 2);
+  assert.equal(summary.recordsNotAttempted, 0);
+  assert.equal(summary.recordsSkipped, 0);
   assert.equal(records.filter(record => record.eventName).length, 1);
   assert.equal(records.at(-1).shutdown, true);
 });
@@ -632,10 +776,14 @@ test("/obs backfill aborts timed-out emit work and preserves the original timeou
 
   await delay(40);
 
-  assert.equal(summary.status, "cancelled");
+  assert.equal(summary.status, "partial");
   assert.match(summary.reason, /export emit timed out/u);
-  assert.equal(summary.recordsExported, 0);
-  assert.equal(summary.recordsSkipped, 1);
+  assert.equal(summary.recordsAttempted, 1);
+  assert.equal(summary.recordsQueued, 0);
+  assert.equal(summary.recordsConfirmed, 0);
+  assert.equal(summary.recordsUnknown, 1);
+  assert.equal(summary.recordsNotAttempted, 0);
+  assert.equal(summary.recordsSkipped, 0);
   assert.equal(emitSignalAborted, true);
   assert.equal(shutdownCalls, 1);
   assert.equal(records.filter(record => record.eventName).length, 0);
@@ -667,15 +815,19 @@ test("/obs backfill aborts timed-out exporter setup and counts all records unexp
     exportOperationTimeoutMs: 10,
   });
 
-  assert.equal(summary.status, "cancelled");
+  assert.equal(summary.status, "partial");
   assert.match(summary.reason, /exporter setup timed out/u);
-  assert.equal(summary.recordsExported, 0);
-  assert.equal(summary.recordsSkipped, 2);
+  assert.equal(summary.recordsAttempted, 0);
+  assert.equal(summary.recordsQueued, 0);
+  assert.equal(summary.recordsConfirmed, 0);
+  assert.equal(summary.recordsUnknown, 0);
+  assert.equal(summary.recordsNotAttempted, 2);
+  assert.equal(summary.recordsSkipped, 0);
   assert.equal(setupSignalAborted, true);
   assert.equal(records.length, 0);
 });
 
-test("/obs backfill reports flush failures with emitted counts and one shutdown", async () => {
+test("/obs backfill reports queued records as unknown when flush fails", async () => {
   const notifications = [];
   const records = [];
   const config = cloneDefaultConfig();
@@ -703,10 +855,19 @@ test("/obs backfill reports flush failures with emitted counts and one shutdown"
     maxRecords: 10,
   });
 
-  assert.equal(summary.status, "cancelled");
+  const rendered = renderObsBackfillSummary(summary);
+  assert.equal(summary.status, "partial");
   assert.equal(summary.reason, "export flush failed");
-  assert.equal(summary.recordsExported, 2);
+  assert.equal(summary.recordsAttempted, 2);
+  assert.equal(summary.recordsQueued, 2);
+  assert.equal(summary.recordsConfirmed, 0);
+  assert.equal(summary.recordsUnknown, 2);
+  assert.equal(summary.recordsNotAttempted, 0);
   assert.equal(summary.recordsSkipped, 0);
+  assert.match(rendered, /Records confirmed exported: 0/u);
+  assert.match(rendered, /Records with unknown delivery: 2/u);
+  assert.match(rendered, /retrying because replay may create duplicates/u);
+  assert.doesNotMatch(rendered, /Records exported: 2/u);
   assert.equal(records.filter(record => record.eventName).length, 2);
   assert.equal(shutdownCalls, 1);
 });
@@ -735,10 +896,16 @@ test("/obs backfill reports shutdown-only failures after successful emits", asyn
     maxRecords: 10,
   });
 
-  assert.equal(summary.status, "cancelled");
+  const rendered = renderObsBackfillSummary(summary);
+  assert.equal(summary.status, "partial");
   assert.equal(summary.reason, "export shutdown failed");
-  assert.equal(summary.recordsExported, 1);
+  assert.equal(summary.recordsAttempted, 1);
+  assert.equal(summary.recordsQueued, 1);
+  assert.equal(summary.recordsConfirmed, 1);
+  assert.equal(summary.recordsUnknown, 0);
+  assert.equal(summary.recordsNotAttempted, 0);
   assert.equal(summary.recordsSkipped, 0);
+  assert.match(rendered, /do not replay them solely because exporter shutdown failed/u);
   assert.equal(shutdownCalls, 1);
 });
 
@@ -747,7 +914,10 @@ test("/obs backfill exporter errors are reported without secret-bearing details"
   const config = cloneDefaultConfig();
   const records = [];
 
-  await handleObsBackfillCommand("backfill --current-session --since 1h", createContext([userEntry("a1", "2026-07-07T11:30:00.000Z", bearerToken)], notifications), {
+  await handleObsBackfillCommand("backfill --current-session --since 1h", createContext([
+    userEntry("a1", "2026-07-07T11:20:00.000Z", bearerToken),
+    userEntry("a2", "2026-07-07T11:30:00.000Z", "not attempted"),
+  ], notifications), {
     loadConfig: async () => config,
     createExporter: () => ({
       emit: () => {
@@ -760,8 +930,12 @@ test("/obs backfill exporter errors are reported without secret-bearing details"
   });
 
   assert.equal(notifications.at(-1).type, "warning");
-  assert.match(notifications.at(-1).message, /ObservMe backfill cancelled: export emit failed/u);
-  assert.match(notifications.at(-1).message, /Records not exported: 1/u);
+  assert.match(notifications.at(-1).message, /ObservMe backfill incomplete: export emit failed/u);
+  assert.match(notifications.at(-1).message, /Records attempted: 1/u);
+  assert.match(notifications.at(-1).message, /Records without queue acknowledgement: 1/u);
+  assert.match(notifications.at(-1).message, /Records with unknown delivery: 1/u);
+  assert.match(notifications.at(-1).message, /Records not attempted: 1/u);
+  assert.match(notifications.at(-1).message, /inspect the destination before retrying because replay may create duplicates/u);
   assert.doesNotMatch(notifications.at(-1).message, /abc123|private\.env|OBSERVME_TOKEN|prompt text/u);
   assert.equal(records.at(-1).shutdown, true);
 });
@@ -779,7 +953,11 @@ test("root obs command dispatches explicit backfill subcommand", async () => {
         since: "1h",
         entriesScanned: 1,
         entriesEligible: 1,
-        recordsExported: 1,
+        recordsAttempted: 1,
+        recordsQueued: 1,
+        recordsConfirmed: 1,
+        recordsUnknown: 0,
+        recordsNotAttempted: 0,
         recordsSkipped: 0,
         rateLimited: false,
         contentCaptured: false,

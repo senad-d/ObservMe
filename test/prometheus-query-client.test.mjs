@@ -12,6 +12,7 @@ import {
 import { OBS_BACKEND_LABEL_MAX_CHARS } from "../src/safety/display-bounds.ts";
 
 const defaultQueryTime = new Date("2026-07-07T11:00:00.250Z");
+const responseFragmentMarker = "private-prometheus-response-fragment";
 const documentedLowCardinalityPromQl = [
   "sum(increase(observme_llm_cost_usd_total[24h])) by (model, provider)",
   "sum(rate(observme_subagents_spawned_total[1h])) by (agent_role, subagent_depth, spawn_type, spawn_reason)",
@@ -228,6 +229,67 @@ test("queryPrometheus reports malformed success payloads as backend schema error
       return true;
     },
   );
+});
+
+test("queryPrometheus maps malformed JSON and error envelopes to fixed body-free errors", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const cases = [
+    {
+      body: responseFragmentMarker,
+      message: "Prometheus query failed: backend schema error: response body must be valid JSON.",
+    },
+    {
+      body: JSON.stringify({ status: "error", error: responseFragmentMarker }),
+      message: "Prometheus query failed: backend returned an error response.",
+    },
+  ];
+
+  for (const item of cases) {
+    await assert.rejects(
+      queryPrometheus(config, "observme_sessions_started_total", undefined, {
+        fetch: async () => new Response(item.body, { status: 200 }),
+      }),
+      error => {
+        assert.equal(error.message, item.message);
+        assert.doesNotMatch(error.message, new RegExp(responseFragmentMarker, "u"));
+        return true;
+      },
+    );
+  }
+});
+
+test("queryPrometheus rejects unsupported envelopes and invalid result items with fixed schema errors", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const cases = [
+    {
+      payload: [],
+      message: "Prometheus query failed: backend schema error: response must be a JSON object.",
+    },
+    {
+      payload: {
+        status: "success",
+        data: { resultType: "vector", result: [responseFragmentMarker] },
+      },
+      message: "Prometheus query failed: backend schema error: each data.result item must be an object.",
+    },
+  ];
+
+  for (const item of cases) {
+    await assert.rejects(
+      queryPrometheus(config, "observme_sessions_started_total", undefined, {
+        fetch: async () => new Response(JSON.stringify(item.payload), { status: 200 }),
+      }),
+      error => {
+        assert.equal(error.message, item.message);
+        assert.doesNotMatch(error.message, new RegExp(responseFragmentMarker, "u"));
+        return true;
+      },
+    );
+  }
 });
 
 test("queryPrometheus cancels injected oversized responses without Content-Length before JSON parsing", async () => {
@@ -497,14 +559,23 @@ test("queryPrometheus applies query.timeoutMs as an aborting fetch timeout", asy
   assert.equal(signals.length, 1);
 });
 
-test("queryPrometheus is optional and skips network calls when query integration is disabled", async () => {
+test("queryPrometheus reports disabled integration distinctly and skips network calls", async () => {
   const config = cloneDefaultConfig();
   config.query.enabled = false;
-  const fetcher = async () => {
-    throw new Error("fetch should not be called when query integration is disabled");
-  };
+  let fetchCalls = 0;
 
-  const result = await queryPrometheus(config, "observme_llm_cost_usd_total", undefined, { fetch: fetcher });
-
-  assert.deepEqual(result, { resultType: "vector", series: [] });
+  await assert.rejects(
+    queryPrometheus(config, "observme_llm_cost_usd_total", undefined, {
+      fetch: async () => {
+        fetchCalls += 1;
+        throw new Error("fetch should not be called when query integration is disabled");
+      },
+    }),
+    error => {
+      assert.equal(error.name, "GrafanaQueryDisabledError");
+      assert.equal(error.message, "Grafana query integration is disabled (query.enabled=false).");
+      return true;
+    },
+  );
+  assert.equal(fetchCalls, 0);
 });

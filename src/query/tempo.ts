@@ -136,8 +136,6 @@ async function searchTempoWithTransport(
   attrs: Record<string, string>,
   range: TimeRange,
 ): Promise<TraceSummary[]> {
-  if (!config.query.enabled) return [];
-
   assertGrafanaQueryReady(config, "tempo");
   const searchAttrs = normalizeTempoSearchAttributes(attrs);
   const timeRange = normalizeTimeRange(range);
@@ -264,25 +262,23 @@ async function readTempoTraceSummaries(
 ): Promise<TraceSummary[]> {
   if (!response.ok) throw new Error(`Tempo search failed: ${transport.formatHttpFailure(response)}`);
 
-  const payload = (await response.json()) as unknown;
+  const payload = await transport.readJson(response, "tempo");
   const traces = extractTempoTraceItems(payload);
-  return traces.map(toTraceSummary).filter(isTraceSummary).slice(0, maxTraces);
+  return traces.map(toTraceSummary).slice(0, maxTraces);
 }
 
 function extractTempoTraceItems(payload: unknown): unknown[] {
-  if (Array.isArray(payload)) return payload;
-  if (isRecord(payload) && Array.isArray(payload.traces)) return payload.traces;
-  return [];
+  if (!isRecord(payload)) throw createTempoSchemaError("response must be a JSON object");
+  if (payload.status === "error") throw new Error("Tempo search failed: backend returned an error response.");
+  if (!Array.isArray(payload.traces)) throw createTempoSchemaError("response.traces must be an array");
+  return payload.traces;
 }
 
-function toTraceSummary(item: unknown): TraceSummary | undefined {
-  if (!isRecord(item)) return undefined;
-
-  const traceId = readTraceId(item);
-  if (!traceId) return undefined;
+function toTraceSummary(item: unknown): TraceSummary {
+  if (!isRecord(item)) throw createTempoSchemaError("each response.traces item must be an object");
 
   return {
-    traceId,
+    traceId: readTraceId(item),
     rootServiceName: readOptionalString(item, "rootServiceName"),
     rootTraceName: readOptionalString(item, "rootTraceName"),
     startTimeUnixNano: readOptionalStringOrNumber(item, "startTimeUnixNano"),
@@ -291,34 +287,39 @@ function toTraceSummary(item: unknown): TraceSummary | undefined {
   };
 }
 
-function readTraceId(item: Record<string, unknown>): string | undefined {
+function createTempoSchemaError(reason: string): Error {
+  return new Error(`Tempo search failed: backend schema error: ${reason}.`);
+}
+
+function readTraceId(item: Record<string, unknown>): string {
   const traceId = readOptionalString(item, "traceID") ?? readOptionalString(item, "traceId");
-  if (!traceId) return undefined;
-  return traceId.trim().toLowerCase();
+  if (!traceId) throw createTempoSchemaError("each response.traces item must include a non-empty traceID or traceId string");
+  return traceId.toLowerCase();
 }
 
 function readOptionalString(item: Record<string, unknown>, key: string): string | undefined {
   const value = item[key];
-  if (typeof value !== "string") return undefined;
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !value.trim()) {
+    throw createTempoSchemaError(`each response.traces item ${key} must be a non-empty string when present`);
+  }
 
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  return value.trim();
 }
 
 function readOptionalStringOrNumber(item: Record<string, unknown>, key: string): string | undefined {
   const value = item[key];
+  if (value === undefined) return undefined;
   if (typeof value === "string" && value.trim()) return value.trim();
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  return undefined;
+  throw createTempoSchemaError(`each response.traces item ${key} must be a non-empty string or finite number when present`);
 }
 
 function readOptionalFiniteNumber(item: Record<string, unknown>, key: string): number | undefined {
   const value = item[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function isTraceSummary(value: TraceSummary | undefined): value is TraceSummary {
-  return value !== undefined;
+  if (value === undefined) return undefined;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  throw createTempoSchemaError(`each response.traces item ${key} must be a finite number when present`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -17,12 +17,12 @@ ObservMe is implemented to:
 - Read Pi session/event data through Pi extension APIs, with no continuous full-session-file tailing.
 - Start OTEL exporters only from `session_start` and stop them from `session_shutdown` with bounded flush/shutdown timeouts.
 - Send telemetry only to configured OTLP endpoints, with an OpenTelemetry Collector recommended for production.
-- Disable prompt, response, thinking, tool-argument, tool-result, bash-command, bash-output, and file-path capture by default.
-- Redact secrets, optional PII, POSIX/Windows-drive/UNC absolute paths, URL credentials, custom configured patterns, and oversized content before optional content export; normal URLs and harmless slash-separated prose are not treated as filesystem paths. Custom regex redactors are bounded and reject unsupported risky constructs such as nested quantified groups, lookaround, named groups, and backreferences.
+- Disable prompt, response, thinking, tool-argument, tool-result, bash-command, and bash-output capture by default. `capture.filePaths` is accepted and reported but currently has no direct live recording point.
+- Redact secrets, POSIX/Windows-drive/UNC absolute paths, URL credentials, custom configured patterns, and oversized content before optional content export; normal URLs and harmless slash-separated prose are not treated as filesystem paths. The redaction helper has a PII-detector hook, but current live configuration does not enable or supply a detector. Custom regex redactors are bounded and reject unsupported risky constructs such as nested quantified groups, lookaround, named groups, and backreferences.
 - Accept child-agent lineage only from a complete validated Pi process-environment envelope (or controlled runtime override), never from trusted project `.env`; malformed, partial, oversized, or stale values fail open without exposing inherited values.
 - Keep session IDs, workflow IDs, agent IDs, trace/span IDs, raw paths, raw commands, raw prompts, and raw errors out of Prometheus metric labels.
 - Fail open: Pi keeps running if the Collector, Grafana, Tempo, Loki, or Prometheus backend is unreachable.
-- Require explicit user confirmation for `/obs backfill` historical replay and mark replayed telemetry with `observme.replayed=true`.
+- Require explicit user confirmation for `/obs backfill` current-session log-record replay and mark replayed telemetry with `observme.replayed=true`.
 
 ## Reporting vulnerabilities
 

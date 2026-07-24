@@ -21,6 +21,9 @@
 
 ### Changed
 
+- Made the packaged `observme-docs` skill implementation-aware: exact answers now verify the smallest owning source slice, code wins over stale design notes, and current backfill, path-capture, PII, reserved-telemetry, and subagent limitations are explicit.
+- Reconciled user, operator, security, architecture, telemetry, command, integration, and contributor documentation with the current command registry, config loader, event handlers, recording points, and privacy pipeline.
+- Aligned the generated starter, local example, validation script, environment examples, and local-stack guide on the Compose-backed `http://localhost` Nginx/Grafana profile with no TLS bypass or forced IPv4.
 - Raised the release-tested Pi and exact compatibility CI target to 0.81.1 while retaining 0.80.5 as the earliest validated target.
 - Made the 0.1.5 hardening patch self-contained with explicit review units, all imported production modules included, and unrelated specification history preserved.
 - Established a typed Pi event registration contract, removed non-event legacy registrations, pinned the release-tested Pi API for validation, and added capability-based pre-registration diagnostics.
@@ -43,13 +46,40 @@
 
 ### Fixed
 
+- Cancelled Collector health response bodies after status inspection so success, HTTP failure, and repeated stalled-body checks release network resources without changing bounded health output.
+- Ran independent `/obs tools` and `/obs agents` enrichment queries concurrently within one configured request-timeout window while preserving deterministic results and subsystem warnings.
+- Anchored exclusive project-config creation to a verified canonical parent directory so ancestor swaps cannot create outside files, with fail-closed cleanup diagnostics.
+- Retained only the selected tenant-salt value in config-associated state after applying project/process environment precedence, excluding unrelated credentials from extension-long retention.
+- Rolled back the public integration listener when Pi event-handler registration fails, while preserving the original initialization error and idempotent shutdown cleanup.
+- Rejected NUL-containing, ambiguous, or oversized child environment keys before integration telemetry mutation, and verified accepted sanitized environments launch unchanged through Node.
+- Rejected contradictory persisted session-correlation topology, including non-root children that identify themselves as the workflow root, while preserving fail-open recovery.
+- Derived turn image counts from Pi's preceding user-prompt event and omitted the attribute when no correlated source exists, preventing fabricated zeros and stale carry-over.
+- Bounded global/project configuration and trusted project `.env` reads by opened-file byte size before content allocation, with fixed path-free oversized-source diagnostics.
+- Bounded custom-redaction names, cumulative matches, replacement size, and intermediate output so broad patterns fail closed before unbounded hashing or allocation.
+- Constrained tenant-salt environment names and made live and backfill redaction-failure reporting use only fixed, secret-free diagnostics.
+- Excluded trusted project `.env` lineage-looking values from provenance validation while preserving process-envelope validation, override precedence, and tenant-salt loading.
+- Preserved runner distinctions between launcher failure, terminal child results, timeout, caller cancellation, and transport-read failure, allowing timed-out children to complete later exactly once.
+- Bound wait/join completion to each handle's original spawn and child identity, synchronized child activation, and deactivated evicted `/obs agents` hints.
+- Fenced cached integration APIs as soon as session shutdown begins and cancelled active spawn/wait/join telemetry exactly once before exporter cleanup.
+- Distinguished `query.enabled=false` from legitimate empty Grafana backend results across adapters, query-backed `/obs` commands, status, and health without issuing Grafana requests.
+- Preserved `/obs agents` local workflow and child state when Prometheus or Tempo enrichment is disabled, unavailable, or failing, with bounded subsystem warnings and independent partial results.
+- Normalized malformed Tempo, Loki, and Prometheus datasource responses through one bounded JSON boundary, with strict body-free schema errors and preserved empty-result guidance.
+- Reported `/obs backfill` delivery as confirmed only after flush, with explicit attempted, queued, unknown, and not-attempted counts plus duplicate-safe retry guidance.
+- Kept failed OpenTelemetry signal shutdowns retryable by retaining failed provider ownership and skipping already-closed siblings on composite retries.
+- Reconciled tool argument hashes, sizes, labels, and opt-in redacted capture with Pi's final post-middleware input while preserving parallel tool isolation.
+- Derived turn, agent-run, and root-workflow outcomes from Pi's typed assistant/tool terminal payloads, preserving failed, cancelled, and unknown span/log states through reason-only session shutdown.
+- Preserved valid session-entry occurrence timestamps in `/obs backfill` OTEL logs, with malformed or missing timestamps safely falling back to replay time.
+- Completed Pi's zero-based first turn so `turnIndex: 0` closes the matching span and records completion telemetry without disturbing legacy missing-index fallback.
+- Completed interactive `!`/`!!` Bash telemetry from Pi's recorded `BashExecutionMessage`, preserving later `user_bash` extensions and clearing ordinary completions before shutdown.
+- Corrected documentation that overstated direct file-path capture and live PII detection, treated log-only backfill as full telemetry replay, listed unsupported wait/join status values, or presented reserved metrics/events/spans as live.
+- Removed stale repository-only stack guidance for HTTPS, nonexistent online/gateway assets, and direct Grafana port assumptions; the stack guide now documents only checked-in Compose services/endpoints and the generated local secrets directory is ignored.
 - Removed Pi version gating from extension startup entirely; tested versions are evidence only, essential ExtensionAPI capabilities are checked before registration, and optional APIs remain feature-detected.
 - Made missing project-path component reversal explicit.
 - Applied one control-safe 64-row/8,192-character policy to every `/obs` notification and capped query result counts at configuration and runtime boundaries.
 - Coupled canonical project config, `.env`, and starter-config I/O to identity-verified file handles so concurrent symlink and ancestor swaps fail closed without exposing external paths.
 - Rejected credentials embedded in Grafana base URLs during config validation, query readiness, and transport preflight without exposing their values.
 - Rejected active and retained child-agent identifier collisions before creating integration spans, tree state, metrics, or propagation envelopes.
-- Retained ownership of timed-out OpenTelemetry shutdowns, observed late settlement safely, and deferred session replacement until prior exporter cleanup completes.
+- Retained process-scoped ownership of timed-out OpenTelemetry flushes and shutdowns across extension re-registration, observing late success or retryable failure while bounding never-settling cleanup to one diagnostic.
 - Replaced custom-redaction regex heuristics with bounded structural validation that rejects nested, ambiguous-alternative, and overlapping sequential repetition while preserving safe disjoint quantified alternatives.
 - Used concise word-character syntax for single-brace unresolved trace-link placeholders.
 - Used concise word-character syntax for dollar-brace unresolved trace-link placeholders.

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { getObsRootCommandArgumentCompletions, registerObsCommand } from "../src/commands/obs.ts";
 import {
@@ -203,6 +204,36 @@ test("/obs tools queries documented PromQL with configured timeout and result li
     ratePerSecond: 0.05,
     timestampUnixSeconds: "1783422000.25",
   });
+});
+
+test("/obs tools completes delayed independent queries within one request timeout budget", async () => {
+  const config = cloneDefaultConfig();
+  config.query.timeoutMs = 450;
+  config.query.grafana.url = "http://grafana.local/grafana/";
+  config.query.grafana.token = "grafana-token";
+  config.query.grafana.datasourceUids.prometheus = "mimir/main";
+  const queryDelayMs = 250;
+  const queries = [];
+  const startedAt = performance.now();
+
+  const snapshot = await getObsToolsSnapshot(createCommandContext([]), {
+    loadConfig: async () => config,
+    fetch: async input => {
+      const query = new URL(String(input)).searchParams.get("query");
+      queries.push(query);
+      await delay(queryDelayMs);
+      return createToolsResponseForQuery(query);
+    },
+  });
+  const elapsedMs = performance.now() - startedAt;
+
+  assert.ok(elapsedMs < config.query.timeoutMs, `expected one ${config.query.timeoutMs}ms budget, took ${elapsedMs}ms`);
+  assert.deepEqual(queries, [OBS_TOOLS_CALLS_PROMQL, OBS_TOOLS_FAILURES_PROMQL]);
+  assert.deepEqual(snapshot.calls.map(row => row.toolName), ["read", "bash"]);
+  assert.deepEqual(snapshot.failures.map(row => `${row.toolName}/${row.errorClass}`), [
+    "bash/TimeoutError",
+    "read/NotFound",
+  ]);
 });
 
 test("root obs command dispatches tools subcommand", async () => {

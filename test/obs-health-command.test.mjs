@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { getObsRootCommandArgumentCompletions, registerObsCommand } from "../src/commands/obs.ts";
 import {
@@ -32,6 +33,44 @@ function createFakeCommandPi() {
 
 function createHealthyResponse() {
   return new Response("{}", { status: 200, statusText: "OK" });
+}
+
+class TrackedCollectorResponseBody {
+  cancelCount = 0;
+
+  cancel() {
+    this.cancelCount += 1;
+  }
+}
+
+class PendingCollectorFetch {
+  closureCount = 0;
+
+  async fetch(_input, init) {
+    try {
+      await delay(60_000, undefined, { signal: init.signal });
+      throw new Error("pending Collector fetch unexpectedly completed");
+    } catch (error) {
+      this.closureCount += 1;
+      throw error;
+    }
+  }
+}
+
+function createCollectorOnlyConfig() {
+  const config = cloneDefaultConfig();
+  config.otlp.endpoint = "http://collector.local:4318";
+  config.query.enabled = false;
+  return config;
+}
+
+function createTrackedCollectorResponse(status) {
+  const body = new TrackedCollectorResponseBody();
+  const response = new Response(new ReadableStream(body), {
+    status,
+    statusText: status >= 500 ? "Service Unavailable" : "OK",
+  });
+  return { body, response };
 }
 
 test("renderObsHealth reports Collector, Grafana, and datasource successes", () => {
@@ -101,6 +140,65 @@ test("/obs health checks Collector, Grafana, and configured datasources with the
   assert.equal(calls[1].init.headers.Authorization, "Bearer grafana-token");
 });
 
+test("/obs health cancels successful and failed Collector response bodies exactly once", async () => {
+  const config = createCollectorOnlyConfig();
+  const cases = [
+    { status: 200, expectedStatus: "ok" },
+    { status: 503, expectedStatus: "failed" },
+  ];
+
+  for (const testCase of cases) {
+    const tracked = createTrackedCollectorResponse(testCase.status);
+    const snapshot = await getObsHealthSnapshot(createCommandContext([]), {
+      loadConfig: async () => config,
+      fetch: async () => tracked.response,
+      timeoutMs: 25,
+    });
+
+    await Promise.resolve();
+    assert.equal(snapshot.checks[0].status, testCase.expectedStatus);
+    assert.equal(tracked.body.cancelCount, 1);
+  }
+});
+
+test("/obs health releases every stalled Collector body across repeated checks", async () => {
+  const config = createCollectorOnlyConfig();
+  const trackedBodies = [];
+
+  for (let index = 0; index < 5; index += 1) {
+    const tracked = createTrackedCollectorResponse(200);
+    trackedBodies.push(tracked.body);
+    const snapshot = await getObsHealthSnapshot(createCommandContext([]), {
+      loadConfig: async () => config,
+      fetch: async () => tracked.response,
+      timeoutMs: 25,
+    });
+
+    assert.match(renderObsHealth(snapshot), /Collector: reachable/u);
+  }
+
+  await Promise.resolve();
+  assert.deepEqual(
+    trackedBodies.map(body => body.cancelCount),
+    [1, 1, 1, 1, 1],
+  );
+});
+
+test("/obs health aborts a pending Collector request and closes it exactly once", async () => {
+  const config = createCollectorOnlyConfig();
+  const pending = new PendingCollectorFetch();
+  const snapshot = await getObsHealthSnapshot(createCommandContext([]), {
+    loadConfig: async () => config,
+    fetch: pending.fetch.bind(pending),
+    timeoutMs: 5,
+  });
+
+  assert.equal(pending.closureCount, 1);
+  assert.equal(snapshot.checks[0].status, "failed");
+  assert.equal(snapshot.checks[0].detail, "timed out");
+  assert.match(renderObsHealth(snapshot), /Collector: unreachable \(timed out/u);
+});
+
 test("/obs health reports acknowledged TLS verification bypasses without credentials", async () => {
   const config = cloneDefaultConfig();
   config.otlp.tls.insecureSkipVerify = true;
@@ -118,6 +216,34 @@ test("/obs health reports acknowledged TLS verification bypasses without credent
   assert.match(output, /Collector transport security: TLS certificate verification disabled \(explicitly acknowledged\)/u);
   assert.match(output, /Grafana transport security: TLS certificate verification disabled \(explicitly acknowledged\)/u);
   assert.doesNotMatch(output, /private-otlp-token|private-grafana-token/u);
+});
+
+test("/obs health reports query.enabled=false and skips every Grafana network call", async () => {
+  const config = cloneDefaultConfig();
+  config.otlp.endpoint = "http://collector.local:4318";
+  config.query.enabled = false;
+  const notifications = [];
+  const calls = [];
+
+  await handleObsHealthCommand("health", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: async input => {
+      calls.push(String(input));
+      return createHealthyResponse();
+    },
+  });
+
+  assert.deepEqual(calls, ["http://collector.local:4318"]);
+  assert.equal(notifications[0].type, "info");
+  assert.match(notifications[0].message, /Collector: reachable/u);
+  assert.match(
+    notifications[0].message,
+    /Grafana: skipped \(Grafana query integration is disabled \(query\.enabled=false\)\. Next: set query\.enabled=true to enable Grafana-backed commands\.\)/u,
+  );
+  assert.match(
+    notifications[0].message,
+    /Metrics datasource: skipped \(Grafana query integration is disabled \(query\.enabled=false\)\./u,
+  );
 });
 
 test("/obs health reports unresolved Grafana auth before making Grafana calls", async () => {

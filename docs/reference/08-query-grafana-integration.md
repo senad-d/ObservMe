@@ -56,9 +56,9 @@ Bundled local-stack profile:
 query:
   enabled: true
   links:
-    traceUrlTemplate: https://observability.local/explore?left=...
+    traceUrlTemplate: http://localhost/explore?left=...
   grafana:
-    url: https://observability.local
+    url: http://localhost
     token: ${OBSERVME_GRAFANA_TOKEN}
     username: admin
     password: ${OBSERVME_GRAFANA_PASSWORD}
@@ -67,12 +67,12 @@ query:
       loki: loki
       prometheus: prometheus
     tls:
-      insecureSkipVerify: true
+      insecureSkipVerify: false
     transport:
-      preferIPv4: true
+      preferIPv4: false
 ```
 
-For the bundled `observability-stack/`, the supported command path is nginx HTTPS at `https://observability.local`; the default stack does not publish Grafana on `localhost:3000`. Create a Grafana service-account token with Viewer access for read-only datasource queries and export it as `OBSERVME_GRAFANA_TOKEN`, or export/set `OBSERVME_GRAFANA_PASSWORD` from `observability-stack/secrets/grafana_admin_password` for local Basic auth. Extension environment values can come from system environment variables before Pi starts, or from a trusted project `.env` copied from `.env.example`; system variables override `.env`. The local self-signed certificate requires `query.grafana.tls.insecureSkipVerify=true`, and `query.grafana.transport.preferIPv4=true` avoids DNS stalls when `observability.local` resolves to IPv6 first. Production configurations using the TLS bypass must also set `privacy.allowInsecureTransport=true` as an explicit acknowledgement; trusting the production CA remains preferred. Provisioned datasource UIDs are `tempo`, `loki`, and `prometheus`; Loki selectors use normalized labels such as `service_name`, `pi_session_id`, `event_name`, and `event_category`.
+For the bundled `observability-stack/`, the supported command path is Nginx at `http://localhost`; the default stack does not publish Grafana directly on `localhost:3000`. Create a Grafana service-account token with Viewer access for read-only datasource queries and export it as `OBSERVME_GRAFANA_TOKEN`, or export/set `OBSERVME_GRAFANA_PASSWORD` from `observability-stack/secrets/grafana_admin_password` for local Basic auth. Extension environment values can come from system environment variables before Pi starts, or from a trusted project `.env` copied from `.env.example`; system variables override `.env`. The bundled profile uses plain local HTTP with `privacy.allowInsecureTransport=true`, `query.grafana.tls.insecureSkipVerify=false`, and `query.grafana.transport.preferIPv4=false`. Production should use HTTPS and trust its CA. Provisioned datasource UIDs are `tempo`, `loki`, and `prometheus`; Loki selectors use normalized labels such as `service_name`, `pi_session_id`, `event_name`, and `event_category`.
 
 ## 4. Commands
 
@@ -80,7 +80,7 @@ For the bundled `observability-stack/`, the supported command path is nginx HTTP
 
 Shows local ObservMe state.
 
-Output:
+Abbreviated output (the live command also includes config-source/readiness and every capture flag):
 
 ```text
 ObservMe: enabled
@@ -146,19 +146,13 @@ PromQL example for aggregate cost:
 sum(increase(observme_llm_cost_usd_total[24h])) by (model, provider)
 ```
 
-Session-scoped metric query, only for deployments that explicitly promote session IDs to metric labels:
-
-```promql
-sum(increase(observme_llm_cost_usd_total{pi_session_id="$session"}[24h])) by (model, provider)
-```
-
-Because `session_id` is high cardinality, session-scoped metric queries should be disabled by default. The safer default is querying trace/log attributes for the current session.
+`/obs cost` accepts no scope options and explicitly rejects `--session`, `--session=<id>`, and `--current-session`. Session IDs are forbidden Prometheus labels; use traces or logs for session-level drill-down.
 
 ### `/obs agents`
 
 Shows the current workflow/agent identity and, when query integration is enabled, recent parent/child relationships, depth, fan-out, orphan, and critical-path hints.
 
-Output:
+Representative output:
 
 ```text
 Workflow: 91ce... root=2f4c...
@@ -166,8 +160,11 @@ Agent: 2f4c... (orchestrator depth=0)
 Session: 8ddf...
 Subagents spawned in current trace: 3
 Current tree: depth=2 width=4 active=1 orphaned=0
-Latest child: 7a91... status=ok cost=$0.18 join=1.2s
-Open lineage trace: https://grafana.example.com/...
+Recent children: 7a91... status=completed depth=1
+Latest child: 7a91... status=completed active=0 join=1.2s
+Wait/join hints: active_waits=0 active_joins=0 latest=join:7a91... status=completed duration=1.2s
+Aggregate agent metrics (last 1h): spawn_series=1 fanout_series=1 orphan_series=0
+Lineage drill-down: Tempo attributes pi.agent.id, pi.workflow.id traces=1 latest_trace=4bf92f...
 ```
 
 PromQL aggregate examples must use only low-cardinality labels:
@@ -215,10 +212,32 @@ With Loki OTLP ingestion, OTel attribute dots are normalized to underscores (`ev
 Loki LogQL for current session:
 
 ```logql
-{service_name="observme-pi-extension", pi_session_id="$session"}
+{service_name="observme-pi-extension", event_category!~"llm_content|tool_content", pi_session_id="$session"}
 ```
 
-Only available if Loki receives `pi.session.id` as structured metadata or label.
+The command intentionally excludes captured prompt/response/thinking bodies and captured failed-tool output. Those opt-in content streams remain available to their dedicated dashboards. `/obs logs` works only when Loki receives `pi.session.id` as structured metadata or a label.
+
+### `/obs link`
+
+Uses the same request parser, trace lookup, and canonical URL builder as `/obs trace`, with a different output title:
+
+```text
+/obs link
+/obs link --last-turn
+/obs link --session <session-id>
+```
+
+### `/obs backfill`
+
+Replays eligible entries from the current Pi session as OTEL **log records** only; it does not reconstruct historical spans or metrics.
+
+```text
+/obs backfill --current-session
+/obs backfill --current-session --since 30m
+/obs backfill --current-session --since=2d
+```
+
+`--current-session` is required. `--since` is optional and accepts a positive integer followed by `ms`, `s`, `m`, `h`, or `d`, up to 30 days. The command requires interactive confirmation, waits for the active session to become idle when Pi exposes that hook, uses the live capture/redaction policy, marks records with `observme.replayed=true`, preserves each valid session-entry occurrence timestamp, and exports at most 100 records by default. Entries with malformed or missing timestamps are exported at replay time instead of being assigned an invented historical time; when `--since` is present, those entries are excluded because their window eligibility cannot be established. The command skips when ObservMe or log export is disabled or current session state is unavailable. Cancellation and each exporter operation are bounded.
 
 ## 5. Trace Links
 
@@ -234,7 +253,7 @@ The matching optional Tempo datasource placeholders are `{tempoDatasourceUid}`, 
 An empty template or a template containing `...` selects the structured Grafana Explore fallback. The fallback uses `query.grafana.url`, preserves any path prefix, and constructs the current `schemaVersion=1&panes=...` Tempo query with `query.grafana.datasourceUids.tempo`. This is the behavior used by the generated starter:
 
 ```yaml
-traceUrlTemplate: https://observability.local/explore?left=...
+traceUrlTemplate: http://localhost/explore?left=...
 ```
 
 Unsupported placeholders, non-HTTP(S) URLs, credential-bearing URLs, and malformed or oversized templates produce one bounded actionable diagnostic; commands do not silently omit a link or apply different substitutions.

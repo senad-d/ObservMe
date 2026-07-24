@@ -34,11 +34,16 @@ interface IntegrationPiApi {
   readonly events?: IntegrationEventBus;
 }
 
+type IntegrationSessionAvailability =
+  | { readonly ok: true; readonly session: ObservMeTelemetrySession }
+  | ObservMeIntegrationFailure;
+
 const integrationIdentifierPattern = /^[A-Za-z0-9._:-]{1,128}$/u;
 const maximumIntegrationCommandLength = 4096;
 const maximumIntegrationArgumentCount = 256;
 const maximumIntegrationArgumentLength = 4096;
 const maximumIntegrationEnvironmentEntries = 4096;
+const maximumIntegrationEnvironmentKeyLength = 128;
 
 export function registerObservMeIntegration(pi: unknown, state: HandlerSessionState): (() => void) | undefined {
   const events = resolveIntegrationEventBus(pi);
@@ -70,8 +75,9 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
   }
 
   getContext(): ObservMeIntegrationContextSuccess | ObservMeIntegrationFailure {
-    const session = this.#state.session;
-    if (!session) return integrationFailure("session_unavailable");
+    const availability = resolveIntegrationSession(this.#state);
+    if (!availability.ok) return availability;
+    const { session } = availability;
 
     return {
       ok: true,
@@ -91,8 +97,9 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
   }
 
   startSubagent(options: ObservMeStartSubagentOptions = {}): ObservMeStartedSubagent | ObservMeIntegrationFailure {
-    const session = this.#state.session;
-    if (!session) return integrationFailure("session_unavailable");
+    const availability = resolveIntegrationSession(this.#state);
+    if (!availability.ok) return availability;
+    const { session } = availability;
     try {
       if (!isValidStartSubagentOptions(options)) return integrationFailure("invalid_request");
       const identity = resolveSubagentSpawnIdentity(options);
@@ -120,8 +127,9 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
     spawnId: string,
     options: ObservMeCompleteSubagentOptions = {},
   ): ObservMeIntegrationSuccess | ObservMeIntegrationFailure {
-    const session = this.#state.session;
-    if (!session) return integrationFailure("session_unavailable");
+    const availability = resolveIntegrationSession(this.#state);
+    if (!availability.ok) return availability;
+    const { session } = availability;
     try {
       if (!isValidIntegrationIdentifier(spawnId) || !isValidCompleteSubagentOptions(options)) {
         return integrationFailure("invalid_request");
@@ -137,8 +145,9 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
     spawnId: string,
     options: ObservMeFailSubagentOptions = {},
   ): ObservMeIntegrationSuccess | ObservMeIntegrationFailure {
-    const session = this.#state.session;
-    if (!session) return integrationFailure("session_unavailable");
+    const availability = resolveIntegrationSession(this.#state);
+    if (!availability.ok) return availability;
+    const { session } = availability;
     try {
       if (!isValidIntegrationIdentifier(spawnId) || !isValidFailSubagentOptions(options)) {
         return integrationFailure("invalid_request");
@@ -176,8 +185,9 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
     options: ObservMeWaitJoinOptions,
     kind: "wait" | "join",
   ): ObservMeStartedWaitJoin | ObservMeIntegrationFailure {
-    const session = this.#state.session;
-    if (!session) return integrationFailure("session_unavailable");
+    const availability = resolveIntegrationSession(this.#state);
+    if (!availability.ok) return availability;
+    const { session } = availability;
     try {
       if (!isValidWaitJoinOptions(options)) return integrationFailure("invalid_request");
 
@@ -199,8 +209,9 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
     options: ObservMeWaitJoinOptions,
     kind: "wait" | "join",
   ): ObservMeIntegrationSuccess | ObservMeIntegrationFailure {
-    const session = this.#state.session;
-    if (!session) return integrationFailure("session_unavailable");
+    const availability = resolveIntegrationSession(this.#state);
+    if (!availability.ok) return availability;
+    const { session } = availability;
     try {
       if (!isValidIntegrationIdentifier(id) || !isValidWaitJoinOptions(options)) {
         return integrationFailure("invalid_request");
@@ -214,6 +225,11 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
       return integrationFailure("operation_failed");
     }
   }
+}
+
+function resolveIntegrationSession(state: HandlerSessionState): IntegrationSessionAvailability {
+  if (state.integrationSessionPhase === "closing") return integrationFailure("session_closing");
+  return state.session ? { ok: true, session: state.session } : integrationFailure("session_unavailable");
 }
 
 function isChildAgentIdentifierRetained(session: ObservMeTelemetrySession, childAgentId: string): boolean {
@@ -327,7 +343,21 @@ function isValidIntegrationEnvironment(value: unknown): boolean {
 }
 
 function isValidIntegrationEnvironmentEntry(entry: [string, unknown]): boolean {
-  return entry[0].length > 0 && (typeof entry[1] === "string" || entry[1] === undefined);
+  const [key, value] = entry;
+  return isValidIntegrationEnvironmentKey(key) && isValidIntegrationEnvironmentValue(value);
+}
+
+function isValidIntegrationEnvironmentKey(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= maximumIntegrationEnvironmentKeyLength &&
+    !value.includes("=") &&
+    !value.includes("\u0000")
+  );
+}
+
+function isValidIntegrationEnvironmentValue(value: unknown): boolean {
+  return value === undefined || (typeof value === "string" && !value.includes("\u0000"));
 }
 
 function isOptionalSpawnType(value: unknown): boolean {

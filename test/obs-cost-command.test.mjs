@@ -15,6 +15,8 @@ import {
   OBS_COMMAND_RENDER_ROW_LIMIT,
 } from "../src/safety/display-bounds.ts";
 
+const responseFragmentMarker = "private-prometheus-command-response-fragment";
+
 function cloneDefaultConfig() {
   return structuredClone(defaultObservMeConfig);
 }
@@ -165,6 +167,24 @@ test("/obs cost queries aggregate model/provider PromQL with configured timeout 
     costUsd: 1.42,
     timestampUnixSeconds: "1783422000.25",
   });
+});
+
+test("/obs cost reports malformed JSON without response fragments or no-data hints", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const notifications = [];
+
+  await handleObsCostCommand("cost", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: async () => new Response(responseFragmentMarker, { status: 200 }),
+  });
+
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].type, "error");
+  assert.match(notifications[0].message, /Prometheus query failed: backend schema error: response body must be valid JSON/u);
+  assert.doesNotMatch(notifications[0].message, /No cost metrics found/u);
+  assert.doesNotMatch(notifications[0].message, new RegExp(responseFragmentMarker, "u"));
 });
 
 test("/obs cost reports malformed Prometheus payloads as backend schema errors, not no-data hints", async () => {

@@ -28,7 +28,7 @@ function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function createHarness(config) {
+function createHarness(config, options = {}) {
   const calls = {
     exporterOptions: undefined,
     batchOptions: undefined,
@@ -37,7 +37,7 @@ function createHarness(config) {
     shutdownCalls: 0,
   };
   const logger = createFakeLogger();
-  const provider = createFakeLogProvider(calls, logger);
+  const provider = createFakeLogProvider(calls, logger, options.shutdown);
   const sdk = new ObservMeLogSdk({
     config,
     exporterFactory: options => {
@@ -57,7 +57,7 @@ function createHarness(config) {
   return { sdk, calls, logger };
 }
 
-function createFakeLogProvider(calls, logger) {
+function createFakeLogProvider(calls, logger, shutdownAction) {
   return {
     getLogger: () => logger,
     forceFlush: () => {
@@ -65,6 +65,7 @@ function createFakeLogProvider(calls, logger) {
     },
     shutdown: () => {
       calls.shutdownCalls += 1;
+      return shutdownAction?.();
     },
   };
 }
@@ -173,6 +174,24 @@ test("log startup failure releases a processor created before provider construct
   assert.equal(sdk.state, "shutdown");
 });
 
+test("failed log provider shutdown remains owned and retryable", async () => {
+  const { sdk, calls } = createHarness(defaultObservMeConfig, {
+    shutdown: createRejectOnceShutdown("log shutdown failed"),
+  });
+  await sdk.start();
+
+  await assert.rejects(() => sdk.shutdown(), /log shutdown failed/u);
+
+  assert.equal(sdk.state, "shutdown_failed");
+  assert.equal(calls.shutdownCalls, 1);
+
+  await sdk.shutdown();
+  await sdk.shutdown();
+
+  assert.equal(sdk.state, "shutdown");
+  assert.equal(calls.shutdownCalls, 2);
+});
+
 test("disabled logs keep pre-start emission safe and avoid exporter or provider factories", async () => {
   const config = cloneDefault({ logs: { enabled: false } });
   const { sdk, calls } = createHarness(config);
@@ -186,6 +205,14 @@ test("disabled logs keep pre-start emission safe and avoid exporter or provider 
   assert.equal(calls.batchOptions, undefined);
   assert.equal(calls.providerOptions, undefined);
 });
+
+function createRejectOnceShutdown(message) {
+  let attempts = 0;
+  return () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error(message);
+  };
+}
 
 test("top-level disablement keeps enabled log settings from creating exporters or providers", async () => {
   const config = cloneDefault({ enabled: false, logs: { enabled: true } });

@@ -16,7 +16,7 @@
 
 ---
 
-ObservMe maps Pi lifecycle and session events to OpenTelemetry traces, metrics, and logs, then exports them via OTLP to an OpenTelemetry Collector. It uses `pi.*`, `observme.*`, and applicable official `gen_ai.*` attributes. ObservMe is **privacy-preserving by default**: prompts, responses, thinking content, tool arguments/results, bash commands/output, and file paths are not captured unless explicitly enabled and redacted.
+ObservMe maps Pi lifecycle and session events to OpenTelemetry traces, metrics, and logs, then exports them via OTLP to an OpenTelemetry Collector. It uses `pi.*`, `observme.*`, and applicable official `gen_ai.*` attributes. ObservMe is **privacy-preserving by default**: prompts, responses, thinking content, tool arguments/results, and bash commands/output are not captured unless explicitly enabled. Absolute paths embedded in enabled content are scrubbed by default; `capture.filePaths` is currently a reserved setting with no direct live recording point.
 
 <table align="center">
   <tr>
@@ -196,14 +196,14 @@ All commands are registered under `/obs`.
 | `/obs status` | Shows local ObservMe enablement, OTLP endpoint, config source/trust status, Grafana query URL/readiness, signal enablement, capture flags, queue drops, and last export error. | Local state only |
 | `/obs health` | Checks Collector, Grafana, and configured datasource reachability with bounded timeouts. | Collector/Grafana |
 | `/obs session` | Shows current-session turn, LLM-call, tool-call, cost, and trace-link state from runtime counters. | Local state only |
-| `/obs cost` | Queries Prometheus/Mimir for safe model/provider token and cost aggregates. | Prometheus/Mimir via Grafana |
-| `/obs trace` | Returns a Grafana Tempo trace link for current, last-turn, or safe session-id scopes. | Grafana link construction |
-| `/obs link` | Direct Grafana trace-link helper using the configured URL template. | Grafana link construction |
+| `/obs cost` | Queries Prometheus/Mimir for 24-hour model/provider cost aggregates. Session-scoped metric cost queries are rejected. | Prometheus/Mimir via Grafana |
+| `/obs trace` | Returns a Grafana Tempo trace link for current, last-turn, or safe session-id scopes. | Local link construction; Tempo via Grafana for a non-current session ID |
+| `/obs link` | Uses the same scopes and canonical trace-link builder as `/obs trace`. | Local link construction; Tempo via Grafana for a non-current session ID |
 | `/obs tools` | Queries tool-call and tool-failure aggregates using only safe tool/error labels. | Prometheus/Mimir via Grafana |
 | `/obs errors` | Queries Loki for recent failed/dropped/orphan event names and renders a capped summary. | Loki via Grafana |
-| `/obs logs` | Queries Loki for the current session's normalized `pi_session_id` label and renders a capped summary. | Loki via Grafana |
+| `/obs logs` | Queries Loki for the current session's normalized `pi_session_id` label, excludes `llm_content`/`tool_content` bodies, and renders a capped operational summary. | Loki via Grafana |
 | `/obs agents` | Shows current workflow/agent identity, lineage, fan-out/depth, active children, orphan status, and wait/join hints. | Local state plus safe Tempo/Prometheus drill-downs |
-| `/obs backfill` | Optional historical replay for the current session with explicit confirmation, replay markers, redaction, export rate limits, and a bounded `--since` window up to 30d. | OTLP export when confirmed |
+| `/obs backfill` | Explicit current-session OTEL log-record replay with confirmation, replay markers, the live capture/redaction policy, a 100-record default cap, and an optional `--since` window up to 30d. | OTLP log export when confirmed |
 
 Query-backed commands enforce configured timeouts and result limits and reject raw prompt, command, path, or other sensitive query inputs.
 
@@ -281,11 +281,11 @@ All operational logs use short event bodies plus structured attributes. Correlat
 
 | Area | Available `event.name` values | Availability and purpose |
 | --- | --- | --- |
-| Configuration, session, and workflow | `config.rejected`<br>`session.started`<br>`session.shutdown`<br>`session.duplicate_start`<br>`workflow.started`<br>`workflow.completed`<br>`workflow.failed` | Configuration diagnostics and top-level lifecycle/outcome events. |
-| Reserved session events | `session.named`<br>`session.error` | Public event names reserved for compatibility; current live handlers do not emit them. |
-| Agent run | `agent.run.started`<br>`agent.run.completed`<br>`agent.run.failed` | Agent-run lifecycle and outcome. |
+| Configuration, session, and workflow | `config.rejected`<br>`session.started`<br>`session.named`<br>`session.shutdown`<br>`session.duplicate_start`<br>`workflow.started`<br>`workflow.completed`<br>`workflow.failed`<br>`workflow.cancelled`<br>`workflow.unknown` | Configuration diagnostics, session rename metadata, and top-level lifecycle/outcome events. |
+| Reserved session event | `session.error` | Public event name reserved for compatibility; current live handlers do not emit it. |
+| Agent run | `agent.run.started`<br>`agent.run.completed`<br>`agent.run.failed`<br>`agent.run.cancelled`<br>`agent.run.unknown` | Agent-run lifecycle and outcome. |
 | Subagent lineage | `agent.spawn.started`<br>`agent.spawn.completed`<br>`agent.spawn.failed`<br>`agent.spawn.cancelled`<br>`agent.wait.started`<br>`agent.wait.completed`<br>`agent.join.started`<br>`agent.join.completed`<br>`agent.orphaned`<br>`trace_context.propagation_failed` | Parent/child lifecycle, lineage gaps, propagation failures, and join outcomes. |
-| Turn | `turn.started`<br>`turn.completed` | Turn lifecycle with run/turn correlation. |
+| Turn | `turn.started`<br>`turn.completed`<br>`turn.failed`<br>`turn.cancelled`<br>`turn.unknown` | Turn lifecycle with run/turn correlation and payload-derived outcomes. |
 | LLM lifecycle | `llm.request.started`<br>`llm.request.completed`<br>`llm.request.failed` | Content-free provider request lifecycle, usage, cost, stop reason, and bounded errors. |
 | LLM content | `llm.prompt.captured`<br>`llm.response.captured`<br>`llm.thinking.captured` | Emitted only when the corresponding prompt, response, or thinking capture flag is enabled and redaction succeeds. |
 | Replay | `message.replayed` | Emitted by explicit `/obs backfill` replay; historical replay is disabled by default. |
@@ -303,7 +303,7 @@ ObservMe supports layered configuration with this precedence:
 defaults → global ~/.pi/agent/observme.yaml → trusted project config → trusted project .env → system environment variables → runtime options
 ```
 
-Factory-safe loading uses defaults/global/system-environment/runtime options only. Session-scoped loading can add trusted project config and a project-local `.env` when Pi marks the project trusted. These project files must remain inside the stable canonical project root: in-root symlinks are supported, while out-of-root, dangling, replaced, or unverifiable paths fail closed through identity-verified file I/O. `/obs status` reports the effective config source, whether project-local config was loaded, skipped because the project is untrusted, missing, or rejected, plus bounded rejection issue codes, effective OTLP/Grafana transport security, the configured Grafana URL, and query-readiness status without rendering tokens, passwords, canonical targets, or external paths. In untrusted projects, ObservMe does not read project-local config or `.env` files and uses safe defaults/global/system-environment layers instead. Invalid or unsafe configuration emits a bounded `config.rejected` diagnostic and falls back safely without exposing rejected values.
+Factory-safe loading uses defaults/global/system-environment/runtime options only. Session-scoped loading can add trusted project config and a project-local `.env` when Pi marks the project trusted. Global and project `observme.yaml` files are limited to 256 KiB; the project `.env` is limited to 128 KiB. Exact-limit files load, while larger files are rejected from opened-file metadata before content allocation. Project files must remain inside the stable canonical project root: in-root symlinks are supported, while out-of-root, dangling, replaced, or unverifiable paths fail closed through identity-verified file I/O. `/obs status` reports the effective config source, whether project-local config was loaded, skipped because the project is untrusted, missing, or rejected, plus bounded rejection issue codes, effective OTLP/Grafana transport security, the configured Grafana URL, and query-readiness status without rendering tokens, passwords, canonical targets, or external paths. In untrusted projects, ObservMe does not read project-local config or `.env` files and uses safe defaults/global/system-environment layers instead. Invalid or unsafe configuration emits a bounded `config.rejected` diagnostic and falls back safely without exposing rejected values.
 
 Cross-process agent lineage has a separate boundary: only the Pi process environment available to the shipped extension, or explicit runtime options for controlled embedders, is eligible for parent provenance. Project-local `.env` values configure ObservMe but cannot establish lineage. A child accepts only a complete validated workflow/parent/root/depth/spawn envelope and valid W3C context; malformed or stale envelopes fail open to a root/orphan fallback with sanitized telemetry.
 
@@ -318,7 +318,7 @@ capture:
   toolResults: false
   bashCommands: false
   bashOutput: false
-  filePaths: false
+  filePaths: false  # reserved; no direct live file-path recording point
 privacy:
   redactionEnabled: true
   allowUnsafeCapture: false
@@ -327,7 +327,7 @@ workflow:
   enabled: true
 ```
 
-When optional content capture is enabled, live telemetry and `/obs backfill` use the same policy. With `privacy.redactionEnabled: true`, the redaction pipeline applies size guards, secret detection, optional PII detection, cross-platform absolute-path scrubbing (`hash`, `basename`, `full`, or `drop`), custom regex redactors, truncation metadata, and tenant-salted hashing before export. POSIX, Windows-drive, and UNC paths are scrubbed without treating normal URLs or harmless slash-separated prose as paths. Redaction failures drop content and emit `redaction.failed` diagnostics. With `privacy.redactionEnabled: false` and `privacy.allowUnsafeCapture: true`, captured content is exported raw but still truncated to the configured limit. Hash salts are read from secure environment/runtime config, not hardcoded.
+When optional content capture is enabled, live telemetry and `/obs backfill` use the same policy. With `privacy.redactionEnabled: true`, the live pipeline applies size guards, secret detection, cross-platform absolute-path scrubbing (`hash`, `basename`, `full`, or `drop`), custom regex redactors, truncation metadata, and tenant-salted hashing before export. A PII stage exists in the redaction helper, but the current live configuration does not provide or enable a PII detector; do not rely on it for PII removal. POSIX, Windows-drive, and UNC paths are scrubbed without treating normal URLs or harmless slash-separated prose as paths. `privacy.pathMode: full` preserves recognized paths embedded in other enabled content regardless of `capture.filePaths`, so use it only when that exposure is intentional. Redaction failures drop content and emit `redaction.failed` diagnostics. With `privacy.redactionEnabled: false` and `privacy.allowUnsafeCapture: true`, captured content is exported raw but still truncated to the configured limit. Hash salts are read from secure environment/runtime config, not hardcoded.
 
 To show failed-tool output such as GuardMe denial messages in the Tools dashboard, explicitly set `capture.toolResults: true` (or `OBSERVME_CAPTURE_TOOL_RESULTS=true`) while keeping redaction enabled and providing `OBSERVME_HASH_SALT`. New failed calls then emit a separate `tool.error.captured` content log; normal `tool.call.failed` operational logs remain content-free.
 
@@ -337,15 +337,15 @@ Grafana-backed query commands use the Grafana HTTP API, so browser login cookies
 
 ### Supported local-stack query profile
 
-The repository-only local stack at <https://github.com/senad-d/ObservMe/tree/main/observability-stack> supports `/obs` query commands through authenticated Grafana behind nginx HTTPS at `https://observability.local`. The default Compose stack does not publish Grafana on `localhost:3000`; use that direct HTTP path only if you add your own override.
+The repository-only local stack at <https://github.com/senad-d/ObservMe/tree/main/observability-stack> supports `/obs` query commands through authenticated Grafana behind Nginx at `http://localhost`. The default Compose stack does not publish Grafana directly on `localhost:3000`; Nginx on host port 80 is the supported entrypoint.
 
 ```yaml
 query:
   enabled: true
   links:
-    traceUrlTemplate: https://observability.local/explore?left=...
+    traceUrlTemplate: http://localhost/explore?left=...
   grafana:
-    url: https://observability.local
+    url: http://localhost
     token: ${OBSERVME_GRAFANA_TOKEN}
     username: admin
     password: ${OBSERVME_GRAFANA_PASSWORD}
@@ -354,12 +354,12 @@ query:
       loki: loki
       prometheus: prometheus
     tls:
-      insecureSkipVerify: true
+      insecureSkipVerify: false
     transport:
-      preferIPv4: true
+      preferIPv4: false
 ```
 
-Create a Grafana service-account token in Grafana (Administration → Users and access → Service accounts → Add service account/token; Viewer is enough for read-only datasource queries) and export it as `OBSERVME_GRAFANA_TOKEN`, or for local-only Basic auth read the generated admin password from the repository-only local stack's secrets directory. Certificate verification stays enabled for HTTPS by default. Production rejects OTLP or Grafana certificate-verification bypass unless `privacy.allowInsecureTransport: true` explicitly acknowledges the risk; `otlp.tls.enabled` is not a supported setting because each endpoint URL scheme selects HTTP or HTTPS. If you prefer a project-local env file, run `cp .env.example .env`, fill either `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_PASSWORD`, then restart Pi from that project. The local Collector and Loki profile uses `service.name=observme-pi-extension`; Loki queries use normalized labels such as `service_name`, `pi_session_id`, `pi_agent_id`, `pi_agent_run_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, run `/obs health` and check extension env loading, Grafana auth, datasource UIDs, TLS, and DNS details.
+Create a Grafana service-account token in Grafana (Administration → Users and access → Service accounts → Add service account/token; Viewer is enough for read-only datasource queries) and export it as `OBSERVME_GRAFANA_TOKEN`, or for local-only Basic auth read the generated admin password from the repository-only local stack's secrets directory. The bundled endpoint is plain local HTTP, so its profile keeps `query.grafana.tls.insecureSkipVerify` and `query.grafana.transport.preferIPv4` false while `privacy.allowInsecureTransport: true` acknowledges the development transport. Production should use HTTPS with certificate verification; `otlp.tls.enabled` is not supported because endpoint URL schemes select HTTP or HTTPS. If you prefer a project-local env file, run `cp .env.example .env`, fill either `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_PASSWORD`, then restart Pi from that project. The local Collector and Loki profile uses `service.name=observme-pi-extension`; Loki queries use normalized labels such as `service_name`, `pi_session_id`, `pi_agent_id`, `pi_agent_run_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, run `/obs health` and check extension env loading, Grafana auth, datasource UIDs, and the configured URL.
 
 ### Show LLM chat content in Grafana
 
@@ -381,7 +381,7 @@ Full configuration schema: `docs/reference/12-configuration-reference.md`. Full 
 
 ## Safety Model
 
-- ObservMe does not execute shell commands itself; it only observes tool/bash execution events emitted by Pi.
+- ObservMe does not execute shell commands itself; it observes Pi's tool/Bash events and the read-only session record Pi appends after interactive `!`/`!!` execution.
 - ObservMe never blocks Pi agent execution when the observability backend is degraded or unreachable.
 - ObservMe starts exporters only for a trusted session and shuts them down with bounded timeouts.
 - ObservMe does not continuously tail the full Pi session file. Optional correlation persistence uses one bounded `observme.correlation` custom entry on the active Pi branch, never LLM context; historical replay is never automatic and requires an explicit, confirmed `/obs backfill` command.

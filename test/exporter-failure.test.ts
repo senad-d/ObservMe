@@ -13,6 +13,7 @@ import { SPAN_NAMES } from "../src/semconv/spans.ts";
 import {
   createAgentTreeTracker,
   createObservMeMetrics,
+  createOtelOperationOwnership,
   createSpanRegistry,
   registerHandlers,
   type Handler,
@@ -234,6 +235,7 @@ function createHandlerHarness(config: ObservMeConfig, controller: FakeTelemetryO
 
   registerHandlers(pi, {
     loadConfig: async () => config,
+    otelOperationOwnership: createOtelOperationOwnership(),
     startTelemetry: async options => {
       harness.telemetry = createFakeTelemetry({
         config: options.config,

@@ -128,6 +128,18 @@ test("renderObsStatus reports local enablement, signals, capture flags, drops, a
   );
 });
 
+test("renderObsStatus reports query.enabled=false with the shared enablement action", () => {
+  const config = cloneDefaultConfig();
+  config.query.enabled = false;
+
+  const output = renderObsStatus({ config, queueDrops: 0 });
+
+  assert.match(
+    output,
+    /Grafana query readiness: Grafana query integration is disabled \(query\.enabled=false\)\. Next: set query\.enabled=true to enable Grafana-backed commands\./u,
+  );
+});
+
 test("renderObsStatus reports explicitly acknowledged TLS verification bypasses without credentials", () => {
   const config = cloneDefaultConfig();
   config.otlp.tls.insecureSkipVerify = true;

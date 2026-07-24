@@ -1,49 +1,67 @@
-# Template Structure Guide
+# ObservMe repository structure
 
-Use this file as the note for future Pi extension projects. Replace template names as soon as the new extension has a real purpose.
+This guide describes the current repository layout. `package.json` is authoritative for published files and package exports.
 
-## Recommended file layout
+## Runtime source
 
 ```text
 src/
-├── extension.ts          # only imports modules and registers them
-├── commands/             # slash-command modules
-├── tools/                # LLM-callable tool modules
-├── events/               # lifecycle/input/tool/model event hooks
-├── ui/                   # custom TUI components or renderers, when needed
-├── config/               # config loading and validation, when needed
-├── types.ts              # shared domain types, when needed
-└── utils/                # pure helpers with unit tests
+├── extension.ts            # Pi extension entrypoint
+├── integration.ts          # public @senad-d/observme/integration API
+├── commands/               # /obs root routing and subcommands
+├── config/                 # schema, defaults, loading, validation, trusted bootstrap
+├── diagnostics/            # bounded diagnostic sanitization
+├── otel/                   # session-scoped traces, metrics, logs, OTLP, shutdown
+├── pi/
+│   ├── event-handlers/     # lifecycle, agent/turn, LLM, tool/Bash, session events
+│   ├── handlers.ts         # handler registration facade
+│   ├── handler-runtime.ts  # runtime state and metric instruments
+│   ├── handler-internals.ts
+│   ├── handler-types.ts    # handler, session, and runtime type contracts
+│   ├── agent-lineage.ts
+│   ├── agent-tree-tracker.ts
+│   ├── active-agent-lease.ts
+│   ├── compatibility.ts    # Pi API capability checks
+│   ├── integration-api.ts
+│   ├── integration-registration.ts
+│   ├── otel-operation-ownership.ts
+│   ├── session-correlation.ts
+│   ├── subagent-spawn.ts
+│   ├── subagent-types.ts
+│   └── terminal-outcome.ts
+├── privacy/                # content policy, redaction, hashing, truncation
+├── query/                  # Grafana, Tempo, Loki, Prometheus clients
+├── safety/                 # query-input and TUI-output bounds
+├── semconv/                # telemetry attributes, names, and values
+└── util/                   # bounded data structures
 ```
 
-## How to add multiple files by purpose
+ObservMe registers no LLM-callable tools and no custom configuration TUI. The extension exposes one `/obs` command with subcommands.
 
-1. Pick the folder by behavior:
-   - `commands/` for `/command` handlers.
-   - `tools/` for `pi.registerTool()` definitions.
-   - `events/` for `pi.on(...)` hooks.
-   - `ui/` for renderers, widgets, and custom components.
-   - `config/` for settings parsing and environment handling.
-   - `utils/` for reusable pure helpers.
-2. Export one registration function from each feature module, for example `registerReviewTool(pi)`.
-3. Import and call that registration function from `src/extension.ts`.
-4. Keep project names in constants (`src/constants.ts`) so renaming does not require hunting through every file.
-5. Add tests for pure helpers and package metadata under `test/`.
+## User and operator assets
 
-## Pi extension conventions
+```text
+README.md                    # installation, commands, telemetry catalog
+SECURITY.md                  # implemented trust and privacy model
+docs/                        # task guides and technical reference
+skills/observme-docs/        # packaged natural-language documentation router
+examples/                    # local extension and production Collector examples
+dashboards/                  # Grafana dashboards, alerts, and SLOs
+observability-stack/         # repository-only local Docker Compose stack
+```
 
-- Do not start long-lived processes, file watchers, timers, or sockets directly in the extension factory.
-- Start session-scoped resources from `session_start`, a command, or a tool.
-- Clean up resources in `session_shutdown`.
-- Use `promptSnippet` and `promptGuidelines` on tools when the agent needs to know when to call them.
-- If a custom tool edits files, use Pi's file-mutation queue helpers from `@earendil-works/pi-coding-agent`.
-- Keep Pi core packages in `peerDependencies` with `"*"`; put non-Pi runtime packages in `dependencies`.
-- Run `npm run lint` after adding TypeScript or development script files so ESLint catches unused symbols and import-style drift.
+The npm package includes the documented files selected by `package.json#files`; `observability-stack/`, tests, scripts, specifications, and repository-only contributor assets are not published.
 
-## Rename points for a new project
+## Tests and validation
 
-- `package.json` → `name`, `description`, URLs, keywords, and `pi.extensions` if the entry point moves.
-- `src/constants.ts` → display name and status key.
-- `src/commands/*` → command names and descriptions.
-- `src/tools/*` → tool names, descriptions, schemas, snippets, and guidelines.
-- `.github/*`, `SECURITY.md`, `CHANGELOG.md`, and `README.md` → public project wording.
+- `test/*.test.mjs` and `test/*.test.ts` cover runtime, config, privacy, commands, dashboards, packaging, and Pi contracts.
+- `test/integration/` contains opt-in Docker-backed validation.
+- `scripts/` contains package, smoke, coverage, and Grafana validation entrypoints.
+- Run `npm run validate` for the default release gate; Docker integration commands remain explicit.
+
+## Change rules
+
+- Keep `src/extension.ts` limited to capability checks and registration; start exporters from `session_start` and clean them up from `session_shutdown`.
+- Add `/obs` behavior under `src/commands/` and register it through `src/commands/obs.ts`.
+- Add telemetry names under `src/semconv/`, then add a live recording point and update the README catalog to distinguish live from reserved instruments.
+- Update docs, examples, the packaged skill, tests, and `CHANGELOG.md` whenever public behavior changes.

@@ -1,160 +1,111 @@
-# Observability Stack
+# ObservMe local observability stack
 
-A local-first observability stack powered by **Grafana**, **Prometheus**, **Loki**, **Tempo**, and the **OpenTelemetry Collector**, fronted by **Nginx** over plain HTTP on `localhost`. The stack is delivered via Docker Compose and includes opinionated defaults for retention, provisioning, and secure secret handling.
+This repository-only Docker Compose stack runs Grafana, Prometheus, Loki, Tempo, and the OpenTelemetry Collector for local ObservMe development. Nginx exposes authenticated Grafana over plain HTTP at `http://localhost`; the Collector publishes OTLP on localhost ports 4317 and 4318.
 
-## Features
-- **Grafana** with pre-provisioned data sources and dashboards
-- **Prometheus** for metrics storage and scraping
-- **Loki** for log aggregation
-- **Tempo** for trace storage
-- **OpenTelemetry Collector** for OTLP ingestion and fan-out to metrics/logs/traces
-- **Nginx** reverse proxy with HTTP and health checks
+The stack is not included in the npm package. Do not expose this local profile outside a trusted machine without adding production authentication, TLS, network controls, and appropriate retention/storage.
 
 ## Prerequisites
-- Docker Engine + Docker Compose plugin
 
-## Quick Start (Local)
-1. **Move into the stack directory:**
-   ```bash
-   cd observability-stack
-   ```
+- Docker Engine with the Docker Compose plugin
+- OpenSSL, or another secure password generator
 
-2. **Create the environment file:**
-   ```bash
-   cp .env.example .env
-   ```
+## Quick start
 
-3. **Create secrets:**
-   ```bash
-   mkdir -p secrets
-   echo "<GRAFANA_ADMIN_PASSWORD>" > secrets/grafana_admin_password
-   chmod 600 secrets/grafana_admin_password
-   ```
+From a repository checkout:
 
-4. **Start the stack:**
-   ```bash
-   docker compose up -d
-   ```
+```bash
+cd observability-stack
+cp .env.example .env
+mkdir -p secrets
+if [ ! -s secrets/grafana_admin_password ]; then
+  openssl rand -hex 24 > secrets/grafana_admin_password
+fi
+chmod 600 secrets/grafana_admin_password
+docker compose up -d
+```
 
-5. **Open Grafana:**
-   - URL: **http://localhost**
-   - User: `admin` (or `GRAFANA_ADMIN_USER` in `.env`)
-   - Password: value from `secrets/grafana_admin_password`
+Open `http://localhost` and sign in with user `admin` (or `GRAFANA_ADMIN_USER`) and the generated password in `secrets/grafana_admin_password`.
 
-If port `80` is already in use, change `NGINX_HTTP_PORT` and `OBSERVABILITY_URL` in `.env` before starting the stack.
+If host port 80 is unavailable, set both `NGINX_HTTP_PORT` and the matching port in `OBSERVABILITY_URL` before starting the stack. Grafana itself is not published directly on `localhost:3000`; Nginx is the supported host entrypoint.
 
-## ObservMe `/obs` Command Query Profile
+## Configure ObservMe
 
-The supported local command path is authenticated Grafana through Nginx over HTTP:
+The generated project starter and [`../examples/observme.yaml`](../examples/observme.yaml) use this profile:
 
 ```yaml
-query:
-  enabled: true
-  links:
-    traceUrlTemplate: http://localhost/explore?left=...
-  grafana:
-    url: http://localhost
-    token: ${OBSERVME_GRAFANA_TOKEN}
-    username: admin
-    password: ${OBSERVME_GRAFANA_PASSWORD}
-    datasourceUids:
-      tempo: tempo
-      loki: loki
-      prometheus: prometheus
+observme:
+  environment: development
+  otlp:
+    endpoint: http://localhost:4318
+  privacy:
+    allowInsecureTransport: true
+  query:
+    links:
+      traceUrlTemplate: http://localhost/explore?left=...
+    grafana:
+      url: http://localhost
+      token: ${OBSERVME_GRAFANA_TOKEN}
+      username: admin
+      password: ${OBSERVME_GRAFANA_PASSWORD}
+      datasourceUids:
+        tempo: tempo
+        loki: loki
+        prometheus: prometheus
+      tls:
+        insecureSkipVerify: false
+      transport:
+        preferIPv4: false
 ```
 
-Token setup options:
+Create a Grafana service-account token with Viewer access and set `OBSERVME_GRAFANA_TOKEN`, or use local Basic auth by setting `OBSERVME_GRAFANA_USERNAME=admin` and `OBSERVME_GRAFANA_PASSWORD` to the generated admin password. Supply secrets through the process environment or a trusted project `.env`; never put real credentials in YAML or commit them.
 
-- Preferred: in Grafana, open Administration → Users and access → Service accounts, create a service account/token with Viewer access for read-only datasource queries, and export it as `OBSERVME_GRAFANA_TOKEN` before starting Pi.
-- Local fallback: export `OBSERVME_GRAFANA_PASSWORD="$(cat secrets/grafana_admin_password)"` from this directory so ObservMe can use Basic auth with `username: admin`.
-- Env-file option: copy the repository-root `.env.example` to `.env`, fill either `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_PASSWORD`, and restart Pi from that trusted project. System environment variables override `.env` values.
-
-Browser login cookies are not used by the extension; `/obs health`, `/obs cost`, `/obs tools`, `/obs errors`, `/obs logs`, `/obs agents`, and `/obs trace --session` call the Grafana API directly. The local profile uses plain HTTP on `localhost`, so no self-signed certificate, hosts-file entry, or TLS skip-verify setting is required.
-
-Provisioned datasource UIDs are `tempo`, `loki`, and `prometheus`. The Collector inserts `service.name=observme-pi-extension`; Loki receives normalized query labels including `service_name`, `pi_session_id`, `event_name`, and `event_category`. If data is visible in Grafana but `/obs` commands fail, confirm the env vars above are available to the extension through system env or trusted `.env`, then run `/obs health` and check Grafana auth, datasource UID, and Grafana URL details.
-
-## Configuration
-- **Stack service variables** are in `observability-stack/.env`; **extension variables** can be exported in your shell or placed in the repository-root `.env` copied from `.env.example`.
-- **Service configs** live under `observability-stack/config/`.
-- **Nginx** configuration is at `observability-stack/nginx/nginx.conf`.
-
-> **URL changes:** If you change `NGINX_HTTP_PORT`, also update `OBSERVABILITY_URL` so Grafana generates links with the same host and port.
-
-## Telemetry Ingestion
-The OpenTelemetry Collector listens on:
-- **gRPC:** `otel-collector:4317` inside Compose, published locally as `127.0.0.1:4317` by default
-- **HTTP:** `otel-collector:4318` inside Compose, published locally as `127.0.0.1:4318` by default
-
-Prometheus scrapes the collector’s self-observability metrics at `otel-collector:8888` and the OTLP metrics pipeline's Prometheus exporter at `otel-collector:8889`. The Prometheus exporter converts safe resource attributes to metric labels after high-cardinality Pi IDs are dropped, so concurrent ObservMe sessions remain separate series and aggregate session counts sum correctly.
-
-### Pi agent ingestion path
-Pi agents should not be pointed directly at this stack by default. The supported local path is:
+Browser cookies are not used by `/obs` commands. Restart Pi after changing its environment, then run:
 
 ```text
-pi-agent JSONL stdout -> Docker JSON logs -> pibox gateway-side OTel filelog collector -> observability OTel collector -> Loki/Grafana
+/obs status
+/obs health
+/obs session
+/obs trace
 ```
 
-Configure `.local/gateway.env` in the repository root with:
+## Services and endpoints
+
+| Service | Host access | Purpose |
+| --- | --- | --- |
+| Nginx/Grafana | `http://localhost` (port controlled by `NGINX_HTTP_PORT`) | Authenticated UI and Grafana datasource API used by `/obs` queries. |
+| OpenTelemetry Collector | `localhost:4317` gRPC, `http://localhost:4318` HTTP | Receives ObservMe OTLP traces, metrics, and logs. |
+| Prometheus | Internal only | Scrapes Collector self-metrics, exported ObservMe metrics, node-exporter, and cAdvisor. |
+| Loki | Internal only | Stores ObservMe OTEL logs. |
+| Tempo | Internal only | Stores ObservMe traces. |
+| node-exporter / cAdvisor | Internal only | Local host and container infrastructure metrics. |
+
+Grafana provisions datasource UIDs `prometheus`, `loki`, and `tempo`, plus the dashboards from [`../dashboards/`](../dashboards/). The Collector inserts `service.name=observme-pi-extension`, removes high-cardinality Pi identifiers from metrics, and provides normalized Loki labels such as `service_name`, `pi_session_id`, `event_name`, and `event_category`.
+
+## Validate and operate
 
 ```bash
-OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4318
-OTEL_EXPORTER_OTLP_TOKEN=
-ENABLE_TIER2_LOGS=false
-```
+# Validate Compose interpolation
+docker compose config --quiet
 
-Then launch the gateway through `scripts/launch-gateway.sh`. The gateway-side collector resolves `host.docker.internal` from inside its container and forwards metadata-only agent events to this local collector. The Pi image starts through `pibox-agent-wrapper`, which emits baseline `agent.run.started` and terminal lifecycle JSONL events around the `pi` process. The Pi container still receives only its scoped `PI_GATEWAY_API_KEY`; do not add raw provider keys, GitHub credentials, or direct OTLP credentials to the Pi environment.
-
-## Infrastructure Metrics (Host + Containers)
-Prometheus also scrapes infrastructure exporters that are internal to `observability-backend`:
-- **Node Exporter** (`node-exporter:9100`) for host CPU, memory, load, network, and filesystem metrics.
-- **cAdvisor** (`cadvisor:8080`) for per-container CPU, memory, network, and container filesystem metrics.
-
-Exporter ports are not published to the host; they are only reachable from services on the backend network.
-
-Disk metric semantics can vary by runtime and storage driver. If `container_fs_usage_bytes` is host-scoped on a given host, use `container_fs_reads_bytes_total` / `container_fs_writes_bytes_total` for per-container disk trend monitoring and validate on the target environment.
-
-### Validation Flow (Local First)
-1. Validate local compose config:
-   ```bash
-   docker compose -f docker-compose.yml config --quiet
-   ```
-2. Start local stack and confirm targets:
-   ```bash
-   docker compose -f docker-compose.yml up -d
-   docker compose -f docker-compose.yml exec prometheus wget -qO- http://localhost:9090/api/v1/targets
-   ```
-3. Validate online compose config with required S3 vars set:
-   ```bash
-   LOKI_S3_BUCKET=dummy TEMPO_S3_BUCKET=dummy docker compose -f docker-compose.online.yml config --quiet
-   ```
-
-## HTTPS / External Deployment
-The local stack intentionally serves Grafana over plain HTTP at `http://localhost` to keep everyday setup simple. If you expose the stack outside your local machine, terminate HTTPS at an external reverse proxy/load balancer or adapt `nginx/nginx.conf` for your deployment.
-
-Certificate helper scripts under `scripts/` are not required for the local Quick Start.
-
-## EC2 Bootstrap (Optional)
-The `ec2/userdata.sh` script provisions Docker, pulls the repo, configures secrets, and starts the stack. It expects several environment variables (domain or URL, repo URL/ref, and Grafana credentials).
-
-See `ec2/userdata.sh` for the full list of required variables and behavior.
-
-## Operations
-Common commands from `observability-stack`:
-```bash
-# Start
+# Start and inspect
 docker compose up -d
-
-# Stop
-docker compose down
-
-# View status
 docker compose ps
 
-# Logs
+# Follow service logs
 docker compose logs -f
+
+# Stop while retaining named volumes
+docker compose down
+
+# Stop and delete local telemetry data
+docker compose down -v
 ```
 
-## Security Notes
-- Secrets in `observability-stack/secrets/` are not versioned.
-- Grafana admin password is reset from the secret on startup.
-- The default Nginx endpoint is HTTP-only for local use; add HTTPS before exposing it beyond localhost or a trusted network.
+For the extension/backend validation flow, return to the repository root and follow [`../docs/validation-flow.md`](../docs/validation-flow.md). For version evidence, see [`../docs/compatibility-matrix.md`](../docs/compatibility-matrix.md).
+
+## Security notes
+
+- Keep `secrets/grafana_admin_password` and `.env` uncommitted and mode-restricted.
+- The default Nginx endpoint is plain local HTTP. Set `privacy.allowInsecureTransport: true` only for this controlled development profile.
+- Do not expose Grafana, OTLP ports, or internal backend networks publicly without production controls.
+- Keep optional content capture disabled unless explicitly needed; retain redaction and a tenant hash salt when capture is enabled.

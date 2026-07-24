@@ -255,26 +255,30 @@ test("content-capture policy bounds unsafe regex rejection and preserves safe qu
   });
 });
 
-test("content-capture policy drops captured content when redaction fails", () => {
-  const savedSalt = process.env.OBSERVME_HASH_SALT;
-  delete process.env.OBSERVME_HASH_SALT;
+test("content-capture policy drops captured content without echoing a missing configured salt name", () => {
+  const tenantSaltEnv = "PRIVATE_CAPTURE_POLICY_SALT";
+  const savedSalt = process.env[tenantSaltEnv];
+  delete process.env[tenantSaltEnv];
 
   try {
     const result = applyContentCapturePolicy({
       captureEnabled: true,
       value: "password=super-secret",
       kind: "prompt",
-      config: cloneConfig({ privacy: { redactionEnabled: true, allowUnsafeCapture: false } }),
+      config: cloneConfig({
+        privacy: { redactionEnabled: true, allowUnsafeCapture: false, tenantSaltEnv },
+      }),
     });
 
     assert.equal(result.mode, "dropped");
     assert.equal(result.captured, false);
     assert.equal(result.value, undefined);
     assert.equal(result.redactionFailures, 1);
-    assert.match(result.errors.join("\n"), /tenant salt env var OBSERVME_HASH_SALT is not set/u);
+    assert.deepEqual(result.errors, ["tenant salt environment variable is not set"]);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE_CAPTURE_POLICY_SALT|super-secret/u);
   } finally {
-    if (savedSalt === undefined) delete process.env.OBSERVME_HASH_SALT;
-    else process.env.OBSERVME_HASH_SALT = savedSalt;
+    if (savedSalt === undefined) delete process.env[tenantSaltEnv];
+    else process.env[tenantSaltEnv] = savedSalt;
   }
 });
 

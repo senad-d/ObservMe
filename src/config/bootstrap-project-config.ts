@@ -131,6 +131,8 @@ export const PROJECT_OBSERVME_YAML_TEMPLATE = `observme:
     toolResults: false
     bashCommands: false
     bashOutput: false
+    # Reserved compatibility flag; direct live path capture is not implemented.
+    # privacy.pathMode still applies to paths embedded in other captured content.
     filePaths: false
 
   privacy:
@@ -166,11 +168,11 @@ export const PROJECT_OBSERVME_YAML_TEMPLATE = `observme:
     maxMetricSeries: 20
     maxAgents: 20
     links:
-      # Uses the supported bundled-stack Grafana Explore fallback.
-      traceUrlTemplate: https://observability.local/explore?left=...
+      # Uses the bundled stack's Grafana Explore fallback.
+      traceUrlTemplate: http://localhost/explore?left=...
     grafana:
-      # Supported local command path: Grafana behind nginx HTTPS.
-      url: https://observability.local
+      # Bundled local command path: Grafana behind nginx on localhost.
+      url: http://localhost
       # Preferred: set a Grafana service-account token in this env var.
       token: \${OBSERVME_GRAFANA_TOKEN}
       # Local fallback: set OBSERVME_GRAFANA_PASSWORD from observability-stack/secrets/grafana_admin_password.
@@ -181,11 +183,11 @@ export const PROJECT_OBSERVME_YAML_TEMPLATE = `observme:
         loki: loki
         prometheus: prometheus
       tls:
-        # Local self-signed certificate only; keep false for production CAs.
-        insecureSkipVerify: true
+        # The bundled local endpoint is HTTP; production HTTPS should verify its CA.
+        insecureSkipVerify: false
       transport:
-        # Avoid observability.local resolving to an unreachable IPv6 loopback first.
-        preferIPv4: true
+        # localhost does not require a forced IPv4 lookup in the bundled profile.
+        preferIPv4: false
 
   shutdown:
     flushTimeoutMs: 3000

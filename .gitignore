@@ -18,6 +18,7 @@ coverage/
 .env.*
 !.env.example
 .pi/
+observability-stack/secrets/
 
 # Local caches and generated reports
 .cache/

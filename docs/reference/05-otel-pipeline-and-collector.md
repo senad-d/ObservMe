@@ -4,17 +4,13 @@
 
 ObservMe emits telemetry through OpenTelemetry SDKs using OTLP.
 
-Recommended protocol:
+Supported protocol:
 
 ```text
-OTLP/HTTP protobuf to Collector base endpoint http://collector:4318
+OTLP/HTTP protobuf to an absolute HTTP(S) Collector base endpoint
 ```
 
-Also supported:
-
-```text
-OTLP/gRPC to Collector endpoint collector:4317
-```
+The current schema accepts only `otlp.protocol: http/protobuf`, and the extension ships OTLP/HTTP protobuf exporters. OTLP/gRPC is not a supported ObservMe exporter mode.
 
 ## 2. Why Collector First
 
@@ -25,17 +21,17 @@ A Collector decouples ObservMe from backend-specific topology. It allows batchin
 ```yaml
 otlp:
   protocol: http/protobuf
-  endpoint: http://localhost:4318     # base endpoint; append /v1/{signal} for explicit JS exporter URLs
-  signalEndpoints:
-    traces: http://localhost:4318/v1/traces
-    metrics: http://localhost:4318/v1/metrics
-    logs: http://localhost:4318/v1/logs
+  endpoint: https://otel-collector.example.com:4318
   timeoutMs: 3000
-  headers: {}
+  headers:
+    Authorization: "Bearer ${OBSERVME_OTLP_TOKEN}"
+  tls:
+    insecureSkipVerify: false
+  # signalEndpoints is absent by default. When omitted, ObservMe derives
+  # /v1/traces, /v1/metrics, and /v1/logs from the base endpoint.
 
 traces:
   enabled: true
-  sampler: parentbased_traceidratio
   sampleRatio: 1.0
   batch:
     maxQueueSize: 2048
@@ -63,13 +59,12 @@ The default active-agent lease is 60 seconds and renews on each 15-second metric
 
 ## 4. Trace Context and Workflow/Agent-Lineage Propagation
 
-When ObservMe launches or wraps a subagent process, the parent runtime should propagate both standard trace context and ObservMe-specific lineage:
+When an ObservMe-aware orchestrator launches a subagent process, it should call `startSubagent()` and pass the returned environment unchanged. That environment can contain standard trace context and ObservMe-specific lineage:
 
 ```text
 traceparent
 tracestate
 OBSERVME_WORKFLOW_ID
-OBSERVME_AGENT_ID              # optional explicit child id, normally omitted so child generates one
 OBSERVME_PARENT_AGENT_ID
 OBSERVME_ROOT_AGENT_ID
 OBSERVME_PARENT_SESSION_ID
@@ -81,7 +76,7 @@ OBSERVME_SPAWN_ID
 
 Preferred behavior is W3C trace-context continuation: the child `pi.session` span becomes part of the same trace as the parent `pi.agent.spawn` span. If the child cannot continue the parent trace, ObservMe should start a new trace and record a span link or structured log with the parent trace/span IDs, `pi.workflow.id`, and `pi.agent.parent_id`.
 
-These identifiers are high cardinality. Keep them on resource/span/log attributes only; do not promote them to Collector-generated metric labels or Loki index labels unless an operator explicitly accepts the cardinality cost.
+A child envelope must not contain `OBSERVME_AGENT_ID`; the child generates its own logical agent ID. These identifiers are high cardinality. Keep them on resource/span/log attributes only; never promote them to Collector-generated metric labels. Loki label promotion requires an explicit cardinality decision; structured metadata is preferred for broad deployments.
 
 ## 5. Minimal Debug Collector
 

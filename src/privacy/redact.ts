@@ -10,7 +10,11 @@ import {
 } from "node:path/win32";
 import { sha256, type TenantSaltSource } from "./hash.ts";
 import { matchAllSecretPatterns, type SecretMatch } from "./secret-patterns.ts";
-import type { CustomRedactionPatternConfig, PrivacyPathMode } from "../config/schema.ts";
+import {
+  CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS,
+  type CustomRedactionPatternConfig,
+  type PrivacyPathMode,
+} from "../config/schema.ts";
 
 export type RedactionStage =
   | "size_guard"
@@ -63,9 +67,14 @@ export interface ReplacementMatch {
   readonly end: number;
 }
 
-const DEFAULT_MAX_INPUT_CHARS = 1_000_000;
-const DEFAULT_MAX_OUTPUT_CHARS = 32_000;
+export const DEFAULT_MAX_INPUT_CHARS = 1_000_000;
+export const DEFAULT_MAX_OUTPUT_CHARS = 32_000;
+export const MAX_CUSTOM_REDACTION_MATCHES = 4_096;
+export const MAX_CUSTOM_REDACTION_INTERMEDIATE_CHARS = DEFAULT_MAX_INPUT_CHARS;
 const HASH_PREFIX_LENGTH = 12;
+export const MAX_CUSTOM_REDACTION_REPLACEMENT_CHARS =
+  "[REDACTED::]".length + CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS + HASH_PREFIX_LENGTH;
+const CUSTOM_REDACTION_BUDGET_EXCEEDED_ERROR = "custom redaction budget exceeded";
 const ABSOLUTE_PATH_CANDIDATE_PATTERN = /(?:[a-zA-Z]:[\\/][^\s'"`<>|]*|\\\\[^\s'"`<>|]*|\/[^\s'"`<>|]*)/gu;
 const PATH_PREFIX_CONTINUATION_PATTERN = /[\p{L}\p{N}._~:/\\-]/u;
 const TRAILING_PATH_PUNCTUATION = new Set([".", ",", ";", "!", "?", ")", "]", "}"]);
@@ -86,6 +95,7 @@ export const MAX_CUSTOM_REDACTION_PATTERN_CHARS = 256;
 export interface CustomRedactionPatternSafetyIssue {
   readonly code:
     | "custom_redaction_pattern_limit"
+    | "custom_redaction_pattern_name_too_long"
     | "custom_redaction_pattern_too_long"
     | "custom_redaction_pattern_unsupported_construct"
     | "custom_redaction_pattern_nested_quantifier"
@@ -165,6 +175,10 @@ interface RegexCharacterClassToken {
 
 type UnsafeQuantifiedGroupKind = "nested_quantifier" | "ambiguous_alternation" | "ambiguous_repetition";
 
+interface CustomRedactionWorkState {
+  matchCount: number;
+}
+
 export function redactValue(rawValue: string, options: RedactionOptions): RedactionResult {
   const stages: RedactionStage[] = [];
   try {
@@ -235,8 +249,11 @@ export function runCustomRegexRedactors(value: string, options: RedactionOptions
   const issues = validateCustomRedactionPatterns(patterns);
   if (issues.length > 0) throw new Error(issues[0].message);
 
+  const workState: CustomRedactionWorkState = { matchCount: 0 };
   let redactedValue = value;
-  for (const pattern of patterns) redactedValue = applyCustomRedactionPattern(redactedValue, pattern, options.tenantSaltSource);
+  for (const pattern of patterns) {
+    redactedValue = applyCustomRedactionPattern(redactedValue, pattern, options.tenantSaltSource, workState);
+  }
   return redactedValue;
 }
 
@@ -427,9 +444,45 @@ export function applyCustomRedactionPattern(
   value: string,
   pattern: CustomRedactionPatternConfig,
   tenantSaltSource?: TenantSaltSource,
+  workState: CustomRedactionWorkState = { matchCount: 0 },
 ): string {
+  if (value.length > MAX_CUSTOM_REDACTION_INTERMEDIATE_CHARS) {
+    throw new Error(CUSTOM_REDACTION_BUDGET_EXCEEDED_ERROR);
+  }
+
   const expression = compileCustomRedactionPattern(pattern.pattern);
-  return value.replace(expression, match => formatCustomReplacement(pattern.name, match, tenantSaltSource));
+  const normalizedName = normalizeCustomType(pattern.name);
+  const replacementPrefix = `[REDACTED:${normalizedName}:`;
+  const replacementLength = replacementPrefix.length + HASH_PREFIX_LENGTH + 1;
+  const chunks: string[] = [];
+  let cursor = 0;
+  let outputLength = 0;
+  let match = expression.exec(value);
+
+  while (match) {
+    workState.matchCount += 1;
+    if (workState.matchCount > MAX_CUSTOM_REDACTION_MATCHES) throw new Error(CUSTOM_REDACTION_BUDGET_EXCEEDED_ERROR);
+
+    const unmatchedLength = match.index - cursor;
+    if (outputLength + unmatchedLength + replacementLength > MAX_CUSTOM_REDACTION_INTERMEDIATE_CHARS) {
+      throw new Error(CUSTOM_REDACTION_BUDGET_EXCEEDED_ERROR);
+    }
+
+    chunks.push(value.slice(cursor, match.index));
+    chunks.push(`${replacementPrefix}${sha256Prefix(match[0], tenantSaltSource)}]`);
+    outputLength += unmatchedLength + replacementLength;
+    cursor = match.index + match[0].length;
+    match = expression.exec(value);
+  }
+
+  const tailLength = value.length - cursor;
+  if (outputLength + tailLength > MAX_CUSTOM_REDACTION_INTERMEDIATE_CHARS) {
+    throw new Error(CUSTOM_REDACTION_BUDGET_EXCEEDED_ERROR);
+  }
+  if (chunks.length === 0) return value;
+
+  chunks.push(value.slice(cursor));
+  return chunks.join("");
 }
 
 export function compileCustomRedactionPattern(pattern: string): RegExp {
@@ -445,7 +498,12 @@ export function validateCustomRedactionPatterns(
   const issues: CustomRedactionPatternSafetyIssue[] = [];
   if (patterns.length > MAX_CUSTOM_REDACTION_PATTERNS) issues.push(createCustomRedactionPatternLimitIssue());
 
-  for (const [index, pattern] of patterns.entries()) {
+  const validatedPatternCount = Math.min(patterns.length, MAX_CUSTOM_REDACTION_PATTERNS);
+  for (let index = 0; index < validatedPatternCount; index += 1) {
+    const pattern = patterns[index];
+    if (pattern.name.length > CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS) {
+      issues.push(addCustomRedactionPatternIndex(createCustomRedactionPatternNameTooLongIssue(), index));
+    }
     issues.push(...validateCustomRedactionPattern(pattern.pattern).map(issue => addCustomRedactionPatternIndex(issue, index)));
   }
 
@@ -1043,6 +1101,13 @@ export function createCustomRedactionPatternLimitIssue(): CustomRedactionPattern
   };
 }
 
+export function createCustomRedactionPatternNameTooLongIssue(): CustomRedactionPatternSafetyIssue {
+  return {
+    code: "custom_redaction_pattern_name_too_long",
+    message: `Custom redaction pattern names are limited to ${CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS} characters.`,
+  };
+}
+
 export function createCustomRedactionPatternTooLongIssue(): CustomRedactionPatternSafetyIssue {
   return {
     code: "custom_redaction_pattern_too_long",
@@ -1103,7 +1168,8 @@ export function formatCustomReplacement(name: string, value: string, tenantSaltS
 }
 
 export function normalizeCustomType(value: string): string {
-  const normalized = trimUnderscores(value.toLowerCase().replace(/[^a-z0-9_]+/gu, "_"));
+  const boundedValue = value.slice(0, CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS);
+  const normalized = trimUnderscores(boundedValue.toLowerCase().replace(/[^a-z0-9_]+/gu, "_"));
   return normalized || "custom";
 }
 

@@ -7,7 +7,7 @@ ObservMe is a Pi extension for OpenTelemetry-based observability of Pi agent ses
 This project requires Node.js `>=22.19.0`.
 
 ```bash
-npm install
+npm ci
 npm run validate
 ```
 
@@ -26,7 +26,7 @@ pi --no-extensions -e .
 - Update README/docs/examples when commands, tools, settings, packaging, or security behavior changes.
 - Run `npm run validate` before requesting review, or explain why it could not be run.
 - Do not commit secrets, local `.pi/` state, generated package tarballs, `node_modules/`, or machine-local paths.
-- If `docs/reference/` and any implementation detail disagree, update the implementation to match the production docs, not the other way around.
+- Runtime code, schemas, command registries, semantic-convention constants, and shipped configuration are the behavioral source of truth. If documentation disagrees, correct the documentation unless the same focused change intentionally changes and tests the implementation contract.
 
 ## Security expectations
 

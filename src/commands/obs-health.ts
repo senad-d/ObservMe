@@ -180,7 +180,12 @@ async function checkHttpHealthTarget(
   timeoutMs: number,
 ): Promise<ObsHealthCheckResult> {
   try {
-    return responseToHealthResult(target, await fetchWithTimeout(target, fetcher, timeoutMs));
+    const response = await fetchWithTimeout(target, fetcher, timeoutMs);
+    try {
+      return responseToHealthResult(target, response);
+    } finally {
+      cancelHttpHealthResponseBody(response);
+    }
   } catch (error) {
     return failedHealthResult(target.label, target.kind, error);
   }
@@ -199,6 +204,15 @@ async function fetchWithTimeout(target: HttpHealthTarget, fetcher: ObsHealthFetc
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function cancelHttpHealthResponseBody(response: Response): void {
+  if (response.body === null) return;
+  void response.body.cancel().catch(ignoreHttpHealthResponseCancellationFailure);
+}
+
+function ignoreHttpHealthResponseCancellationFailure(): void {
+  // Status-only health checks cancel best-effort; the bounded request has already completed.
 }
 
 function filterConfiguredHeaders(headers: Record<string, string>): Record<string, string> | undefined {

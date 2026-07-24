@@ -16,7 +16,7 @@ This page is the entry point for ObservMe user, operator, and contributor docume
 | Operate dashboards, alerts, and SLOs | [`../README.md#dashboards-and-examples`](../README.md#dashboards-and-examples) | [`reference/09-dashboards-alerts-slos.md`](reference/09-dashboards-alerts-slos.md) |
 | Understand architecture and lifecycle | [`reference/02-reference-architecture.md`](reference/02-reference-architecture.md) | [`reference/03-pi-event-and-session-model.md`](reference/03-pi-event-and-session-model.md) |
 | Integrate another Pi extension or orchestrator | [`extension-integration.md`](extension-integration.md) | [`agent-subagent-observability-requirements.md`](agent-subagent-observability-requirements.md) |
-| Diagnose parent/subagent lineage | [`agent-subagent-observability-requirements.md`](agent-subagent-observability-requirements.md) | [`reference/03-pi-event-and-session-model.md`](reference/03-pi-event-and-session-model.md) |
+| Diagnose parent/subagent lineage (every agent shows as root) | [`extension-integration.md#troubleshooting-every-agent-appears-as-its-own-root`](extension-integration.md#troubleshooting-every-agent-appears-as-its-own-root) | [`agent-subagent-observability-requirements.md`](agent-subagent-observability-requirements.md) |
 
 ## User and operator guides
 
@@ -44,11 +44,11 @@ These documents support extension development and are not the shortest path for 
 
 ## Documentation precedence
 
-When documents overlap, use this order:
+Runtime code and shipped configuration are the behavioral source of truth. For documentation-only overlap, use this order:
 
 1. [`../README.md`](../README.md) and the task-oriented guides in this directory for current user-facing behavior.
-2. [`reference/12-configuration-reference.md`](reference/12-configuration-reference.md) for the complete configuration contract.
+2. [`reference/12-configuration-reference.md`](reference/12-configuration-reference.md) for the documented configuration contract.
 3. The remaining production reference documents for architecture and implementation detail.
 4. Contributor/design notes for repository work and future integration requirements.
 
-If two documents conflict, report the conflict explicitly instead of silently combining them. Never include credentials, raw prompts, raw commands, or other sensitive values in examples or troubleshooting output.
+For an exact or disputed behavior, verify the owning source: `src/commands/` for `/obs`, `src/config/` for configuration, `src/semconv/` plus `src/pi/` recording points for telemetry, `src/privacy/` for capture/redaction, `src/integration.ts` plus `src/pi/integration-api.ts` for integration, and `observability-stack/` for the repository-only stack. If source and docs conflict, state the drift and correct the docs rather than silently combining them. Never include credentials, raw prompts, raw commands, or other sensitive values in examples or troubleshooting output.

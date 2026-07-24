@@ -1,5 +1,4 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
-import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { defaultObservMeConfig } from "./defaults.ts";
@@ -12,6 +11,12 @@ import type {
   ProjectLocalFileOperationHooks,
   ProjectLocalFilePathOptions,
 } from "./project-paths.ts";
+import {
+  isConfigSourceTooLargeError,
+  OBSERVME_CONFIG_FILE_MAX_BYTES,
+  OBSERVME_ENV_FILE_MAX_BYTES,
+  readBoundedSourceFileText,
+} from "./read-source-file.ts";
 import type { ConfigLogSink, ConfigRejectionDiagnostic } from "./validate.ts";
 import {
   ensureValidObservMeConfig,
@@ -38,6 +43,7 @@ type ReadConfigText = (path: string) => Promise<string | undefined>;
 type ConfigSourceIssueCode =
   | "config_source_malformed"
   | "config_source_rejected"
+  | "config_source_too_large"
   | "config_source_unreadable"
   | "invalid_config_shape";
 
@@ -114,8 +120,9 @@ export async function loadFactoryConfig(options: LoadConfigOptions = {}): Promis
   const environment = options.env ?? process.env;
   const config = mergeConfigLayers([defaultObservMeConfig, globalConfig, envToConfig(options.env), options.runtimeOptions]);
   const validConfig = ensureValidObservMeConfig(config, { env: options.env, logger: options.logger });
+  const tenantSaltEnvironment = selectTenantSaltEnvironment(validConfig, undefined, environment);
 
-  return registerTenantSaltEnvironment(validConfig, environment);
+  return registerTenantSaltEnvironment(validConfig, tenantSaltEnvironment);
 }
 
 export async function loadSessionConfig(options: LoadSessionConfigOptions = {}): Promise<ObservMeConfig> {
@@ -129,12 +136,11 @@ export async function loadSessionConfigWithDiagnostics(options: LoadSessionConfi
   const projectTrusted = await resolveProjectTrust(options);
   const projectSource = classifyConfigSource(await readProjectConfigSource(projectTrusted, options));
   const envFileSource = await readTrustedProjectEnvSource(projectTrusted, options);
-  const environment = options.env ?? process.env;
+  const processEnvironment = options.env ?? process.env;
   const envFileConfig = envFileSource.value ? envToConfig(envFileSource.value) : undefined;
   const classifiedEnvFileSource = classifyConfigSource(envFileSource, envFileConfig);
-  const environmentConfig = envToConfig(environment);
-  const environmentSource = classifyEnvironmentSource(environment, environmentConfig);
-  const effectiveEnvironment = mergeEnvironment(classifiedEnvFileSource.value, environment);
+  const environmentConfig = envToConfig(processEnvironment);
+  const environmentSource = classifyEnvironmentSource(processEnvironment, environmentConfig);
   const config = mergeConfigLayers([
     defaultObservMeConfig,
     globalSource.value,
@@ -144,7 +150,7 @@ export async function loadSessionConfigWithDiagnostics(options: LoadSessionConfi
     options.runtimeOptions,
   ]);
   const validation = ensureValidObservMeConfigWithDiagnostics(config, {
-    env: effectiveEnvironment,
+    env: processEnvironment,
     isProjectTrusted: projectTrusted,
     projectConfigWasRead: projectSource.value !== undefined,
   });
@@ -166,9 +172,14 @@ export async function loadSessionConfigWithDiagnostics(options: LoadSessionConfi
     runtimeOptions: options.runtimeOptions,
     rejection,
   });
+  const tenantSaltEnvironment = selectTenantSaltEnvironment(
+    validation.config,
+    classifiedEnvFileSource.value,
+    processEnvironment,
+  );
 
   return {
-    config: registerTenantSaltEnvironment(validation.config, effectiveEnvironment),
+    config: registerTenantSaltEnvironment(validation.config, tenantSaltEnvironment),
     diagnostics,
   };
 }
@@ -414,6 +425,7 @@ async function readProjectConfigSource(
     const readOptions = createProjectSourceReadOptions(
       options,
       pathOptions,
+      OBSERVME_CONFIG_FILE_MAX_BYTES,
       options.projectFileOperationHooks?.projectConfig,
     );
     return await readConfigSource(resolveProjectLocalFilePath(pathOptions), readOptions);
@@ -434,6 +446,7 @@ async function readTrustedProjectEnvSource(
     const readOptions = createProjectSourceReadOptions(
       options,
       pathOptions,
+      OBSERVME_ENV_FILE_MAX_BYTES,
       options.projectFileOperationHooks?.environmentFile,
     );
     return await readEnvSource(resolveProjectLocalFilePath(pathOptions), readOptions);
@@ -471,12 +484,15 @@ async function readConfigSourceText(
     if (isUnsafeProjectPathError(error)) {
       return { status: "rejected", issueCode: "config_source_rejected" };
     }
+    if (isConfigSourceTooLargeError(error)) {
+      return { status: "rejected", issueCode: "config_source_too_large" };
+    }
     return { status: "unreadable", issueCode: "config_source_unreadable" };
   }
 }
 
 async function defaultReadConfigText(path: string): Promise<string> {
-  return readFile(path, "utf8");
+  return readBoundedSourceFileText(path, OBSERVME_CONFIG_FILE_MAX_BYTES);
 }
 
 async function readOptionalText(path: string, readText: ReadConfigText): Promise<string | undefined> {
@@ -495,12 +511,13 @@ function resolveGlobalConfigPath(options: LoadConfigOptions): string {
 function createProjectSourceReadOptions(
   options: LoadSessionConfigOptions,
   pathOptions: ProjectLocalFilePathOptions,
+  maximumBytes: number,
   hooks: ProjectLocalFileOperationHooks | undefined,
 ): LoadConfigOptions {
   if (options.readText !== undefined) return options;
   return {
     ...options,
-    readText: readCanonicalProjectLocalFileText.bind(undefined, pathOptions, hooks),
+    readText: readCanonicalProjectLocalFileText.bind(undefined, pathOptions, maximumBytes, hooks),
   };
 }
 
@@ -531,9 +548,19 @@ async function resolveProjectTrust(options: LoadSessionConfigOptions): Promise<b
   return false;
 }
 
-function mergeEnvironment(envFile: NodeJS.ProcessEnv | undefined, environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  if (!envFile) return environment;
-  return { ...envFile, ...environment };
+function selectTenantSaltEnvironment(
+  config: ObservMeConfig,
+  envFile: NodeJS.ProcessEnv | undefined,
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const envName = config.privacy.tenantSaltEnv;
+  if (Object.hasOwn(environment, envName)) return copyEnvironmentEntry(envName, environment[envName]);
+  if (envFile && Object.hasOwn(envFile, envName)) return copyEnvironmentEntry(envName, envFile[envName]);
+  return {};
+}
+
+function copyEnvironmentEntry(name: string, value: string | undefined): NodeJS.ProcessEnv {
+  return value === undefined ? {} : { [name]: value };
 }
 
 function cloneConfig<T>(value: T): T {

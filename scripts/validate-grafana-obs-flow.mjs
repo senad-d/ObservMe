@@ -14,7 +14,7 @@ import { searchTempo } from "../src/query/tempo.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
-const defaultGrafanaUrl = "https://observability.local";
+const defaultGrafanaUrl = "http://localhost";
 const defaultCollectorEndpoint = "http://127.0.0.1:4318";
 const defaultServiceName = "observme-pi-extension";
 const defaultTempoDatasourceUid = "tempo";
@@ -48,8 +48,8 @@ function readValidationInputs(env) {
     grafanaToken: readEnvString(env, "OBSERVME_GRAFANA_TOKEN", ""),
     grafanaUsername: readEnvString(env, "OBSERVME_GRAFANA_USERNAME", ""),
     grafanaPassword: readEnvString(env, "OBSERVME_GRAFANA_PASSWORD", ""),
-    grafanaTlsInsecureSkipVerify: readEnvBoolean(env, "OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY", true),
-    grafanaPreferIPv4: readEnvBoolean(env, "OBSERVME_GRAFANA_PREFER_IPV4", true),
+    grafanaTlsInsecureSkipVerify: readEnvBoolean(env, "OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY", false),
+    grafanaPreferIPv4: readEnvBoolean(env, "OBSERVME_GRAFANA_PREFER_IPV4", false),
     otlpEndpoint: readEnvString(env, "OBSERVME_OTLP_ENDPOINT", defaultCollectorEndpoint),
     serviceName: readEnvString(env, "OBSERVME_VALIDATION_SERVICE_NAME", defaultServiceName),
     sessionId: readEnvString(env, "OBSERVME_VALIDATION_SESSION_ID", ""),
@@ -110,7 +110,6 @@ function createValidationRuntimeOptions(inputs) {
         Authorization: "",
       },
       tls: {
-        enabled: !inputs.otlpEndpoint.startsWith("http://"),
         insecureSkipVerify: false,
       },
     },

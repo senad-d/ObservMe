@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { trace } from "@opentelemetry/api";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
-import { COMMON_SPAN_ATTRIBUTES, LOG_ATTRIBUTES, TOOL_ATTRIBUTES } from "../src/semconv/attributes.ts";
+import {
+  AGENT_RUN_ATTRIBUTES,
+  COMMON_SPAN_ATTRIBUTES,
+  LOG_ATTRIBUTES,
+  TOOL_ATTRIBUTES,
+  TURN_ATTRIBUTES,
+  WORKFLOW_ATTRIBUTES,
+} from "../src/semconv/attributes.ts";
 import type {
   Handler,
   ObservMeHandlerContext,
@@ -42,6 +49,7 @@ import {
   modelThinkingEvents,
   sessionShutdownEvent,
   sessionStartEvent,
+  terminalOutcomeEvents,
   toolEvents,
   turnEvents,
 } from "./support/pi-event-fixtures.ts";
@@ -387,6 +395,11 @@ function findSpan(telemetry: FakeTelemetrySession, spanName: string): TestSpan {
   return span;
 }
 
+function readTestSpanStatus(span: TestSpan): Record<string, unknown> {
+  assert.ok(isPlainRecord(span.status), `expected ${span.name} terminal status`);
+  return span.status;
+}
+
 function metricSum(records: readonly TestMetricRecord[], metricName: string): number {
   return records.filter(record => record.name === metricName).reduce((sum, record) => sum + record.value, 0);
 }
@@ -438,7 +451,7 @@ function assertCanonicalHandlerSpans(telemetry: FakeTelemetrySession): void {
   assert.equal(sessionSpan.attributes["pi.session.id"], "fixture-session");
   assert.equal(sessionSpan.attributes["pi.workflow.id"], telemetry.lineage.workflowId);
   assert.equal(agentSpan.attributes["pi.agent.run.id"], "agent-run-000001");
-  assert.equal(turnSpan.attributes["pi.turn.id"], "agent-run-000001-turn-000001");
+  assert.equal(turnSpan.attributes["pi.turn.id"], "agent-run-000001-turn-000000");
   assert.equal(llmSpan.attributes["gen_ai.provider.name"], "anthropic");
   assert.equal(llmSpan.attributes["gen_ai.request.model"], "claude-fixture");
   assert.equal(llmSpan.attributes["gen_ai.usage.input_tokens"], 21);
@@ -566,6 +579,95 @@ test("handler fixtures map Pi events to canonical spans, attributes, parenting, 
   assertDefaultContentAbsent(telemetry);
   assertNoForbiddenMetricLabels(telemetry.meter.records);
   assertNoHiddenContentExported(telemetry);
+});
+
+test("typed Pi terminal payloads derive turn, agent-run, and root-workflow outcomes", async () => {
+  const cases = [
+    {
+      name: "success",
+      events: terminalOutcomeEvents.success,
+      outcome: "ok",
+      statusCode: SpanStatusCode.OK,
+      eventNames: [LOG_EVENT_NAMES.TURN_COMPLETED, LOG_EVENT_NAMES.AGENT_RUN_COMPLETED, LOG_EVENT_NAMES.WORKFLOW_COMPLETED],
+      failures: 0,
+      completedWorkflows: 1,
+    },
+    {
+      name: "assistant error",
+      events: terminalOutcomeEvents.assistantError,
+      outcome: "error",
+      statusCode: SpanStatusCode.ERROR,
+      eventNames: [LOG_EVENT_NAMES.TURN_FAILED, LOG_EVENT_NAMES.AGENT_RUN_FAILED, LOG_EVENT_NAMES.WORKFLOW_FAILED],
+      failures: 1,
+      completedWorkflows: 0,
+    },
+    {
+      name: "failed tool result",
+      events: terminalOutcomeEvents.toolError,
+      outcome: "error",
+      statusCode: SpanStatusCode.ERROR,
+      eventNames: [LOG_EVENT_NAMES.TURN_FAILED, LOG_EVENT_NAMES.AGENT_RUN_FAILED, LOG_EVENT_NAMES.WORKFLOW_FAILED],
+      failures: 1,
+      completedWorkflows: 0,
+    },
+    {
+      name: "cancelled",
+      events: terminalOutcomeEvents.cancelled,
+      outcome: "cancelled",
+      statusCode: SpanStatusCode.UNSET,
+      eventNames: [LOG_EVENT_NAMES.TURN_CANCELLED, LOG_EVENT_NAMES.AGENT_RUN_CANCELLED, LOG_EVENT_NAMES.WORKFLOW_CANCELLED],
+      failures: 0,
+      completedWorkflows: 0,
+    },
+    {
+      name: "unknown",
+      events: terminalOutcomeEvents.unknown,
+      outcome: "unknown",
+      statusCode: SpanStatusCode.UNSET,
+      eventNames: [LOG_EVENT_NAMES.TURN_UNKNOWN, LOG_EVENT_NAMES.AGENT_RUN_UNKNOWN, LOG_EVENT_NAMES.WORKFLOW_UNKNOWN],
+      failures: 0,
+      completedWorkflows: 0,
+    },
+  ] as const;
+
+  for (const terminalCase of cases) {
+    const harness = createHandlerHarness();
+    const handlers = harness.pi.handlers;
+    const ctx = { cwd: "/workspace/event-mapping", sessionManager: createFixtureSessionManager() };
+
+    await handlers.get("session_start")(sessionStartEvent, ctx);
+    await handlers.get("agent_start")(agentEvents.start, ctx);
+    await handlers.get("turn_start")(turnEvents.start, ctx);
+    await handlers.get("turn_end")(terminalCase.events.turn, ctx);
+    await handlers.get("agent_end")(terminalCase.events.agent, ctx);
+    await handlers.get("agent_end")(terminalCase.events.agent, ctx);
+    await handlers.get("session_shutdown")(terminalOutcomeEvents.shutdown, ctx);
+
+    const telemetry = requireTelemetry(harness);
+    const turnSpan = findSpan(telemetry, SPAN_NAMES.PI_TURN);
+    const agentSpan = findSpan(telemetry, SPAN_NAMES.PI_AGENT_RUN);
+    const sessionSpan = findSpan(telemetry, SPAN_NAMES.PI_SESSION);
+    assert.equal(turnSpan.attributes[TURN_ATTRIBUTES.PI_TURN_OUTCOME], terminalCase.outcome, terminalCase.name);
+    assert.equal(agentSpan.attributes[AGENT_RUN_ATTRIBUTES.PI_AGENT_RUN_OUTCOME], terminalCase.outcome, terminalCase.name);
+    assert.equal(sessionSpan.attributes[WORKFLOW_ATTRIBUTES.PI_WORKFLOW_STATUS], terminalCase.outcome, terminalCase.name);
+    const turnStatus = readTestSpanStatus(turnSpan);
+    const agentStatus = readTestSpanStatus(agentSpan);
+    const sessionStatus = readTestSpanStatus(sessionSpan);
+    assert.equal(turnStatus.code, terminalCase.statusCode, terminalCase.name);
+    assert.equal(agentStatus.code, terminalCase.statusCode, terminalCase.name);
+    assert.equal(sessionStatus.code, terminalCase.statusCode, terminalCase.name);
+    if (terminalCase.outcome === "cancelled" || terminalCase.outcome === "unknown") {
+      assert.equal(turnStatus.message, terminalCase.outcome, terminalCase.name);
+      assert.equal(agentStatus.message, terminalCase.outcome, terminalCase.name);
+      assert.equal(sessionStatus.message, terminalCase.outcome, terminalCase.name);
+    }
+    for (const eventName of terminalCase.eventNames) {
+      assert.equal(telemetry.logger.records.filter(record => record.body === eventName).length, 1, `${terminalCase.name}: ${eventName}`);
+    }
+    assert.equal(metricSum(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.AGENT_RUN_ERRORS_TOTAL), terminalCase.failures, terminalCase.name);
+    assert.equal(metricSum(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.WORKFLOW_ERRORS_TOTAL), terminalCase.failures, terminalCase.name);
+    assert.equal(metricSum(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.WORKFLOWS_COMPLETED_TOTAL), terminalCase.completedWorkflows, terminalCase.name);
+  }
 });
 
 test("handler fixtures export redacted content only when capture is explicitly enabled", async () => {

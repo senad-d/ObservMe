@@ -20,6 +20,7 @@ import type { BoundedMap } from "../util/bounded-map.ts";
 import type { AgentLineageContext } from "./agent-lineage.ts";
 import type { ActiveAgentLeaseController } from "./active-agent-lease.ts";
 import type { AgentTreeTracker } from "./agent-tree-tracker.ts";
+import type { OtelOperationOwnership } from "./otel-operation-ownership.ts";
 import type {
   AgentWaitJoinState,
   ChildFailureAccountingState,
@@ -36,6 +37,7 @@ export type TelemetryTracer = Pick<Tracer, "startSpan">;
 export type TelemetryLogger = Pick<Logger, "emit">;
 export type PiEventName = ExtensionEvent["type"];
 export type PiEvent<Name extends PiEventName> = Extract<ExtensionEvent, { type: Name }>;
+export type TerminalOutcome = "ok" | "error" | "cancelled" | "unknown";
 export type Handler<Event = unknown, Context = ObservMeHandlerContext> = (
   event: Event,
   ctx: Context,
@@ -112,6 +114,7 @@ export interface RegisterHandlersOptions {
   readonly onHandlerError?: HandlerErrorRecorder;
   readonly appendEntry?: AppendEntry;
   readonly getThinkingLevel?: GetThinkingLevel;
+  readonly otelOperationOwnership?: OtelOperationOwnership;
 }
 
 export interface StartSessionTelemetryOptions {
@@ -143,6 +146,7 @@ export interface ObservMeTelemetrySession {
   sessionSpan?: Span;
   sessionAttributes?: AttributeMap;
   workflowStartedAtMs?: number;
+  workflowOutcome?: TerminalOutcome;
   now?: () => number;
   activeAgentRecorded: boolean;
   currentAgentRunId?: string;
@@ -151,6 +155,8 @@ export interface ObservMeTelemetrySession {
   currentToolCallId?: string;
   pendingUserBash?: PendingBashOperationState;
   currentBranchPreparation?: BranchPreparationState;
+  pendingUserPromptImageCount?: number;
+  nextTurnImageCount?: number;
   agentRunSequence: number;
   llmRequestSequence: number;
   toolCallSequence: number;
@@ -243,12 +249,19 @@ export interface ToolCallState {
   labels: Record<string, string>;
   completionLogAttributes: AttributeMap;
   capturedResult?: CapturedContent;
+  inputEvent?: unknown;
+  inputReconciled?: boolean;
 }
 
 export interface PendingBashOperationState {
   readonly span: Span;
   readonly startedAtMs: number;
+  readonly observedStartedAtUnixMs: number;
   readonly eventStartedAtMs?: number;
+  readonly readSessionEntries?: () => ReturnType<ObservMeSessionManager["getEntries"]>;
+  nextSessionEntryIndex?: number;
+  completionPollDelayMs: number;
+  completionPollTimer?: ReturnType<typeof setTimeout>;
 }
 
 export interface BranchPreparationState {
@@ -262,15 +275,16 @@ export interface CompositeOtelSignalSdk {
   readonly traceSdk: ObservMeTraceSdk;
   readonly metricSdk: ObservMeMetricSdk;
   readonly logSdk: ObservMeLogSdk;
-  readonly state: "idle" | "starting" | "started" | "failed" | "shutdown";
+  readonly state: "idle" | "starting" | "started" | "failed" | "shutting_down" | "shutdown_failed" | "shutdown";
   start: () => Promise<void>;
   forceFlush: () => Promise<void>;
   shutdown: () => Promise<void>;
 }
 
 export interface HandlerSessionState {
+  readonly otelOperationOwnership: OtelOperationOwnership;
   session?: ObservMeTelemetrySession;
-  pendingCleanup?: ObservMeTelemetrySession;
+  integrationSessionPhase?: "closing";
 }
 
 export interface HandlerRegistration {

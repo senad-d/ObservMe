@@ -10,6 +10,7 @@ import { assertCredentialFreeGrafanaUrl } from "./grafana-url.ts";
 
 export type GrafanaFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 export type GrafanaAuthMode = "bearer" | "basic" | "none";
+export type GrafanaJsonSubsystem = "tempo" | "loki" | "prometheus";
 
 export interface GrafanaTransportOptions {
   readonly fetch?: GrafanaFetch;
@@ -39,6 +40,11 @@ interface GrafanaResponseBodyLimitError extends Error {
 export const MAX_GRAFANA_RESPONSE_BODY_BYTES = 5 * 1024 * 1024;
 export { hasUnresolvedEnvironmentPlaceholder };
 
+const grafanaJsonParseFailureMessages = {
+  tempo: "Tempo search failed: backend schema error: response body must be valid JSON.",
+  loki: "Loki query failed: backend schema error: response body must be valid JSON.",
+  prometheus: "Prometheus query failed: backend schema error: response body must be valid JSON.",
+} as const satisfies Record<GrafanaJsonSubsystem, string>;
 const minimumTimeoutMs = 1;
 const tlsErrorCodes = new Set<string>([
   "DEPTH_ZERO_SELF_SIGNED_CERT",
@@ -113,6 +119,14 @@ export class GrafanaTransportClient {
       this.#timeoutMs,
       options.timeoutMessage,
     );
+  }
+
+  async readJson(response: Response, subsystem: GrafanaJsonSubsystem): Promise<unknown> {
+    try {
+      return (await response.json()) as unknown;
+    } catch {
+      throw new Error(grafanaJsonParseFailureMessages[subsystem]);
+    }
   }
 
   formatHttpFailure(response: Response): string {

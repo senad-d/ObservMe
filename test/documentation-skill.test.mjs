@@ -3,10 +3,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { getObsRootSubcommands } from "../src/commands/obs.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const skillFile = resolve(repositoryRoot, "skills/observme-docs/SKILL.md");
 const packageJson = JSON.parse(readFileSync(resolve(repositoryRoot, "package.json"), "utf8"));
+const readme = readFileSync(resolve(repositoryRoot, "README.md"), "utf8");
 const skill = readFileSync(skillFile, "utf8");
 
 function extractSkillDocumentPaths(markdown) {
@@ -32,12 +34,23 @@ test("package declares the ObservMe documentation skill", () => {
   assert.ok(packageJson.files.includes("skills/**/*.md"));
 });
 
-test("documentation skill has valid routing frontmatter and existing targets", () => {
+test("documentation skill has valid source-aware routing and existing targets", () => {
   assert.match(skill, /^---\nname: observme-docs\ndescription: .+\n---\n/u);
+  assert.match(skill, /implementation for exact current behavior/u);
+  assert.match(skill, /source of truth/u);
+  assert.match(skill, /capture[.]filePaths.*no direct live recording point/u);
+  assert.match(skill, /backfill.*OTEL log records/u);
+  assert.match(skill, /Do not claim live PII removal/u);
 
   const paths = extractSkillDocumentPaths(skill);
-  assert.ok(paths.length >= 20, "skill should route the documented ObservMe topic areas");
+  assert.ok(paths.length >= 30, "skill should route documentation and owning source slices");
   assertReferencesExist(repositoryRoot, paths);
+});
+
+test("README command catalog follows the live /obs registry", () => {
+  for (const subcommand of getObsRootSubcommands()) {
+    assert.ok(readme.includes(`| \`/obs ${subcommand}\` |`), `README is missing /obs ${subcommand}`);
+  }
 });
 
 test("documentation and example indexes contain no broken local Markdown links", () => {

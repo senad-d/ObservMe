@@ -52,7 +52,7 @@ test/fixtures/events/orphan-agent.json
 
 Assertions:
 
-- Correct span name or documented GenAI-compatible provider span name
+- Correct canonical span name (the current provider request span is `pi.llm.request`)
 - Correct `pi.*`, `observme.*`, and applicable `gen_ai.*` attributes
 - No forbidden metric labels, including workflow IDs, session IDs, or agent IDs
 - Agent-run spans are parented under session spans, and turn spans under agent-run spans when available
@@ -94,7 +94,7 @@ docker run --rm \
   -p 4317:4317 \
   -p 4318:4318 \
   -v "$PWD/test/collector-debug.yaml:/etc/otelcol/config.yaml" \
-  otel/opentelemetry-collector:latest
+  otel/opentelemetry-collector-contrib:0.104.0
 ```
 
 The core Collector image is sufficient for this debug config. Test production configs with the exact target distribution, for example Collector Contrib or Grafana Alloy when using `prometheusremotewrite`, `tail_sampling`, or other contrib-only components.
@@ -171,7 +171,7 @@ Expected:
 
 - Child agent still starts and exports telemetry.
 - Child telemetry includes `pi.workflow.id`, `pi.agent.parent_id`, and `pi.agent.root_id` if provided by environment.
-- If no parent context is available, child is marked as root or orphan according to config.
+- With no envelope, the child is a normal root; a partial, malformed, oversized, or stale envelope fails open as a root-like orphan.
 - `observme_trace_context_propagation_failures_total` or `observme_orphan_agents_total` increments as appropriate.
 - No high-cardinality workflow IDs or agent IDs are emitted as metric labels.
 

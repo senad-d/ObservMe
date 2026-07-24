@@ -6,6 +6,12 @@ import {
   updateObsAgentsRuntimeStateFromTree,
 } from "../commands/obs-agents-runtime.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
+import {
+  classifyObservMeRunnerOutcome,
+  type ObservMeRunnerOutcome,
+  type ObservMeRunnerPhase,
+  type ObservMeRunnerResultStatus,
+} from "../integration.ts";
 import { trySha256 } from "../privacy/hash.ts";
 import {
   AGENT_SPAWN_ATTRIBUTES,
@@ -30,12 +36,16 @@ import { createAgentLineageContext, createPropagationEnvironment, sanitizePropag
 import { recordActiveSpanEnd, recordActiveSpanStart } from "./handler-internals.ts";
 import type { TelemetryLogger, TelemetryTracer } from "./handler-types.ts";
 import type {
+  AgentJoinStatus,
+  AgentWaitJoinKind,
   AgentWaitJoinState,
   ChildFailureAccountingState,
   SubagentSpawnState,
   TestableSpan,
 } from "./subagent-types.ts";
 export type {
+  AgentJoinStatus,
+  AgentWaitJoinKind,
   AgentWaitJoinState,
   ChildFailureAccountingState,
   SubagentSpawnState,
@@ -43,7 +53,6 @@ export type {
 } from "./subagent-types.ts";
 
 export type SubagentSpawnType = "command" | "tool" | "extension" | "unknown";
-export type AgentJoinStatus = "completed" | "failed" | "cancelled" | "timeout" | "unknown" | "waiting";
 export type AgentTerminalStatus = Extract<AgentChildStatus, "completed" | "failed" | "cancelled">;
 export type AttributePrimitive = boolean | number | string | string[];
 export type AttributeMap = Record<string, AttributePrimitive>;
@@ -174,6 +183,8 @@ export type SubagentRunner<Result> = (
 
 export interface RunSubagentOptions extends StartSubagentSpawnOptions {
   readonly signal?: AbortSignal;
+  /** Use `launch` only when runner rejection proves that no child became active. */
+  readonly runnerErrorPhase?: ObservMeRunnerPhase;
 }
 
 export interface AgentWaitJoinOptions {
@@ -226,19 +237,65 @@ export async function runSubagentWithObservability<Result>(
 
   try {
     const result = await runner(command, args, { env: started.env, signal: options.signal });
-    completeSubagentSpawn(session, started.spawnId, {
-      childAgentId: started.childAgentId,
-      childStatus: "completed",
-      now: options.now,
-    });
+    const outcome = classifyObservMeRunnerOutcome({ type: "result", status: readSubagentRunnerResultStatus(result) });
+    applySubagentRunnerOutcome(session, started, outcome, options);
     return result;
   } catch (error) {
-    failSubagentSpawn(session, started.spawnId, {
-      childAgentId: started.childAgentId,
-      errorClass: errorClass(error),
-      now: options.now,
+    const outcome = classifyObservMeRunnerOutcome({
+      type: "error",
+      phase: options.runnerErrorPhase ?? "wait",
+      error,
+      signal: options.signal,
     });
+    if (outcome.kind === "launcher_failure") {
+      failSubagentSpawn(session, started.spawnId, {
+        childAgentId: started.childAgentId,
+        errorClass: errorClass(error),
+        now: options.now,
+      });
+    } else {
+      applySubagentRunnerOutcome(session, started, outcome, options);
+    }
     throw error;
+  }
+}
+
+function applySubagentRunnerOutcome(
+  session: SubagentTelemetrySession,
+  started: StartedSubagentSpawn,
+  outcome: ObservMeRunnerOutcome,
+  options: Pick<RunSubagentOptions, "now">,
+): void {
+  if (!outcome.terminalChildStatus) {
+    retainActiveSubagentRunnerOutcome(session, started.childAgentId, outcome);
+    return;
+  }
+  completeSubagentSpawn(session, started.spawnId, {
+    childAgentId: started.childAgentId,
+    childStatus: outcome.terminalChildStatus,
+    now: options.now,
+  });
+}
+
+function retainActiveSubagentRunnerOutcome(
+  session: SubagentTelemetrySession,
+  childAgentId: string,
+  outcome: ObservMeRunnerOutcome,
+): void {
+  if (outcome.childStatus !== "active") return;
+  updateChildStatus(session, childAgentId, "active");
+  recordObsAgentsTreeState(session);
+}
+
+function readSubagentRunnerResultStatus(result: unknown): ObservMeRunnerResultStatus | undefined {
+  if (!result || typeof result !== "object") return undefined;
+  try {
+    const status = "status" in result ? result.status : undefined;
+    return status === "completed" || status === "failed" || status === "cancelled" || status === "timeout"
+      ? status
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -305,26 +362,14 @@ export function completeSubagentSpawn(
   const transition = resolveCompletionTransition(session, state, options);
   if (!transition.ok) return transition;
 
-  updateChildStatus(session, transition.childAgentId, transition.status);
-  recordChildFailureCompletion(session, transition.childAgentId, transition.status);
-  recordObsAgentsTreeState(session);
-  const attributes = buildSubagentCompletionAttributes(
+  recordSubagentSpawnTerminal(
     session,
     spawnId,
+    state,
     transition.childAgentId,
     transition.status,
-    state.spawnReason,
+    options,
   );
-  const eventName = terminalSpawnEventName(transition.status);
-  const severityText = transition.status === "completed" ? "INFO" : "ERROR";
-
-  recordSubagentSpawnDuration(session, state, options);
-  state.span.setAttributes(attributes);
-  setTerminalSpawnStatus(state.span, transition.status);
-  state.span.addEvent(eventName, attributes);
-  endSubagentSpan(session, state.span);
-  session.spans.activeSubagentSpawns.delete(spawnId);
-  emitSubagentLog(session, eventName, attributes, severityText);
   return subagentTransitionSuccess();
 }
 
@@ -356,6 +401,18 @@ export function failSubagentSpawn(
   session.metrics.subagentSpawnFailures.add(1, subagentFailureMetricLabels(state.labels, attributes));
   emitSubagentLog(session, LOG_EVENT_NAMES.AGENT_SPAWN_FAILED, attributes, "ERROR");
   return subagentTransitionSuccess();
+}
+
+export function interruptActiveSubagentOperations(session: SubagentTelemetrySession): void {
+  for (const [spawnId, state] of [...session.spans.activeSubagentSpawns.entries()]) {
+    recordSubagentSpawnTerminal(session, spawnId, state, state.childAgentId, "cancelled", {});
+  }
+  for (const [waitId, state] of [...session.spans.activeAgentWaits.entries()]) {
+    cancelActiveWaitJoin(session, waitId, state, "wait");
+  }
+  for (const [joinId, state] of [...session.spans.activeAgentJoins.entries()]) {
+    cancelActiveWaitJoin(session, joinId, state, "join");
+  }
 }
 
 export function buildSubagentPropagationEnvironment(
@@ -477,10 +534,47 @@ export function recordSubagentLineageObservation(
   return node;
 }
 
+function recordSubagentSpawnTerminal(
+  session: SubagentTelemetrySession,
+  spawnId: string,
+  state: SubagentSpawnState,
+  childAgentId: string,
+  status: AgentTerminalStatus,
+  options: { readonly now?: () => number },
+): void {
+  updateChildStatus(session, childAgentId, status);
+  recordChildFailureCompletion(session, childAgentId, status);
+  recordObsAgentsTreeState(session);
+  const attributes = buildSubagentCompletionAttributes(session, spawnId, childAgentId, status, state.spawnReason);
+  const eventName = terminalSpawnEventName(status);
+  const severityText = status === "completed" ? "INFO" : "ERROR";
+
+  recordSubagentSpawnDuration(session, state, options);
+  state.span.setAttributes(attributes);
+  setTerminalSpawnStatus(state.span, status);
+  state.span.addEvent(eventName, attributes);
+  endSubagentSpan(session, state.span);
+  session.spans.activeSubagentSpawns.delete(spawnId);
+  emitSubagentLog(session, eventName, attributes, severityText);
+}
+
+function cancelActiveWaitJoin(
+  session: SubagentTelemetrySession,
+  id: string,
+  state: AgentWaitJoinState,
+  kind: AgentWaitJoinKind,
+): void {
+  const options = resolveWaitJoinCompletionOptions(state, {
+    childStatus: resolveInterruptedChildStatus(session, state.childAgentId),
+    joinStatus: "cancelled",
+  });
+  completeWaitJoinSpan(session, id, state, options, kind);
+}
+
 function startWaitJoinSpan(
   session: SubagentTelemetrySession,
   options: AgentWaitJoinOptions,
-  kind: "wait" | "join",
+  kind: AgentWaitJoinKind,
 ): StartedAgentWaitJoin {
   const id = options.id ?? `${kind}-${options.spawnId ?? randomUUID()}`;
   const reason = normalizeWaitReason(options.reason, options, kind);
@@ -490,10 +584,23 @@ function startWaitJoinSpan(
   const operation = kind === "wait" ? "agent_wait" : "agent_join";
   const span = startActiveSubagentSpan(session, spanName, resolveSubagentParentSpan(session), attributes, operation);
   const labels = waitJoinMetricLabels(session, options, reason);
-  const state = { span, startedAtMs: now(options), labels, reason };
+  const state: AgentWaitJoinState = {
+    id,
+    kind,
+    span,
+    startedAtMs: now(options),
+    labels,
+    reason,
+    spawnId: options.spawnId,
+    childAgentId: options.childAgentId,
+    childStatus: options.childStatus,
+    joinStatus: options.joinStatus,
+    failurePropagated: options.failurePropagated,
+  };
 
   waitJoinRegistry(session, kind).set(id, state);
-  recordObsAgentWaitJoinHint(createWaitJoinRuntimeHint(id, options, kind, reason, true));
+  activateStartingWaitJoinChild(session, state);
+  recordObsAgentWaitJoinHint(createWaitJoinRuntimeHint(state, options, true));
   span.addEvent(eventName, attributes);
   emitSubagentLog(session, eventName, attributes);
 
@@ -504,39 +611,86 @@ function endWaitJoinSpan(
   session: SubagentTelemetrySession,
   id: string,
   options: AgentWaitJoinOptions,
-  kind: "wait" | "join",
+  kind: AgentWaitJoinKind,
 ): SubagentTransitionResult {
   const registry = waitJoinRegistry(session, kind);
   const state = registry.get(id);
   if (!state) return subagentTransitionFailure("spawn_not_found");
 
-  const transition = validateWaitJoinTransition(session, options, kind);
+  const identity = validateWaitJoinIdentity(state, id, options, kind);
+  if (!identity.ok) return identity;
+  const completionOptions = resolveWaitJoinCompletionOptions(state, options);
+  const transition = validateWaitJoinTransition(session, completionOptions);
   if (!transition.ok) return transition;
-  if (kind === "join" && options.childAgentId && options.childStatus) updateChildStatus(session, options.childAgentId, options.childStatus);
+
+  completeWaitJoinSpan(session, id, state, completionOptions, kind);
+  return subagentTransitionSuccess();
+}
+
+function completeWaitJoinSpan(
+  session: SubagentTelemetrySession,
+  id: string,
+  state: AgentWaitJoinState,
+  options: AgentWaitJoinOptions,
+  kind: AgentWaitJoinKind,
+): void {
+  if (options.childAgentId && options.childStatus) updateChildStatus(session, options.childAgentId, options.childStatus);
 
   const attributes = buildWaitJoinAttributes(session, options, state.reason);
   const eventName = kind === "wait" ? LOG_EVENT_NAMES.AGENT_WAIT_COMPLETED : LOG_EVENT_NAMES.AGENT_JOIN_COMPLETED;
   const durationMs = resolveDurationMs(state, options);
+  const errorStatus = waitJoinErrorStatus(options);
 
   state.span.setAttributes(attributes);
-  if (waitJoinFailed(options)) state.span.setStatus({ code: SpanStatusCode.ERROR, message: options.joinStatus ?? options.childStatus });
+  if (errorStatus) state.span.setStatus({ code: SpanStatusCode.ERROR, message: errorStatus });
   state.span.addEvent(eventName, attributes);
   endSubagentSpan(session, state.span);
-  registry.delete(id);
-  recordObsAgentWaitJoinHint(createWaitJoinRuntimeHint(id, options, kind, state.reason, false, durationMs));
+  waitJoinRegistry(session, kind).delete(id);
+  recordObsAgentWaitJoinHint(createWaitJoinRuntimeHint(state, options, false, durationMs));
   recordObsAgentsTreeState(session);
   recordWaitJoinDuration(session, durationMs, state.labels, kind);
   if (kind === "join") recordChildJoinAccounting(session, options);
-  emitSubagentLog(session, eventName, attributes, waitJoinFailed(options) ? "ERROR" : "INFO");
+  emitSubagentLog(session, eventName, attributes, errorStatus ? "ERROR" : "INFO");
+}
+
+function validateWaitJoinIdentity(
+  state: AgentWaitJoinState,
+  id: string,
+  options: AgentWaitJoinOptions,
+  kind: AgentWaitJoinKind,
+): SubagentTransitionResult {
+  if (state.id !== id || state.kind !== kind) return subagentTransitionFailure("spawn_not_found");
+  if (options.id !== undefined && options.id !== state.id) return subagentTransitionFailure("child_agent_mismatch");
+  if (options.spawnId !== undefined && options.spawnId !== state.spawnId) {
+    return subagentTransitionFailure("child_agent_mismatch");
+  }
+  if (options.childAgentId !== undefined && options.childAgentId !== state.childAgentId) {
+    return subagentTransitionFailure("child_agent_mismatch");
+  }
   return subagentTransitionSuccess();
+}
+
+function resolveWaitJoinCompletionOptions(
+  state: AgentWaitJoinState,
+  options: AgentWaitJoinOptions,
+): AgentWaitJoinOptions {
+  return {
+    ...options,
+    id: state.id,
+    spawnId: state.spawnId,
+    childAgentId: state.childAgentId,
+    childStatus: options.childStatus ?? state.childStatus,
+    joinStatus: options.joinStatus ?? state.joinStatus,
+    reason: state.reason,
+    failurePropagated: options.failurePropagated ?? state.failurePropagated,
+  };
 }
 
 function validateWaitJoinTransition(
   session: SubagentTelemetrySession,
   options: AgentWaitJoinOptions,
-  kind: "wait" | "join",
 ): SubagentTransitionResult {
-  if (kind === "wait" || !options.childAgentId || !options.childStatus) return subagentTransitionSuccess();
+  if (!options.childAgentId || !options.childStatus) return subagentTransitionSuccess();
 
   if (options.spawnId) {
     const spawn = session.spans.activeSubagentSpawns.get(options.spawnId);
@@ -552,9 +706,31 @@ function validateWaitJoinTransition(
   return subagentTransitionSuccess();
 }
 
+function activateStartingWaitJoinChild(session: SubagentTelemetrySession, state: AgentWaitJoinState): void {
+  if (!state.childAgentId || state.childStatus !== "active") return;
+
+  const tree = ensureAgentTree(session);
+  if (tree.getAgent(state.childAgentId)?.status !== "starting") return;
+
+  tree.updateStatus(state.childAgentId, "active");
+  recordObsAgentsTreeState(session);
+}
+
+function resolveInterruptedChildStatus(
+  session: SubagentTelemetrySession,
+  childAgentId: string | undefined,
+): AgentChildStatus {
+  if (!childAgentId) return "cancelled";
+
+  const status = ensureAgentTree(session).getAgent(childAgentId)?.status;
+  return status === "completed" || status === "failed" || status === "cancelled" || status === "orphaned"
+    ? status
+    : "cancelled";
+}
+
 function waitJoinRegistry(
   session: SubagentTelemetrySession,
-  kind: "wait" | "join",
+  kind: AgentWaitJoinKind,
 ): BoundedMap<string, AgentWaitJoinState> {
   return kind === "wait" ? session.spans.activeAgentWaits : session.spans.activeAgentJoins;
 }
@@ -563,7 +739,7 @@ function recordWaitJoinDuration(
   session: SubagentTelemetrySession,
   durationMs: number,
   labels: Record<string, string>,
-  kind: "wait" | "join",
+  kind: AgentWaitJoinKind,
 ): void {
   if (kind === "wait") {
     session.metrics.agentWaitDurationMs.record(durationMs, labels);
@@ -672,8 +848,12 @@ function waitJoinMetricLabels(
   };
 }
 
-function waitJoinFailed(options: AgentWaitJoinOptions): boolean {
-  return options.failurePropagated === true || options.childStatus === "failed" || options.joinStatus === "failed";
+function waitJoinErrorStatus(options: AgentWaitJoinOptions): string | undefined {
+  if (options.failurePropagated === true || options.childStatus === "failed" || options.joinStatus === "failed") {
+    return options.joinStatus ?? options.childStatus ?? "failed";
+  }
+  if (options.childStatus === "cancelled" || options.joinStatus === "cancelled") return "cancelled";
+  return undefined;
 }
 
 function resolveDurationMs(state: AgentWaitJoinState, options: AgentWaitJoinOptions): number {
@@ -820,22 +1000,20 @@ function recordObsAgentsTreeState(session: SubagentTelemetrySession): void {
 }
 
 function createWaitJoinRuntimeHint(
-  id: string,
+  state: AgentWaitJoinState,
   options: AgentWaitJoinOptions,
-  kind: "wait" | "join",
-  reason: AgentWaitReason,
   active: boolean,
   durationMs?: number,
 ) {
   return {
-    kind,
-    id,
+    kind: state.kind,
+    id: state.id,
     active,
-    spawnId: options.spawnId,
-    childAgentId: options.childAgentId,
-    childStatus: options.childStatus,
-    joinStatus: options.joinStatus,
-    reason,
+    spawnId: state.spawnId,
+    childAgentId: state.childAgentId,
+    childStatus: options.childStatus ?? state.childStatus,
+    joinStatus: options.joinStatus ?? state.joinStatus,
+    reason: state.reason,
     durationMs,
   };
 }
@@ -970,14 +1148,14 @@ function normalizeSpawnReason(value: unknown): SubagentSpawnReason {
 function normalizeWaitReason(
   value: unknown,
   options: AgentWaitJoinOptions,
-  kind: "wait" | "join",
+  kind: AgentWaitJoinKind,
 ): AgentWaitReason {
   if (AGENT_WAIT_REASON_VALUES.includes(value as AgentWaitReason)) return value as AgentWaitReason;
   if (value === undefined && isWaitingForActiveChild(options, kind)) return "child_running";
   return "unknown";
 }
 
-function isWaitingForActiveChild(options: AgentWaitJoinOptions, kind: "wait" | "join"): boolean {
+function isWaitingForActiveChild(options: AgentWaitJoinOptions, kind: AgentWaitJoinKind): boolean {
   if (options.childStatus !== "active") return false;
   return kind === "wait" || options.joinStatus === "waiting";
 }

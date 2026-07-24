@@ -46,6 +46,7 @@
     "examples/**/*.yaml",
     "img/*",
     "src/**/*.ts",
+    "src/config/anchored-exclusive-create-helper.mjs",
     "tsconfig.json"
   ],
   "scripts": {

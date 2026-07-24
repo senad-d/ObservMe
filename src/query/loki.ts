@@ -69,8 +69,6 @@ async function queryLokiWithTransport(
   query: string,
   range: TimeRange,
 ): Promise<LogResult[]> {
-  if (!config.query.enabled) return [];
-
   assertGrafanaQueryReady(config, "loki");
   const normalizedQuery = normalizeLokiQuery(query);
   const timeRange = normalizeTimeRange(range);
@@ -211,20 +209,15 @@ async function readLokiLogResults(
 ): Promise<LogResult[]> {
   if (!response.ok) throw new Error(`Loki query failed: ${transport.formatHttpFailure(response)}`);
 
-  const payload = (await response.json()) as unknown;
-  const apiError = readLokiApiError(payload);
-  if (apiError) throw new Error(`Loki query failed: ${apiError}`);
+  const payload = await transport.readJson(response, "loki");
+  if (isLokiApiError(payload)) throw new Error("Loki query failed: backend returned an error response.");
 
   const logs = extractLokiLogResults(payload);
   return logs.slice(0, maxLogs);
 }
 
-function readLokiApiError(payload: unknown): string | undefined {
-  if (!isRecord(payload) || payload.status !== "error") return undefined;
-
-  const errorType = readOptionalString(payload, "errorType");
-  const errorMessage = readOptionalString(payload, "error");
-  return [errorType, errorMessage].filter(isNonEmptyString).join(": ") || "unknown Loki API error";
+function isLokiApiError(payload: unknown): boolean {
+  return isRecord(payload) && payload.status === "error";
 }
 
 function createLokiSchemaError(reason: string): Error {
@@ -298,14 +291,6 @@ function readStringRecord(value: unknown): Record<string, string> {
   return record;
 }
 
-function readOptionalString(item: Record<string, unknown>, key: string): string | undefined {
-  const value = item[key];
-  if (typeof value !== "string") return undefined;
-
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function readNonEmptyStringOrNumber(value: unknown): string | undefined {
   const text = readStringOrNumber(value)?.trim();
   return text || undefined;
@@ -315,10 +300,6 @@ function readStringOrNumber(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return undefined;
-}
-
-function isNonEmptyString(value: string | undefined): value is string {
-  return value !== undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

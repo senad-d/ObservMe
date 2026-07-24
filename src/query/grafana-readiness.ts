@@ -9,6 +9,16 @@ import {
 export type GrafanaQueryDatasourceKey = keyof GrafanaDatasourceUidsConfig;
 export type GrafanaQueryReadinessStatus = "ready" | "disabled" | "not_ready";
 
+export const GRAFANA_QUERY_DISABLED_MESSAGE = "Grafana query integration is disabled (query.enabled=false).";
+export const GRAFANA_QUERY_DISABLED_NEXT_ACTION = "set query.enabled=true to enable Grafana-backed commands.";
+
+export class GrafanaQueryDisabledError extends Error {
+  constructor() {
+    super(GRAFANA_QUERY_DISABLED_MESSAGE);
+    this.name = "GrafanaQueryDisabledError";
+  }
+}
+
 export interface GrafanaQueryReadinessIssue {
   readonly code: string;
   readonly key: string;
@@ -37,16 +47,25 @@ export function getGrafanaQueryReadiness(
 
 export function assertGrafanaQueryReady(config: ObservMeConfig, datasourceKey?: GrafanaQueryDatasourceKey): void {
   const readiness = getGrafanaQueryReadiness(config, datasourceKey);
-  if (readiness.status !== "not_ready") return;
+  if (readiness.status === "ready") return;
+  if (readiness.status === "disabled") throw new GrafanaQueryDisabledError();
 
   throw new Error(formatGrafanaQueryReadiness(readiness));
 }
 
 export function formatGrafanaQueryReadiness(readiness: GrafanaQueryReadinessResult): string {
   if (readiness.status === "ready") return "Grafana query configuration is ready.";
-  if (readiness.status === "disabled") return "Grafana query integration is disabled (query.enabled=false).";
+  if (readiness.status === "disabled") return GRAFANA_QUERY_DISABLED_MESSAGE;
 
   return `Grafana query configuration is not ready: ${readiness.issues.map(formatGrafanaQueryReadinessIssue).join(" ")}`;
+}
+
+export function formatGrafanaQueryDisabledGuidance(): string {
+  return `${GRAFANA_QUERY_DISABLED_MESSAGE} Next: ${GRAFANA_QUERY_DISABLED_NEXT_ACTION}`;
+}
+
+export function isGrafanaQueryDisabledError(error: unknown): error is GrafanaQueryDisabledError {
+  return error instanceof GrafanaQueryDisabledError;
 }
 
 function validateGrafanaUrl(url: string): GrafanaQueryReadinessIssue[] {

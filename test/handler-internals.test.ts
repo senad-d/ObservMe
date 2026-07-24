@@ -19,6 +19,7 @@ import {
   buildBranchAttributes,
   buildBranchPreparationState,
   buildCompactionAttributes,
+  buildContentCaptureFailureAttributes,
   buildLlmFinalAttributes,
   buildLlmRequestAttributes,
   buildToolCallInputAttributes,
@@ -558,15 +559,28 @@ test("unsafe live content capture exports the same truncated raw policy for prom
   assert.equal((session.metrics.redactionFailures as ReturnType<typeof createFakeCounter>).records.length, 0);
 });
 
-test("live content capture drops prompt, tool result, and bash output when redaction fails", () => {
-  const previousSalt = process.env.OBSERVME_HASH_SALT;
-  delete process.env.OBSERVME_HASH_SALT;
+test("content-capture failure attributes replace arbitrary error detail with fixed codes", () => {
+  const attributes = buildContentCaptureFailureAttributes({
+    errors: ["synthetic detector failure containing private-error-detail"],
+  } as never);
+
+  assert.deepEqual(attributes, {
+    reason: "redaction_failed",
+    [LOG_ATTRIBUTES.ERROR_TYPE]: "redaction_failed",
+  });
+  assert.doesNotMatch(JSON.stringify(attributes), /private-error-detail/u);
+});
+
+test("live redaction-failure telemetry is secret-free when the configured tenant salt is missing", () => {
+  const tenantSaltEnv = "PRIVATE_LIVE_CAPTURE_SALT";
+  const previousSalt = process.env[tenantSaltEnv];
+  delete process.env[tenantSaltEnv];
 
   try {
     const session = createSession({
       config: {
         capture: { prompts: true, toolResults: true, bashOutput: true },
-        privacy: { redactionEnabled: true, allowUnsafeCapture: false },
+        privacy: { redactionEnabled: true, allowUnsafeCapture: false, tenantSaltEnv },
       },
     });
     const promptSpan = createFakeSpan();
@@ -580,15 +594,21 @@ test("live content capture drops prompt, tool result, and bash output when redac
     assert.equal(promptSpan.attributes[LLM_ATTRIBUTES.PI_LLM_PROMPT_REDACTED], undefined);
     assert.equal(toolSpan.attributes[TOOL_ATTRIBUTES.PI_TOOL_RESULT_REDACTED], undefined);
     assert.equal(bashSpan.attributes[BASH_ATTRIBUTES.PI_BASH_OUTPUT_REDACTED], undefined);
-    assert.equal((session.metrics.redactionFailures as ReturnType<typeof createFakeCounter>).records.length, 3);
-    assert.ok(
-      (session.logger as ReturnType<typeof createFakeLogger>).records.every(record =>
-        String(record.attributes?.reason ?? "").includes("tenant salt env var OBSERVME_HASH_SALT is not set"),
-      ),
-    );
+
+    const metricRecords = (session.metrics.redactionFailures as ReturnType<typeof createFakeCounter>).records;
+    const logRecords = (session.logger as ReturnType<typeof createFakeLogger>).records;
+    assert.equal(metricRecords.length, 3);
+    assert.ok(metricRecords.every(record =>
+      (record.attributes as Record<string, unknown> | undefined)?.error_class === "tenant_salt_unavailable",
+    ));
+    assert.ok(logRecords.every(record => record.attributes?.reason === "tenant_salt_unavailable"));
+    assert.ok(logRecords.every(record => record.attributes?.[LOG_ATTRIBUTES.ERROR_TYPE] === "tenant_salt_unavailable"));
+
+    const exported = JSON.stringify({ metricRecords, logRecords, spans: [promptSpan, toolSpan, bashSpan] });
+    assert.doesNotMatch(exported, /PRIVATE_LIVE_CAPTURE_SALT|prompt-secret|tool-secret|bash-secret/u);
   } finally {
-    if (previousSalt === undefined) delete process.env.OBSERVME_HASH_SALT;
-    else process.env.OBSERVME_HASH_SALT = previousSalt;
+    if (previousSalt === undefined) delete process.env[tenantSaltEnv];
+    else process.env[tenantSaltEnv] = previousSalt;
   }
 });
 

@@ -518,7 +518,6 @@ test("hundreds of arbitrary spawn and wait reasons collapse to bounded enum labe
         spawnReason: `external_spawn_reason_${index}`,
       } as unknown as StartSubagentSpawnOptions,
     );
-    completeSubagentSpawn(telemetry, started.spawnId, { childAgentId: started.childAgentId });
     recordAgentWait(
       telemetry,
       {
@@ -530,6 +529,7 @@ test("hundreds of arbitrary spawn and wait reasons collapse to bounded enum labe
         durationMs: index,
       } as unknown as AgentWaitJoinOptions,
     );
+    completeSubagentSpawn(telemetry, started.spawnId, { childAgentId: started.childAgentId });
   }
 
   const spawnRecords = telemetry.meter.records.filter(

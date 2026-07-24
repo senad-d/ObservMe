@@ -78,4 +78,4 @@ Grafana
 
 ## How to interpret this reference
 
-Some documents define reserved or future-facing contracts in addition to currently emitted behavior. Use the telemetry catalog in [`../../README.md#available-telemetry`](../../README.md#available-telemetry) to distinguish live signals from names marked reserved or registered but not yet recorded. If a detailed reference conflicts with the current user guides, report the discrepancy and prefer the current user-facing behavior until the reference is corrected.
+Some documents define reserved or future-facing contracts in addition to currently emitted behavior. Use the telemetry catalog in [`../../README.md#available-telemetry`](../../README.md#available-telemetry) to distinguish live signals from names marked reserved or registered but not yet recorded. Runtime code and shipped configuration remain the behavioral source of truth. If a detailed reference or user guide conflicts with its owning implementation, report the discrepancy and correct the documentation; do not promote a reserved contract to live behavior.

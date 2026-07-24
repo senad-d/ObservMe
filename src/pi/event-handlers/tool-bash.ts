@@ -19,14 +19,17 @@ import {
   buildToolCompletionLogAttributes,
   buildToolFinalAttributes,
   buildToolResultAttributes,
+  cancelPendingUserBashCompletionPoll,
   closePendingUserBashOperation,
   deleteCurrentToolCall,
   emitCapturedToolErrorLog,
   emitLifecycleLog,
   endActiveSpan,
   hasBashCompletionResult,
+  isBashExecutionMessage,
   mergeToolStateLabels,
   nextToolCallId,
+  readBashCompletionTimestampMs,
   readBashPayload,
   readBashPreExecutionTimestampMs,
   recordMissingToolCallIdDrop,
@@ -49,12 +52,16 @@ import { monotonicNowMs } from "../handler-runtime.ts";
 import type { HandlerRegistrar } from "../handler-runtime.ts";
 import type {
   HandlerSessionState,
+  ObservMeSessionManager,
   ObservMeTelemetrySession,
   PendingBashOperationState,
   PiEvent,
   PiHandler,
   ToolCallState,
 } from "../handler-types.ts";
+
+const INITIAL_BASH_COMPLETION_POLL_DELAY_MS = 10;
+const MAX_BASH_COMPLETION_POLL_DELAY_MS = 250;
 
 export function registerToolBashHandlers(registrar: HandlerRegistrar, state: HandlerSessionState): void {
   registrar.add("tool_execution_start", createToolExecutionStartHandler(state));
@@ -98,7 +105,10 @@ export function recordBashExecution(session: ObservMeTelemetrySession, event: un
   span.addEvent(LOG_EVENT_NAMES.BASH_COMPLETED, attributes);
   if (durationMs !== undefined) session.metrics.bashDurationMs.record(durationMs, labels);
   endActiveSpan(session, span);
-  if (session.pendingUserBash === pending) session.pendingUserBash = undefined;
+  if (pending && session.pendingUserBash === pending) {
+    cancelPendingUserBashCompletionPoll(pending);
+    session.pendingUserBash = undefined;
+  }
   emitLifecycleLog(session.logger, LOG_EVENT_NAMES.BASH_COMPLETED, attributes, failed ? "ERROR" : "INFO");
 }
 
@@ -116,7 +126,7 @@ function handleToolExecutionStart(
 
   const toolCallId = nextToolCallId(session, event);
   const toolState = startToolCallState(session, event, toolCallId);
-  recordOptionalToolArguments(session, toolState.span, event);
+  observeToolInput(session, toolState, event);
 }
 
 function createToolCallHandler(state: HandlerSessionState): PiHandler<"tool_call"> {
@@ -130,11 +140,7 @@ function handleToolCall(state: HandlerSessionState, event: ToolCallEvent, _ctx: 
 
   const toolCallId = resolveCurrentToolCallId(session, event) ?? nextToolCallId(session, event);
   const toolState = resolveToolCallState(session, event) ?? startToolCallState(session, event, toolCallId);
-  const attributes = buildToolCallInputAttributes(event, session.config);
-
-  toolState.span.setAttributes(attributes);
-  mergeToolStateLabels(toolState, attributes);
-  recordOptionalToolArguments(session, toolState.span, event);
+  observeToolInput(session, toolState, event);
 }
 
 function createToolResultHandler(state: HandlerSessionState): PiHandler<"tool_result"> {
@@ -149,10 +155,33 @@ function handleToolResult(state: HandlerSessionState, event: ToolResultEvent, _c
   const toolState = resolveToolCallState(session, event);
   if (!toolState) return;
 
+  reconcileToolInput(session, toolState, event);
   const attributes = buildToolResultAttributes(event, session.config);
   toolState.span.setAttributes(attributes);
   mergeToolStateLabels(toolState, attributes);
   captureToolResult(session, toolState, event);
+}
+
+function observeToolInput(
+  session: ObservMeTelemetrySession,
+  toolState: ToolCallState,
+  event: unknown,
+): void {
+  const attributes = buildToolCallInputAttributes(event, session.config);
+  toolState.span.setAttributes(attributes);
+  mergeToolStateLabels(toolState, attributes);
+  toolState.inputEvent = event;
+}
+
+function reconcileToolInput(
+  session: ObservMeTelemetrySession,
+  toolState: ToolCallState,
+  event: unknown,
+): void {
+  observeToolInput(session, toolState, event);
+  recordOptionalToolArguments(session, toolState.span, event);
+  toolState.inputReconciled = true;
+  toolState.inputEvent = undefined;
 }
 
 function captureToolResult(session: ObservMeTelemetrySession, toolState: ToolCallState, event: unknown): void {
@@ -178,6 +207,10 @@ function handleToolExecutionEnd(
   if (!toolCallId || !toolState) {
     recordTelemetryDrop(session, "tool_call_missing_end", { operation: "tool_execution_end" });
     return;
+  }
+
+  if (!toolState.inputReconciled && toolState.inputEvent) {
+    reconcileToolInput(session, toolState, toolState.inputEvent);
   }
 
   const resultAttributes = buildToolResultAttributes(event, session.config);
@@ -214,12 +247,12 @@ function createUserBashPreExecutionHandler(state: HandlerSessionState): PiHandle
 function handleUserBashPreExecution(
   state: HandlerSessionState,
   event: UserBashEvent,
-  _ctx: ExtensionContext,
+  ctx: ExtensionContext,
 ): void {
   const session = state.session;
   if (!session) return;
 
-  startPendingUserBashOperation(session, event);
+  startPendingUserBashOperation(session, event, ctx);
 }
 
 function dropAmbiguousToolLifecycleEvent(
@@ -233,7 +266,11 @@ function dropAmbiguousToolLifecycleEvent(
   return true;
 }
 
-function startPendingUserBashOperation(session: ObservMeTelemetrySession, event: unknown): void {
+function startPendingUserBashOperation(
+  session: ObservMeTelemetrySession,
+  event: unknown,
+  ctx: ExtensionContext,
+): void {
   if (session.pendingUserBash) {
     closePendingUserBashOperation(session, "bash_overlap_ambiguous", true);
     return;
@@ -247,12 +284,86 @@ function startPendingUserBashOperation(session: ObservMeTelemetrySession, event:
     attributes,
     "bash_execution",
   );
-  session.pendingUserBash = {
+  const pending: PendingBashOperationState = {
     span,
     startedAtMs: session.now?.() ?? monotonicNowMs(),
+    observedStartedAtUnixMs: Date.now(),
     eventStartedAtMs: readBashPreExecutionTimestampMs(event),
+    readSessionEntries: resolveBashSessionEntriesReader(ctx),
+    completionPollDelayMs: INITIAL_BASH_COMPLETION_POLL_DELAY_MS,
   };
+  session.pendingUserBash = pending;
   recordOptionalBashContent(session, span, event);
+  startPendingUserBashCompletionObservation(session, pending);
+}
+
+function resolveBashSessionEntriesReader(
+  ctx: ExtensionContext,
+): (() => ReturnType<ObservMeSessionManager["getEntries"]>) | undefined {
+  const sessionManager = ctx.sessionManager as Partial<ObservMeSessionManager> | undefined;
+  if (typeof sessionManager?.getEntries !== "function") return undefined;
+  return sessionManager.getEntries.bind(sessionManager);
+}
+
+function startPendingUserBashCompletionObservation(
+  session: ObservMeTelemetrySession,
+  pending: PendingBashOperationState,
+): void {
+  if (!pending.readSessionEntries) return;
+
+  try {
+    pending.nextSessionEntryIndex = pending.readSessionEntries().length;
+    schedulePendingUserBashCompletionPoll(session, pending);
+  } catch {
+    closePendingUserBashOperation(session, "bash_completion_observer_failed", false);
+  }
+}
+
+function schedulePendingUserBashCompletionPoll(
+  session: ObservMeTelemetrySession,
+  pending: PendingBashOperationState,
+): void {
+  const timer = setTimeout(
+    pollPendingUserBashCompletion.bind(undefined, session, pending),
+    pending.completionPollDelayMs,
+  );
+  timer.unref();
+  pending.completionPollTimer = timer;
+  pending.completionPollDelayMs = Math.min(
+    MAX_BASH_COMPLETION_POLL_DELAY_MS,
+    pending.completionPollDelayMs * 2,
+  );
+}
+
+function pollPendingUserBashCompletion(
+  session: ObservMeTelemetrySession,
+  pending: PendingBashOperationState,
+): void {
+  pending.completionPollTimer = undefined;
+  if (session.pendingUserBash !== pending) return;
+
+  try {
+    const completionEntry = findPendingUserBashCompletionEntry(pending);
+    if (completionEntry) {
+      recordBashExecution(session, completionEntry);
+      return;
+    }
+    schedulePendingUserBashCompletionPoll(session, pending);
+  } catch {
+    closePendingUserBashOperation(session, "bash_completion_observer_failed", false);
+  }
+}
+
+function findPendingUserBashCompletionEntry(pending: PendingBashOperationState): unknown {
+  const entries = pending.readSessionEntries?.() ?? [];
+  const firstCandidateIndex = pending.nextSessionEntryIndex ?? entries.length;
+  pending.nextSessionEntryIndex = entries.length;
+
+  for (let index = firstCandidateIndex; index < entries.length; index += 1) {
+    if (isBashExecutionMessage(readBashPayload(entries[index]))) return entries[index];
+  }
+
+  return undefined;
 }
 
 function resolveBashDurationMs(
@@ -264,6 +375,12 @@ function resolveBashDurationMs(
 
   const eventDurationMs = resolveBashEventDurationMs(pending.eventStartedAtMs, completionEvent);
   if (eventDurationMs !== undefined) return eventDurationMs;
+
+  const observedDurationMs = safeElapsedDurationMs(
+    pending.observedStartedAtUnixMs,
+    readBashCompletionTimestampMs(completionEvent),
+  );
+  if (observedDurationMs !== undefined) return observedDurationMs;
 
   return safeElapsedDurationMs(pending.startedAtMs, session.now?.() ?? monotonicNowMs());
 }

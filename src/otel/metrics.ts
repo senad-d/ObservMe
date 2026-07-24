@@ -18,7 +18,13 @@ export const DOCUMENTED_METRIC_EXPORT_DEFAULTS = {
   exportTimeoutMillis: 3000,
 } satisfies Pick<MetricsConfig, "exportIntervalMillis" | "exportTimeoutMillis">;
 
-export type MetricPipelineState = "idle" | "disabled" | "started" | "shutdown";
+export type MetricPipelineState =
+  | "idle"
+  | "disabled"
+  | "started"
+  | "shutting_down"
+  | "shutdown_failed"
+  | "shutdown";
 
 export interface OtlpMetricExporterOptions {
   readonly url: string;
@@ -73,6 +79,7 @@ export class ObservMeMetricSdk {
   #reader?: IMetricReader;
   #provider?: MetricProviderLike;
   #meter: Meter = noopMeter;
+  #shutdownPromise?: Promise<void>;
   #state: MetricPipelineState = "idle";
 
   constructor(options: ObservMeMetricSdkOptions) {
@@ -116,17 +123,31 @@ export class ObservMeMetricSdk {
 
   async shutdown(): Promise<void> {
     if (this.#state === "shutdown") return;
+    if (this.#state === "shutting_down" && this.#shutdownPromise) return this.#shutdownPromise;
 
+    this.#state = "shutting_down";
+    this.#meter = noopMeter;
+    const shutdownPromise = this.shutdownOwnedResources();
+    this.#shutdownPromise = shutdownPromise;
+    try {
+      await shutdownPromise;
+    } finally {
+      if (this.#shutdownPromise === shutdownPromise) this.#shutdownPromise = undefined;
+    }
+  }
+
+  private async shutdownOwnedResources(): Promise<void> {
     try {
       if (this.#provider?.shutdown) await this.#provider.shutdown();
       else if (this.#reader) await this.#reader.shutdown();
       else await this.#exporter?.shutdown();
-    } finally {
       this.#provider = undefined;
       this.#reader = undefined;
       this.#exporter = undefined;
       this.#state = "shutdown";
-      this.#meter = noopMeter;
+    } catch (error) {
+      this.#state = "shutdown_failed";
+      throw error;
     }
   }
 }

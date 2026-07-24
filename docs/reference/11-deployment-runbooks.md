@@ -36,7 +36,7 @@ YAML
 
 docker run --rm -p 4317:4317 -p 4318:4318 \
   -v "$PWD/collector-debug.yaml:/etc/otelcol/config.yaml" \
-  otel/opentelemetry-collector:latest
+  otel/opentelemetry-collector-contrib:0.104.0
 ```
 
 This debug config uses only core Collector components. Production configs that use `prometheusremotewrite`, `tail_sampling`, or other contrib components must run a distribution that includes those components.
@@ -71,22 +71,24 @@ Run Pi with ObservMe loaded and execute:
 
 Services:
 
+- nginx
+- grafana
 - otel-collector
 - tempo
 - loki
 - prometheus
-- grafana
+- node-exporter
+- cadvisor
 
-Recommended ports:
+Bundled host entrypoints:
 
 ```text
-4317 collector OTLP gRPC
-4318 collector OTLP HTTP
-3000 grafana
-3100 loki
-3200 tempo
-9090 prometheus
+80   Nginx -> authenticated Grafana at http://localhost
+4317 Collector OTLP gRPC ingestion
+4318 Collector OTLP HTTP ingestion
 ```
+
+Grafana port 3000, Loki 3100, Tempo 3200, and Prometheus 9090 are internal Compose endpoints and are not published by the default stack.
 
 ### Prometheus exporter cleanup policy
 
@@ -130,7 +132,7 @@ Best for high-volume jobs because Pi hands off telemetry locally.
 
 Preferred shutdown steps:
 
-1. Parent Pi passes trace context, `OBSERVME_WORKFLOW_ID`, and `OBSERVME_PARENT_AGENT_ID`/`OBSERVME_ROOT_AGENT_ID` to any child Pi processes it launches.
+1. An ObservMe-aware parent launcher calls `startSubagent()` and passes its returned trace/lineage environment unchanged to each child Pi process.
 2. Stop Pi and child producers gracefully so ObservMe can deactivate the lease, export the zero lifecycle claim, and flush within its timeout.
 3. Drain the sidecar Collector with a timeout.
 4. Put best-effort process, container, and network cleanup in an `if: always()` GitHub Actions step.

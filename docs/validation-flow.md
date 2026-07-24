@@ -1,6 +1,6 @@
 # ObservMe Grafana + `/obs` validation flow
 
-Use this secret-safe flow when Grafana shows ObservMe data but `/obs` commands appear broken. It classifies the failure as ingestion, labels, Grafana auth/query access, local TLS/DNS, Pi command registration, or session state. For first-time setup, read the [configuration guide](configuration.md) and [example guide](../examples/README.md) first.
+Use this secret-safe flow when Grafana shows ObservMe data but `/obs` commands appear broken. It classifies the failure as ingestion, labels, Grafana auth/query access, local URL/transport, Pi command registration, or session state. For first-time setup, read the [configuration guide](configuration.md) and [example guide](../examples/README.md) first.
 
 ## Preconditions
 
@@ -9,7 +9,9 @@ Use this secret-safe flow when Grafana shows ObservMe data but `/obs` commands a
 - Grafana read access is provided through environment variables. Do not put tokens or passwords on the command line and do not source `.env` in captured logs.
 
 ```bash
-export OBSERVME_GRAFANA_URL=https://observability.local
+export OBSERVME_ENVIRONMENT=development
+export OBSERVME_ALLOW_INSECURE_TRANSPORT=true
+export OBSERVME_GRAFANA_URL=http://localhost
 export OBSERVME_GRAFANA_TOKEN=<service-account-token>
 # Or, for local-only Basic auth:
 # export OBSERVME_GRAFANA_USERNAME=admin
@@ -18,8 +20,8 @@ export OBSERVME_GRAFANA_TOKEN=<service-account-token>
 export OBSERVME_GRAFANA_TEMPO_DATASOURCE_UID=tempo
 export OBSERVME_GRAFANA_LOKI_DATASOURCE_UID=loki
 export OBSERVME_GRAFANA_PROMETHEUS_DATASOURCE_UID=prometheus
-export OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY=true
-export OBSERVME_GRAFANA_PREFER_IPV4=true
+export OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY=false
+export OBSERVME_GRAFANA_PREFER_IPV4=false
 export OBSERVME_OTLP_ENDPOINT=http://127.0.0.1:4318
 ```
 
@@ -108,7 +110,7 @@ node --test test/dashboards.test.mjs test/exporter-failure.test.ts test/chaos-fa
 | Failed step | Likely class | Next check |
 | --- | --- | --- |
 | Grafana auth configuration | Missing query credentials | Export `OBSERVME_GRAFANA_TOKEN` or `OBSERVME_GRAFANA_USERNAME`/`OBSERVME_GRAFANA_PASSWORD`. |
-| Grafana and datasource health | Grafana auth/query, local TLS/DNS, or datasource UID | Run `/obs health`; verify `observability.local`, TLS skip-verify for local dev, and datasource UIDs. |
+| Grafana and datasource health | Grafana auth/query, local URL/transport, or datasource UID | Run `/obs health`; verify `http://localhost`, the Nginx host port, and datasource UIDs. |
 | Prometheus metric ingestion | Collector metrics export or Prometheus scrape | Check Collector health, Prometheus targets, and `observme_*` metric names. |
 | Loki log labels | Label mismatch or log export | Compare live Loki labels with `service_name`, `pi_session_id`, `event_name`, and `/obs logs` selectors. |
 | Tempo trace search | Trace export, datasource UID, or active root-span timing | Wait for export, run `/obs trace`, and remember the root `pi.session` appears after shutdown. |

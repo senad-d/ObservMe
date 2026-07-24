@@ -10,153 +10,94 @@ Pi extension factories may run in invocations that never start a session. Theref
 
 ```text
 observme/
-├── package.json
-├── tsconfig.json
-├── README.md
 ├── src/
-│   ├── index.ts                    # Pi extension entrypoint
-│   ├── config/
-│   │   ├── load-config.ts
-│   │   ├── schema.ts
-│   │   └── defaults.ts
-│   ├── otel/
-│   │   ├── sdk.ts
-│   │   ├── traces.ts
-│   │   ├── metrics.ts
-│   │   ├── logs.ts
-│   │   └── shutdown.ts
+│   ├── extension.ts               # Pi extension entrypoint
+│   ├── integration.ts             # public inter-extension API/types
+│   ├── commands/                  # /obs routing and subcommands
+│   ├── config/                    # defaults, schema, loading, validation, bootstrap
+│   ├── diagnostics/               # bounded diagnostic sanitization
+│   ├── otel/                      # session-scoped traces, metrics, logs, shutdown
 │   ├── pi/
-│   │   ├── handlers.ts
-│   │   ├── session.ts
-│   │   ├── event-normalizer.ts
+│   │   ├── event-handlers/        # lifecycle, agent/turn, LLM, tool/Bash, session
+│   │   ├── handlers.ts            # registration facade
+│   │   ├── handler-runtime.ts     # runtime state and metric instruments
+│   │   ├── handler-internals.ts   # event mapping helpers
 │   │   ├── agent-lineage.ts
 │   │   ├── agent-tree-tracker.ts
-│   │   └── turn-tracker.ts
-│   ├── semconv/
-│   │   ├── attributes.ts
-│   │   ├── metrics.ts
-│   │   └── spans.ts
-│   ├── privacy/
-│   │   ├── redact.ts
-│   │   ├── secret-patterns.ts
-│   │   ├── hash.ts
-│   │   └── truncate.ts
-│   ├── commands/
-│   │   ├── obs-status.ts
-│   │   ├── obs-health.ts
-│   │   ├── obs-session.ts
-│   │   ├── obs-cost.ts
-│   │   ├── obs-agents.ts
-│   │   └── obs-link.ts
-│   ├── query/
-│   │   ├── grafana.ts
-│   │   ├── tempo.ts
-│   │   ├── loki.ts
-│   │   └── prometheus.ts
-│   └── util/
-│       ├── safe-json.ts
-│       ├── time.ts
-│       ├── trace-context.ts
-│       └── bounded-map.ts
-└── test/
-    ├── redaction.test.ts
-    ├── event-mapping.test.ts
-    ├── metrics.test.ts
-    ├── exporter-failure.test.ts
-    ├── agent-lineage.test.ts
-    └── cardinality.test.ts
+│   │   ├── integration-api.ts
+│   │   └── subagent-spawn.ts
+│   ├── privacy/                   # capture policy, redaction, hashing, truncation
+│   ├── query/                     # Grafana, Tempo, Loki, Prometheus clients
+│   ├── safety/                    # display and query-input bounds
+│   ├── semconv/                   # attributes, metric/event names, span names
+│   └── util/                      # bounded data structures
+├── test/                          # unit, contract, smoke-support, and integration tests
+├── dashboards/                    # Grafana dashboards, alerts, and SLOs
+├── examples/                      # extension and Collector examples
+├── skills/observme-docs/          # packaged documentation router
+└── observability-stack/           # repository-only local Docker Compose stack
 ```
+
+[`../STRUCTURE.md`](../STRUCTURE.md) gives the maintained directory map. File names in this blueprint are descriptive only when explicitly shown above; use the repository tree and `package.json` as the package-surface source of truth.
 
 ## 3. Dependencies
 
-Required:
+`package.json` and `package-lock.json` are authoritative. The current runtime uses the OpenTelemetry API/API-logs packages, resources, trace/metric/log SDK packages, and the three `*-otlp-proto` exporters. It does **not** depend on `@opentelemetry/sdk-node`, `@opentelemetry/semantic-conventions`, a gRPC exporter, or Vitest. Tests use Node's built-in test runner, and TypeScript is pinned in development dependencies.
 
-```json
-{
-  "dependencies": {
-    "@opentelemetry/api": "1.x",
-    "@opentelemetry/api-logs": "0.x",
-    "@opentelemetry/sdk-node": "0.x",
-    "@opentelemetry/sdk-trace-node": "2.x",
-    "@opentelemetry/sdk-metrics": "2.x",
-    "@opentelemetry/sdk-logs": "0.x",
-    "@opentelemetry/exporter-trace-otlp-proto": "0.x",
-    "@opentelemetry/exporter-metrics-otlp-proto": "0.x",
-    "@opentelemetry/exporter-logs-otlp-proto": "0.x",
-    "@opentelemetry/resources": "2.x",
-    "@opentelemetry/semantic-conventions": "1.x"
-  },
-  "devDependencies": {
-    "typescript": "^5.x",
-    "vitest": "^latest"
-  }
-}
-```
-
-Pin exact versions in production and test upgrades before release. Do not assume all `@opentelemetry/*` packages share the same major version; OpenTelemetry JS commonly mixes stable API packages with SDK/exporter packages on different major/minor lines. Use the `*-otlp-proto` exporters for OTLP/HTTP protobuf per current OpenTelemetry JS docs, or the `*-otlp-grpc` exporters when using gRPC.
+Pi core packages and TypeBox are peer dependencies. Exact tested versions and the mixed OpenTelemetry package version lines are recorded in [`../compatibility-matrix.md`](../compatibility-matrix.md); do not infer one shared OpenTelemetry major version.
 
 ## 4. Entrypoint Pattern
 
+The synchronous factory in `src/extension.ts` checks required Pi API capabilities, registers event handlers, and registers the single `/obs` root command. It does not load project config or start OpenTelemetry resources:
+
 ```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadBootstrapConfig, loadSessionConfig } from "./config/load-config";
-import { createRuntime } from "./runtime";
-import { registerHandlers } from "./pi/handlers";
-import { registerObsCommands } from "./commands";
-
-export default async function observme(pi: ExtensionAPI) {
-  const bootstrapConfig = await loadBootstrapConfig();
-  const runtime = createRuntime(bootstrapConfig);
-
-  // Register handlers and commands in the factory, but defer OTEL SDK startup
-  // until session_start so background exporters/timers are session-scoped.
-  registerHandlers(pi, runtime, loadSessionConfig);
-  registerObsCommands(pi, runtime);
+export default function observme(pi: ExtensionAPI): void {
+  assertObservMePiCapabilities(pi);
+  registerHandlers(pi, { trustedParentContext: true });
+  registerObsCommandWithPartialInitializationDiagnostic(pi);
 }
 ```
+
+`registerObsCommand()` owns all subcommand dispatch. OpenTelemetry startup and trusted project config loading occur from `session_start`; bounded cleanup occurs from `session_shutdown`.
 
 ## 5. Telemetry Runtime Interface
 
-```typescript
-export interface ObservMeTelemetry {
-  tracer: Tracer;
-  meter: Meter;
-  logger: Logger;
-  metrics: ObservMeMetrics;
-  spans: SpanRegistry;
-  agent: AgentLineageContext;
-  flush(timeoutMs: number): Promise<void>;
-  shutdown(timeoutMs: number): Promise<void>;
-}
+The internal `ObservMeTelemetrySession` in `src/pi/handler-types.ts` owns the effective config, validated lineage, scoped OpenTelemetry objects, metrics, bounded registries, optional lease controller, root span, and active correlation state. Flush and shutdown are methods on its controller:
 
-export interface AgentLineageContext {
-  workflowId: string;
-  workflowRootAgentId: string;
-  agentId: string;
-  parentAgentId?: string;
-  rootAgentId: string;
-  depth: number;
-  role: "root" | "subagent" | "orchestrator" | "worker" | "reviewer" | "unknown";
-  capability?: string;
+```typescript
+interface ObservMeTelemetrySession {
+  readonly config: ObservMeConfig;
+  readonly lineage: AgentLineageContext;
+  readonly controller: Pick<ObservMeOtelSdkController, "flush" | "shutdown">;
+  readonly tracer: TelemetryTracer;
+  readonly meter: TelemetryMeter;
+  readonly logger: TelemetryLogger;
+  readonly metrics: ObservMeMetrics;
+  readonly spans: SpanRegistry;
+  readonly activeAgentLease?: ActiveAgentLeaseController;
+  sessionSpan?: Span;
+  sessionAttributes?: AttributeMap;
+  agentTree: AgentTreeTracker;
 }
 ```
+
+This is private implementation state, not part of the `@senad-d/observme/integration` public API.
 
 ## 6. Span Registry
 
 Track active spans in memory only.
 
-```typescript
-type SpanKey = string;
+`ObservMeTelemetrySession.sessionSpan` stores the root span separately. `SpanRegistry` uses `BoundedMap` instances; simple lifecycles store spans, while tools, spawns, waits, and joins store state objects that include the span plus bounded correlation/timing data:
 
+```typescript
 interface SpanRegistry {
-  sessionSpan?: Span;
-  activeAgentRuns: Map<string, Span>;
-  activeTurns: Map<string, Span>;
-  activeToolCalls: Map<string, Span>;
-  activeLlmRequests: Map<string, Span>;
-  activeSubagentSpawns: Map<string, Span>;
-  activeAgentWaits: Map<string, Span>;
-  activeAgentJoins: Map<string, Span>;
+  activeAgentRuns: BoundedMap<string, Span>;
+  activeTurns: BoundedMap<string, Span>;
+  activeLlmRequests: BoundedMap<string, Span>;
+  activeToolCalls: BoundedMap<string, ToolCallState>;
+  activeSubagentSpawns: BoundedMap<string, SubagentSpawnState>;
+  activeAgentWaits: BoundedMap<string, AgentWaitJoinState>;
+  activeAgentJoins: BoundedMap<string, AgentWaitJoinState>;
 }
 ```
 
@@ -180,18 +121,20 @@ When exceeded:
 
 ## 7. Event Handler Design
 
+The snippets below are behavioral pseudocode, not importable public APIs. The live implementation is split across `src/pi/event-handlers/`, `src/pi/handler-runtime.ts`, and `src/pi/handler-internals.ts`.
+
 ### Session Start
 
 ```typescript
 pi.on("session_start", async (event, ctx) => {
   // Load session-scoped config with ctx.cwd. Only read project-local config when
   // ctx.isProjectTrusted() is true; otherwise use global/env/default config.
-  const config = await loadSessionConfig(ctx, runtime.bootstrapConfig);
+  const config = await loadSessionConfig({ ctx, cwd: ctx.cwd });
   const agent = buildAgentLineageContext(config, process.env);
   const telemetry = await runtime.startSession(config, agent, ctx);
 
   const attrs = buildSessionAttributes(event, ctx, agent);
-  telemetry.spans.sessionSpan = telemetry.tracer.startSpan("pi.session", { attributes: attrs });
+  telemetry.sessionSpan = telemetry.tracer.startSpan("pi.session", { attributes: attrs });
   telemetry.metrics.sessionsStarted.add(1, metricLabels(ctx, agent));
   if (agent.role === "root" || agent.role === "orchestrator") {
     telemetry.metrics.workflowsStarted.add(1, workflowMetricLabels(ctx, agent));
@@ -209,7 +152,7 @@ pi.on("agent_start", async (_event, ctx) => {
   const telemetry = runtime.telemetryOrNoop();
   const runId = nextAgentRunId(ctx, telemetry.agent);
   const span = startChildSpan(
-    telemetry.spans.sessionSpan,
+    telemetry.sessionSpan,
     "pi.agent.run",
     buildAgentRunAttributes(runId, ctx, telemetry.agent),
   );
@@ -219,7 +162,7 @@ pi.on("agent_start", async (_event, ctx) => {
 
 pi.on("turn_start", async (event, ctx) => {
   const telemetry = runtime.telemetryOrNoop();
-  const runSpan = currentAgentRunSpan(ctx) ?? telemetry.spans.sessionSpan;
+  const runSpan = currentAgentRunSpan(ctx) ?? telemetry.sessionSpan;
   const turnId = getTurnId(event, ctx, currentAgentRunId(ctx));
   const span = startChildSpan(runSpan, "pi.turn", buildTurnAttributes(event, ctx, telemetry.agent));
   telemetry.spans.activeTurns.set(turnId, span);
@@ -250,7 +193,7 @@ pi.on("agent_end", async (_event, ctx) => {
 pi.on("before_provider_request", async (event, ctx) => {
   const telemetry = runtime.telemetryOrNoop();
   const turnId = currentTurnId(ctx);
-  const parent = telemetry.spans.activeTurns.get(turnId) ?? currentAgentRunSpan(ctx) ?? telemetry.spans.sessionSpan;
+  const parent = telemetry.spans.activeTurns.get(turnId) ?? currentAgentRunSpan(ctx) ?? telemetry.sessionSpan;
   // Pi's event exposes the provider-specific payload; use ctx.model plus safe payload inspection.
   const span = startChildSpan(parent, "pi.llm.request", buildLlmRequestAttrs(event.payload, ctx.model, ctx));
   telemetry.spans.activeLlmRequests.set(makeLlmKey(event, ctx), span);
@@ -262,7 +205,7 @@ pi.on("before_provider_request", async (event, ctx) => {
 ```typescript
 pi.on("tool_execution_start", async (event, ctx) => {
   const telemetry = runtime.telemetryOrNoop();
-  const parent = currentTurnSpan(ctx) ?? currentAgentRunSpan(ctx) ?? telemetry.spans.sessionSpan;
+  const parent = currentTurnSpan(ctx) ?? currentAgentRunSpan(ctx) ?? telemetry.sessionSpan;
   const span = startChildSpan(parent, "pi.tool.call", buildToolExecutionAttrs(event, ctx, telemetry.agent));
   telemetry.spans.activeToolCalls.set(event.toolCallId, span);
   telemetry.metrics.toolCalls.add(1, { tool_name: safeToolName(event.toolName), agent_role: telemetry.agent.role });
@@ -286,33 +229,23 @@ pi.on("tool_execution_end", async (event, ctx) => {
 
 ### Subagent Spawn
 
-There is no dedicated Pi event for "subagent spawned". Detect this at the point ObservMe wraps a subagent tool/command or an extension intentionally launches another Pi process.
+There is no dedicated Pi event for "subagent spawned", and ObservMe does not launch child processes itself. An orchestrator requests the public versioned API and calls it around its own transport:
 
 ```typescript
-async function runSubagent(command: string, args: string[], ctx: ExtensionContext) {
-  const telemetry = runtime.telemetryOrNoop();
-  const spawnId = newSpawnId();
-  const parent = currentTurnSpan(ctx) ?? currentAgentRunSpan(ctx) ?? telemetry.spans.sessionSpan;
-  const span = startChildSpan(parent, "pi.agent.spawn", buildSpawnAttrs(spawnId, ctx, telemetry.agent));
+const observme = requestObservMeIntegration(pi);
+const started = observme?.startSubagent({
+  command: "pi",
+  spawnType: "extension",
+  spawnReason: "delegated_task",
+  env: process.env,
+});
 
-  const env = buildChildEnv(process.env, telemetry.agent, span.spanContext(), spawnId);
-  recordAgentTreeSpawn(telemetry, spawnId, ctx);
-  try {
-    telemetry.metrics.subagentsSpawned.add(1, { agent_role: "subagent", spawn_type: "command" });
-    // Use a child_process/spawn helper or tool operation that supports explicit env.
-    // pi.exec() is useful for simple commands but does not currently accept env.
-    return await spawnProcessWithEnv(command, args, { env, signal: ctx.signal });
-  } catch (err) {
-    span.setStatus({ code: SpanStatusCode.ERROR, message: safeErrorClass(err) });
-    telemetry.metrics.subagentSpawnFailures.add(1, { spawn_type: "command", error_class: safeErrorClass(err) });
-    throw err;
-  } finally {
-    span.end();
-  }
+if (started?.ok) {
+  await launchChildPi({ env: started.env });
 }
 ```
 
-Propagate W3C `traceparent`/`tracestate`, `OBSERVME_WORKFLOW_ID`, `OBSERVME_PARENT_AGENT_ID`, `OBSERVME_ROOT_AGENT_ID`, `OBSERVME_PARENT_SESSION_ID`, `OBSERVME_AGENT_DEPTH`, and `OBSERVME_SPAWN_ID`. Do not place raw command lines or inherited environment values into telemetry.
+The returned environment contains the validated ObservMe lineage fields and W3C `traceparent`/`tracestate` when enabled. The launcher must pass it unchanged and must not log command lines or environment values. Launcher failure uses `failSubagent()`; terminal child completion uses `completeSubagent()`. See [`../extension-integration.md`](../extension-integration.md) for the complete transition contract.
 
 When the parent waits for a child or receives child results, create `pi.agent.wait` and `pi.agent.join` spans/events with child status, propagated-failure status, active-child count, and join status. These spans make the critical path visible in orchestrator traces.
 
@@ -322,7 +255,7 @@ When the parent waits for a child or receives child results, create `pi.agent.wa
 pi.on("session_shutdown", async (_event, _ctx) => {
   const telemetry = runtime.telemetryOrNoop();
   endAllActiveSpans(telemetry.spans);
-  telemetry.spans.sessionSpan?.end();
+  telemetry.sessionSpan?.end();
   await withTimeout(runtime.shutdownSession(), runtime.config.shutdown.flushTimeoutMs);
 });
 ```
@@ -402,14 +335,15 @@ Never throw from an ObservMe event handler into Pi.
 1. Built-in defaults
 2. Global config `~/.pi/agent/observme.yaml`
 3. Project config `<cwd>/<CONFIG_DIR_NAME>/observme.yaml` only when `ctx.isProjectTrusted()` is true (normally `.pi/observme.yaml`; use Pi's exported `CONFIG_DIR_NAME` instead of hardcoding `.pi`)
-4. Environment variables
-5. CLI or Pi extension options if available
+4. Trusted project `<cwd>/.env`
+5. System environment variables
+6. Explicit runtime options
 
-Factory-safe config loading may read only defaults, global config, and environment variables. Session-scoped loading on `session_start` may add trusted project config because it has access to `ctx.cwd` and `ctx.isProjectTrusted()`. Reapply environment/runtime overrides after project config so the precedence order remains correct.
+Factory-safe config loading reads defaults, global config, system environment variables, and runtime options. Session-scoped loading on `session_start` may add trusted project config and `.env` because it has `ctx.cwd` and `ctx.isProjectTrusted()`. System environment values override trusted `.env`, and runtime options remain highest precedence.
 
 ## 12. Backfill Command
 
-Backfill is optional and disabled by default.
+The backfill subcommand is registered by default, but every run is explicit and confirmation-gated. It exports current-session OTEL log records only and skips when ObservMe, log export, interactive confirmation, or current session state is unavailable.
 
 Command:
 
@@ -421,14 +355,16 @@ Rules:
 
 - Mark telemetry with `observme.replayed=true`
 - Do not backfill content unless capture settings allow it
-- Rate limit export
-- Confirm with user before sending historical content
+- Require `--current-session` and interactive confirmation before export
+- Accept an optional positive `--since` duration up to 30 days
+- Export at most 100 records by default and bound cancellation/operations
+- Do not reconstruct historical traces or metrics
 
 ## 13. Inter-extension integration
 
 Other Pi extensions must not import ObservMe's private telemetry session or `src/pi/subagent-spawn.ts` directly. ObservMe exposes a versioned request/response API through Pi's shared `pi.events` bus and the `@senad-d/observme/integration` package export.
 
-The public API covers current context plus subagent spawn, launcher completion/failure, wait, and join transitions. `startSubagent()` returns the sanitized process environment that the launcher passes to the child. Runtime negotiation lets an orchestrator remain optional when ObservMe is absent or inactive.
+The public API covers current context plus subagent start, launcher failure, terminal child completion, wait, and join transitions. `startSubagent()` returns the sanitized process environment that the launcher passes to the child. Runtime negotiation lets an orchestrator remain optional when ObservMe is absent or inactive.
 
 See [`../extension-integration.md`](../extension-integration.md) for the public contract and [`../../examples/integrations/subagent-runner.ts`](../../examples/integrations/subagent-runner.ts) for a transport-agnostic consumer example.
 
@@ -444,7 +380,7 @@ Breaking semantic-convention changes require MAJOR. Incompatible inter-extension
 
 ## 15. Package surface
 
-The published Pi package includes:
+Selected published Pi package paths include:
 
 ```text
 src/extension.ts                         # Pi extension entry

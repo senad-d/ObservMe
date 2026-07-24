@@ -3,9 +3,15 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { metrics, trace } from "@opentelemetry/api";
 import { logs } from "@opentelemetry/api-logs";
-import { createEventBus } from "@earendil-works/pi-coding-agent";
+import {
+  createEventBus,
+  createExtensionRuntime,
+  ExtensionRunner,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import {
   clearObsSessionRuntimeState,
@@ -29,11 +35,19 @@ import { getObsTraceSnapshot, handleObsTraceCommand } from "../src/commands/obs-
 import { EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE } from "../src/constants.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { loadSessionConfig } from "../src/config/load-config.ts";
-import { requestObservMeIntegration } from "../src/integration.ts";
+import { OBSERVME_INTEGRATION_CHANNEL, requestObservMeIntegration } from "../src/integration.ts";
 import { toOtelStartupError } from "../src/otel/sdk.ts";
 import { applyContentCapturePolicy } from "../src/privacy/content-capture.ts";
 import { registerTenantSaltEnvironment, sha256 } from "../src/privacy/hash.ts";
-import { COMMON_SPAN_ATTRIBUTES, CONFIG_ATTRIBUTES, LOG_ATTRIBUTES, TOOL_ATTRIBUTES } from "../src/semconv/attributes.ts";
+import {
+  AGENT_SPAWN_ATTRIBUTES,
+  AGENT_WAIT_JOIN_ATTRIBUTES,
+  COMMON_SPAN_ATTRIBUTES,
+  CONFIG_ATTRIBUTES,
+  LOG_ATTRIBUTES,
+  TOOL_ATTRIBUTES,
+  TURN_ATTRIBUTES,
+} from "../src/semconv/attributes.ts";
 import {
   LOG_EVENT_NAMES,
   OBSERVME_COUNTER_METRIC_NAMES,
@@ -43,11 +57,13 @@ import {
 } from "../src/semconv/metrics.ts";
 import { SPAN_NAMES } from "../src/semconv/spans.ts";
 import {
+  createAgentTreeTracker,
   createObservMeMetrics,
+  createOtelOperationOwnership,
   createSpanRegistry,
   createTurnSequenceRegistry,
   readSessionHeaderFromFile,
-  registerHandlers,
+  registerHandlers as registerProductionHandlers,
   safeHandler,
   startSessionTelemetry,
   withTelemetrySessionResourceAttributes,
@@ -56,6 +72,7 @@ import { completeSubagentSpawn, recordAgentJoin, recordAgentWait, startSubagentS
 import {
   OBSERVME_CORRELATION_ENTRY_SCHEMA_VERSION,
   OBSERVME_CORRELATION_ENTRY_TYPE,
+  readLatestSessionCorrelation,
 } from "../src/pi/session-correlation.ts";
 import {
   emitUnrelatedGlobalTelemetry,
@@ -64,6 +81,13 @@ import {
 } from "./otel-global-isolation-helpers.mjs";
 
 process.env.OBSERVME_HASH_SALT = "pi-handlers-test-salt";
+
+function registerHandlers(pi, options = {}) {
+  registerProductionHandlers(pi, {
+    otelOperationOwnership: createOtelOperationOwnership(),
+    ...options,
+  });
+}
 
 function createFakePi(events) {
   const handlers = new Map();
@@ -78,6 +102,39 @@ function createFakePi(events) {
 function registerFakePiHandler(handlers, eventName, handler) {
   const previous = handlers.get(eventName);
   handlers.set(eventName, previous ? runFakePiHandlers.bind(undefined, previous, handler) : handler);
+}
+
+function createTrackedEventBus(unsubscribeError) {
+  const eventBus = {
+    listeners: new Map(),
+    unsubscribeCalls: 0,
+    unsubscribeError,
+  };
+  eventBus.on = addTrackedEventListener.bind(undefined, eventBus);
+  eventBus.emit = emitTrackedEvent.bind(undefined, eventBus);
+  eventBus.listenerCount = trackedEventListenerCount.bind(undefined, eventBus);
+  return eventBus;
+}
+
+function addTrackedEventListener(eventBus, channel, handler) {
+  const channelListeners = eventBus.listeners.get(channel) ?? new Set();
+  channelListeners.add(handler);
+  eventBus.listeners.set(channel, channelListeners);
+  return removeTrackedEventListener.bind(undefined, eventBus, channel, handler);
+}
+
+function removeTrackedEventListener(eventBus, channel, handler) {
+  eventBus.unsubscribeCalls += 1;
+  eventBus.listeners.get(channel)?.delete(handler);
+  if (eventBus.unsubscribeError) throw eventBus.unsubscribeError;
+}
+
+function emitTrackedEvent(eventBus, channel, data) {
+  for (const handler of eventBus.listeners.get(channel) ?? []) handler(data);
+}
+
+function trackedEventListenerCount(eventBus, channel) {
+  return eventBus.listeners.get(channel)?.size ?? 0;
 }
 
 async function runFakePiHandlers(first, second, event, ctx) {
@@ -137,6 +194,7 @@ function createFakeSpan(name, attributes, parentSpan, parentSpanContext, links) 
     events: [],
     status: undefined,
     ended: false,
+    endCalls: 0,
     context: { traceId: "11111111111111111111111111111111", spanId: "2222222222222222" },
     addEvent(eventName, eventAttributes = {}) {
       this.events.push({ name: eventName, attributes: eventAttributes });
@@ -154,6 +212,7 @@ function createFakeSpan(name, attributes, parentSpan, parentSpanContext, links) 
       return this.context;
     },
     end() {
+      this.endCalls += 1;
       this.ended = true;
     },
   };
@@ -221,6 +280,7 @@ function createFakeTelemetry(lineage, tracerOverride) {
     logger,
     metrics,
     spans: createSpanRegistry(defaultObservMeConfig, metrics),
+    agentTree: createAgentTreeTracker(defaultObservMeConfig, lineage, metrics),
     activeAgentLease: createFakeActiveAgentLease(),
     activeAgentRecorded: false,
     agentRunSequence: 0,
@@ -232,6 +292,166 @@ function createFakeTelemetry(lineage, tracerOverride) {
 
 function loadConfig() {
   return Promise.resolve(defaultObservMeConfig);
+}
+
+const successfulAssistantMessage = {
+  role: "assistant",
+  api: "anthropic-messages",
+  provider: "anthropic",
+  model: "claude-test",
+  usage: {
+    input: 1,
+    output: 1,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 2,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  },
+  stopReason: "stop",
+  content: [{ type: "text", text: "done" }],
+  timestamp: 1_750_000_000_000,
+};
+const failedAssistantMessage = {
+  ...successfulAssistantMessage,
+  stopReason: "error",
+  errorMessage: "provider unavailable",
+  content: [{ type: "text", text: "provider failed" }],
+};
+
+async function createUserBashRuntimeHarness() {
+  const cwd = "/workspace/user-bash-runtime";
+  const eventBus = createEventBus();
+  const runtime = createExtensionRuntime();
+  const sessionManager = SessionManager.inMemory(cwd);
+  const participantCalls = [];
+  let telemetry;
+
+  const observmePi = createFakePi(eventBus);
+  registerHandlers(observmePi, {
+    loadConfig,
+    ensureProjectConfig: async () => ({ path: `${cwd}/.pi/observme.yaml`, status: "exists" }),
+    appendEntry: () => undefined,
+    getThinkingLevel: () => "medium",
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+  const observmeExtension = createRunnerExtension(
+    "<observme-user-bash-runtime>",
+    new Map([...observmePi.handlers].map(([name, handler]) => [name, [handler]])),
+  );
+  const participantExtension = createRunnerExtension(
+    "<later-user-bash-participant>",
+    new Map([
+      ["user_bash", [event => {
+        participantCalls.push(event);
+        if (event.command !== "extension-result") return undefined;
+        return {
+          result: {
+            output: "provided by extension",
+            exitCode: 0,
+            cancelled: false,
+            truncated: false,
+          },
+        };
+      }]],
+    ]),
+  );
+  const runner = new ExtensionRunner(
+    [observmeExtension, participantExtension],
+    runtime,
+    cwd,
+    sessionManager,
+    {},
+  );
+
+  await runner.emit({ type: "session_start", reason: "startup" });
+  assert.ok(telemetry);
+  return { participantCalls, runner, sessionManager, telemetry };
+}
+
+function mutateToolInputAfterObservMe(event) {
+  event.input.value = event.toolCallId === "tool-middleware-a" ? "after-a" : "after-b";
+  delete event.input.password;
+}
+
+async function createToolMiddlewareRuntimeHarness(config) {
+  const cwd = "/workspace/tool-middleware-runtime";
+  const eventBus = createEventBus();
+  const runtime = createExtensionRuntime();
+  const sessionManager = SessionManager.inMemory(cwd);
+  let telemetry;
+
+  const observmePi = createFakePi(eventBus);
+  registerHandlers(observmePi, {
+    loadConfig: () => Promise.resolve(config),
+    ensureProjectConfig: async () => ({ path: `${cwd}/.pi/observme.yaml`, status: "exists" }),
+    appendEntry: () => undefined,
+    getThinkingLevel: () => "medium",
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      telemetry.config = config;
+      return telemetry;
+    },
+  });
+  const observmeExtension = createRunnerExtension(
+    "<observme-tool-middleware-runtime>",
+    new Map([...observmePi.handlers].map(([name, handler]) => [name, [handler]])),
+  );
+  const mutatingExtension = createRunnerExtension(
+    "<later-tool-input-mutator>",
+    new Map([["tool_call", [mutateToolInputAfterObservMe]]]),
+  );
+  const runner = new ExtensionRunner(
+    [observmeExtension, mutatingExtension],
+    runtime,
+    cwd,
+    sessionManager,
+    {},
+  );
+
+  await runner.emit({ type: "session_start", reason: "startup" });
+  assert.ok(telemetry);
+  return { runner, telemetry };
+}
+
+function createRunnerExtension(path, handlers) {
+  return {
+    path,
+    resolvedPath: path,
+    sourceInfo: { path, source: path, scope: "temporary", origin: "top-level" },
+    handlers,
+    tools: new Map(),
+    messageRenderers: new Map(),
+    entryRenderers: new Map(),
+    commands: new Map(),
+    flags: new Map(),
+    shortcuts: new Map(),
+  };
+}
+
+function appendPiBashResult(sessionManager, event, result) {
+  sessionManager.appendMessage({
+    role: "bashExecution",
+    command: event.command,
+    output: result.output,
+    exitCode: result.exitCode,
+    cancelled: result.cancelled,
+    truncated: result.truncated,
+    fullOutputPath: result.fullOutputPath,
+    timestamp: Date.now(),
+    excludeFromContext: event.excludeFromContext,
+  });
+}
+
+async function waitForObservedBashCompletion(telemetry) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (!telemetry.pendingUserBash) return;
+    await delay(5);
+  }
+
+  assert.fail("Timed out waiting for the recorded Pi BashExecutionMessage to complete telemetry.");
 }
 
 function createTopLevelDisabledConfig() {
@@ -347,6 +567,79 @@ function createCorrelationEntry(id, data, parentId = null) {
   };
 }
 
+test("correlation normalization enforces root, parent, agent, and depth invariants", () => {
+  const validCases = [
+    {
+      reason: "reload",
+      data: createCorrelationData(),
+    },
+    {
+      reason: "resume",
+      data: createCorrelationData({
+        agentId: "agent-child",
+        parentAgentId: "agent-root",
+        rootAgentId: "agent-root",
+        depth: 1,
+      }),
+    },
+    {
+      reason: "fork",
+      data: createCorrelationData({
+        agentId: "agent-grandchild",
+        parentAgentId: "agent-child",
+        rootAgentId: "agent-root",
+        depth: 2,
+      }),
+    },
+  ];
+
+  for (const validCase of validCases) {
+    assert.deepEqual(
+      readLatestSessionCorrelation([createCorrelationEntry(`valid-${validCase.reason}`, validCase.data)]),
+      validCase.data,
+      `${validCase.reason} must recover a consistent lineage tuple`,
+    );
+  }
+
+  const contradictoryCases = [
+    createCorrelationData({ parentAgentId: "agent-parent" }),
+    createCorrelationData({ rootAgentId: "agent-other-root" }),
+    createCorrelationData({ agentId: "agent-child", rootAgentId: "agent-root", depth: 1 }),
+    createCorrelationData({
+      agentId: "agent-child",
+      parentAgentId: "agent-child",
+      rootAgentId: "agent-root",
+      depth: 1,
+    }),
+    createCorrelationData({
+      agentId: "agent-child",
+      parentAgentId: "agent-parent",
+      rootAgentId: "agent-child",
+      depth: 1,
+    }),
+    createCorrelationData({
+      agentId: "agent-child",
+      parentAgentId: "agent-parent",
+      rootAgentId: "agent-root",
+      depth: 1,
+    }),
+    createCorrelationData({
+      agentId: "agent-grandchild",
+      parentAgentId: "agent-root",
+      rootAgentId: "agent-root",
+      depth: 2,
+    }),
+  ];
+
+  for (const [index, data] of contradictoryCases.entries()) {
+    assert.equal(
+      readLatestSessionCorrelation([createCorrelationEntry(`contradictory-${index}`, data)]),
+      undefined,
+      `contradictory lineage tuple ${index + 1} must be ignored`,
+    );
+  }
+});
+
 test("registerHandlers validates Pi event API shape before registration", () => {
   const pi = { handlers: new Map(), on: "not-a-function" };
 
@@ -367,6 +660,62 @@ test("registerHandlers propagates Pi event registration failures", () => {
   );
 });
 
+test("registerHandlers rolls back the integration listener at every handler registration failure", () => {
+  const successfulEvents = createTrackedEventBus();
+  let registrationCount = 0;
+  registerHandlers({ events: successfulEvents, on: () => { registrationCount += 1; } });
+  assert.equal(registrationCount, 22);
+  assert.equal(successfulEvents.listenerCount(OBSERVME_INTEGRATION_CHANNEL), 1);
+
+  for (let failureIndex = 0; failureIndex < registrationCount; failureIndex += 1) {
+    const registrationError = new Error(`Pi registration failed at ${failureIndex}`);
+    const events = createTrackedEventBus();
+    let currentIndex = 0;
+    const pi = {
+      events,
+      on() {
+        const index = currentIndex;
+        currentIndex += 1;
+        if (index === failureIndex) throw registrationError;
+      },
+    };
+
+    assert.throws(() => registerHandlers(pi), registrationError);
+    assert.equal(events.listenerCount(OBSERVME_INTEGRATION_CHANNEL), 0);
+    assert.equal(events.unsubscribeCalls, 1);
+    assert.equal(requestObservMeIntegration({ events }), undefined);
+  }
+});
+
+test("registerHandlers preserves registration failures when integration rollback throws", () => {
+  const registrationError = new Error("Pi registration failed");
+  const events = createTrackedEventBus(new Error("integration unsubscribe failed"));
+
+  assert.throws(
+    () => registerHandlers({ events, on: () => { throw registrationError; } }),
+    registrationError,
+  );
+  assert.equal(events.listenerCount(OBSERVME_INTEGRATION_CHANNEL), 0);
+  assert.equal(events.unsubscribeCalls, 1);
+});
+
+test("successful handler registration owns one integration listener and unsubscribes once", async () => {
+  const events = createTrackedEventBus();
+  const pi = createFakePi(events);
+
+  registerHandlers(pi);
+
+  assert.equal(events.listenerCount(OBSERVME_INTEGRATION_CHANNEL), 1);
+  assert.ok(requestObservMeIntegration({ events }));
+
+  await pi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, {});
+  await pi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, {});
+
+  assert.equal(events.listenerCount(OBSERVME_INTEGRATION_CHANNEL), 0);
+  assert.equal(events.unsubscribeCalls, 1);
+  assert.equal(requestObservMeIntegration({ events }), undefined);
+});
+
 test("registerHandlers registers expected lifecycle handlers with valid Pi event API", () => {
   const pi = createFakePi();
 
@@ -375,6 +724,7 @@ test("registerHandlers registers expected lifecycle handlers with valid Pi event
   assert.deepEqual([...pi.handlers.keys()], [
     "session_start",
     "session_info_changed",
+    "before_agent_start",
     "agent_start",
     "turn_start",
     "before_provider_request",
@@ -1394,6 +1744,13 @@ test("enabled correlation persistence writes one branch-local custom entry and i
   assert.equal(sentMessages.length, 0);
   assert.equal(activeBranch.some(entry => entry.type === "custom_message"), false);
 
+  activeBranch.push(createCorrelationEntry("reload-self-rooted-child", createCorrelationData({
+    workflowId: "workflow-reload-self-rooted",
+    agentId: "agent-reload-self-rooted",
+    parentAgentId: "agent-reload-parent",
+    rootAgentId: "agent-reload-self-rooted",
+    depth: 1,
+  }), activeBranch.at(-1)?.id ?? null));
   await pi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx);
   await pi.handlers.get("session_start")({ type: "session_start", reason: "reload" }, ctx);
 
@@ -1443,6 +1800,13 @@ test("correlation recovery uses the latest valid active-branch entry across resu
       workflowId: corruptSecret,
       unexpected: corruptSecret,
     }, "resume-latest"),
+    createCorrelationEntry("resume-self-rooted-child", createCorrelationData({
+      workflowId: corruptSecret,
+      agentId: "agent-resume-self-rooted",
+      parentAgentId: "agent-resume-parent",
+      rootAgentId: "agent-resume-self-rooted",
+      depth: 1,
+    }), "resume-corrupt"),
   ];
   const appendedEntries = [];
   const sessions = [];
@@ -1478,6 +1842,13 @@ test("correlation recovery uses the latest valid active-branch entry across resu
       ...forkCorrelation,
       depth: 65,
     }, "fork-valid"),
+    createCorrelationEntry("fork-self-rooted-child", createCorrelationData({
+      workflowId: corruptSecret,
+      agentId: "agent-fork-self-rooted",
+      parentAgentId: "agent-fork-parent",
+      rootAgentId: "agent-fork-self-rooted",
+      depth: 1,
+    }), "fork-corrupt"),
   ];
   const forkCtx = createSessionLifecycleContext("fork-session", "/sessions/fork.jsonl");
   forkCtx.sessionManager.getBranch = () => activeBranch;
@@ -1497,6 +1868,10 @@ test("correlation recovery uses the latest valid active-branch entry across resu
   assert.equal(sessions[1].lineage.capability, forkCorrelation.capability);
   assert.equal(appendedEntries.length, 0);
   assert.notEqual(sessions[1].lineage.workflowId, abandonedCorrelation.data.workflowId);
+  assert.doesNotMatch(
+    JSON.stringify(sessions.map(session => ({ spans: session.tracer.spans, logs: session.logger.records }))),
+    /private-correlation/u,
+  );
 
   await pi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, forkCtx);
 });
@@ -1589,8 +1964,10 @@ test("session_shutdown ends root span, updates active workflow metrics, emits li
     });
     return { operation: "flush", completed: true, timedOut: false };
   };
+  await pi.handlers.get("agent_start")({ type: "agent_start" }, {});
+  await pi.handlers.get("agent_end")({ type: "agent_end", messages: [successfulAssistantMessage] }, {});
   nowMs = 1_450;
-  await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
+  await pi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, {});
 
   assert.equal(telemetry.tracer.spans[0].ended, true);
   assert.equal(telemetry.controller.flushCalls[0], defaultObservMeConfig.shutdown.flushTimeoutMs);
@@ -1651,6 +2028,142 @@ test("session_shutdown isolates lease-observation and exporter shutdown failures
   assert.equal(metricTotal(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.EXPORT_ERRORS_TOTAL), 2);
   assert.deepEqual(telemetry.activeAgentLease.transitions, ["activate", "deactivate", "dispose"]);
   assert.equal(telemetry.activeAgentLease.callbackRegistered, false);
+});
+
+test("shutdown fences cached integration mutations and cancels active orchestration before flush", async t => {
+  clearObsAgentsRuntimeState();
+  t.after(clearObsAgentsRuntimeState);
+
+  const events = createEventBus();
+  const pi = createFakePi(events);
+  const flushEntered = createDeferred();
+  const flushRelease = createDeferred();
+  let telemetry;
+
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")(
+    { type: "session_start", reason: "startup" },
+    { cwd: "/workspace/integration-shutdown" },
+  );
+  const integration = requestObservMeIntegration({ events });
+  assert.ok(integration);
+
+  const spawn = integration.startSubagent({
+    spawnId: "spawn-shutdown-overlap",
+    childAgentId: "child-shutdown-overlap",
+    env: {},
+  });
+  assert.equal(spawn.ok, true);
+  const wait = integration.startWait({
+    id: "wait-shutdown-overlap",
+    spawnId: spawn.spawnId,
+    childAgentId: spawn.childAgentId,
+    childStatus: "active",
+    reason: "child_running",
+  });
+  const join = integration.startJoin({
+    id: "join-shutdown-overlap",
+    spawnId: spawn.spawnId,
+    childAgentId: spawn.childAgentId,
+    childStatus: "active",
+    joinStatus: "waiting",
+    reason: "dependency",
+  });
+  assert.equal(wait.ok, true);
+  assert.equal(join.ok, true);
+
+  const spawnSpan = telemetry.spans.activeSubagentSpawns.get(spawn.spawnId).span;
+  const waitSpan = telemetry.spans.activeAgentWaits.get(wait.id).span;
+  const joinSpan = telemetry.spans.activeAgentJoins.get(join.id).span;
+  telemetry.controller.flush = async timeoutMs => {
+    telemetry.controller.flushCalls.push(timeoutMs);
+    flushEntered.resolve();
+    await flushRelease.promise;
+    return { operation: "flush", completed: true, timedOut: false };
+  };
+
+  const shutdown = pi.handlers.get("session_shutdown")(
+    { type: "session_shutdown", reason: "quit" },
+    {},
+  );
+  await flushEntered.promise;
+
+  assert.equal(requestObservMeIntegration({ events }), undefined);
+  assert.equal(telemetry.spans.activeSubagentSpawns.size, 0);
+  assert.equal(telemetry.spans.activeAgentWaits.size, 0);
+  assert.equal(telemetry.spans.activeAgentJoins.size, 0);
+  assert.equal(telemetry.agentTree.getAgent(spawn.childAgentId).status, "cancelled");
+  assert.equal(spawnSpan.attributes[AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_OUTCOME], "cancelled");
+  assert.equal(waitSpan.attributes[AGENT_WAIT_JOIN_ATTRIBUTES.PI_AGENT_JOIN_STATUS], "cancelled");
+  assert.equal(joinSpan.attributes[AGENT_WAIT_JOIN_ATTRIBUTES.PI_AGENT_JOIN_STATUS], "cancelled");
+  assert.equal(spawnSpan.status.message, "cancelled");
+  assert.equal(waitSpan.status.message, "cancelled");
+  assert.equal(joinSpan.status.message, "cancelled");
+  assert.equal(spawnSpan.endCalls, 1);
+  assert.equal(waitSpan.endCalls, 1);
+  assert.equal(joinSpan.endCalls, 1);
+  assert.equal(
+    spawnSpan.events.filter(event => event.name === LOG_EVENT_NAMES.AGENT_SPAWN_CANCELLED).length,
+    1,
+  );
+  assert.equal(
+    waitSpan.events.filter(event => event.name === LOG_EVENT_NAMES.AGENT_WAIT_COMPLETED).length,
+    1,
+  );
+  assert.equal(
+    joinSpan.events.filter(event => event.name === LOG_EVENT_NAMES.AGENT_JOIN_COMPLETED).length,
+    1,
+  );
+  assert.deepEqual(
+    getLocalObsAgentsRuntimeSnapshot().waitJoinHints
+      .filter(hint => hint.id === wait.id || hint.id === join.id)
+      .map(hint => ({ id: hint.id, active: hint.active, joinStatus: hint.joinStatus })),
+    [
+      { id: wait.id, active: false, joinStatus: "cancelled" },
+      { id: join.id, active: false, joinStatus: "cancelled" },
+    ],
+  );
+
+  const mutationSnapshot = {
+    spans: telemetry.tracer.spans.length,
+    metrics: telemetry.meter.records.length,
+    logs: telemetry.logger.records.length,
+    tree: telemetry.agentTree.getAgent(spawn.childAgentId),
+    hints: getLocalObsAgentsRuntimeSnapshot().waitJoinHints,
+  };
+  const closingFailure = { ok: false, reason: "session_closing" };
+  const racingResults = [
+    integration.getContext(),
+    integration.startSubagent({ spawnId: "spawn-too-late", env: {} }),
+    integration.completeSubagent(spawn.spawnId, { childAgentId: spawn.childAgentId }),
+    integration.failSubagent(spawn.spawnId, { childAgentId: spawn.childAgentId }),
+    integration.startWait({ id: "wait-too-late" }),
+    integration.endWait(wait.id, { joinStatus: "completed" }),
+    integration.startJoin({ id: "join-too-late" }),
+    integration.endJoin(join.id, { joinStatus: "completed" }),
+  ];
+  assert.deepEqual(racingResults, new Array(racingResults.length).fill(closingFailure));
+  assert.deepEqual({
+    spans: telemetry.tracer.spans.length,
+    metrics: telemetry.meter.records.length,
+    logs: telemetry.logger.records.length,
+    tree: telemetry.agentTree.getAgent(spawn.childAgentId),
+    hints: getLocalObsAgentsRuntimeSnapshot().waitJoinHints,
+  }, mutationSnapshot);
+  assert.equal(spawnSpan.endCalls, 1);
+  assert.equal(waitSpan.endCalls, 1);
+  assert.equal(joinSpan.endCalls, 1);
+
+  flushRelease.resolve();
+  await shutdown;
+  assert.deepEqual(integration.getContext(), { ok: false, reason: "session_unavailable" });
 });
 
 test("shared lifecycle queue drains delayed startup before interleaved shutdown", async t => {
@@ -1882,68 +2395,82 @@ test("duplicate session_start flushes and shuts down the previous telemetry sess
   assert.equal(sessions.filter(session => session.activeAgentLease.active).length, 0);
 });
 
-test("session replacement waits for timed-out exporter cleanup before starting new providers", async () => {
-  const pi = createFakePi();
+test("rebound extension waits for timed-out flush cleanup before starting new providers", async () => {
+  const ownership = createOtelOperationOwnership();
+  const firstPi = createFakePi();
+  const reboundPi = createFakePi();
   const sessions = [];
   const notifications = [];
-  let resolveShutdown;
-  const shutdownSettlement = new Promise(resolve => {
-    resolveShutdown = resolve;
+  let resolveFlush;
+  const flushSettlement = new Promise(resolve => {
+    resolveFlush = resolve;
   });
-  registerHandlers(pi, {
-    loadConfig,
-    startTelemetry: async ({ lineage }) => {
-      const telemetry = createFakeTelemetry(lineage);
-      sessions.push(telemetry);
-      if (sessions.length === 1) {
-        telemetry.controller.shutdown = async timeoutMs => {
-          telemetry.controller.shutdownCalls.push(timeoutMs);
-          return {
-            operation: "shutdown",
-            completed: false,
-            timedOut: true,
-            settlement: shutdownSettlement,
-          };
+  const startTelemetry = async ({ lineage }) => {
+    const telemetry = createFakeTelemetry(lineage);
+    sessions.push(telemetry);
+    if (sessions.length === 1) {
+      telemetry.controller.flush = async timeoutMs => {
+        telemetry.controller.flushCalls.push(timeoutMs);
+        return {
+          operation: "flush",
+          completed: false,
+          timedOut: true,
+          settlement: flushSettlement,
         };
-      }
-      return telemetry;
-    },
-  });
+      };
+    }
+    return telemetry;
+  };
+  const options = { loadConfig, otelOperationOwnership: ownership, startTelemetry };
   const ctx = {
     cwd: "/workspace/demo",
     ui: { notify: (message, level) => notifications.push({ message, level }) },
   };
 
-  await pi.handlers.get("session_start")({ sessionId: "session-cleanup-first" }, ctx);
-  await pi.handlers.get("session_start")({ sessionId: "session-cleanup-blocked" }, ctx);
+  registerHandlers(firstPi, options);
+  await firstPi.handlers.get("session_start")({ sessionId: "session-cleanup-first" }, ctx);
+  await firstPi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx);
+
+  registerHandlers(reboundPi, options);
+  await reboundPi.handlers.get("session_start")({ sessionId: "session-cleanup-blocked", reason: "reload" }, ctx);
 
   assert.equal(sessions.length, 1);
+  assert.deepEqual(sessions[0].controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
   assert.deepEqual(sessions[0].controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
-  assert.ok(notifications.some(notification => notification.message.includes("shutdown cleanup is still unresolved")));
+  assert.ok(notifications.some(notification => notification.message.includes("cleanup is still unresolved")));
   assert.deepEqual(sessions[0].activeAgentLease.transitions, ["activate", "deactivate", "dispose"]);
 
-  resolveShutdown({ operation: "shutdown", completed: true, timedOut: false });
-  await shutdownSettlement;
+  resolveFlush({ operation: "flush", completed: true, timedOut: false });
+  await flushSettlement;
   await Promise.resolve();
-  await pi.handlers.get("session_start")({ sessionId: "session-cleanup-retry" }, ctx);
+  await reboundPi.handlers.get("session_start")({ sessionId: "session-cleanup-retry", reason: "reload" }, ctx);
 
   assert.equal(sessions.length, 2);
+  assert.deepEqual(sessions[1].controller.flushCalls, []);
   assert.deepEqual(sessions[1].controller.shutdownCalls, []);
   assert.deepEqual(sessions[1].activeAgentLease.transitions, ["activate"]);
 });
 
-test("never-settling exporter cleanup keeps repeated session replacement blocked", async () => {
-  const pi = createFakePi();
+test("late shutdown rejection remains visible and retryable after extension re-registration", async () => {
+  resetObsStatusRuntimeState();
+  const ownership = createOtelOperationOwnership();
+  const firstPi = createFakePi();
+  const reboundPi = createFakePi();
   const sessions = [];
   const notifications = [];
-  const shutdownSettlement = new Promise(() => undefined);
-  registerHandlers(pi, {
-    loadConfig,
-    startTelemetry: async ({ lineage }) => {
-      const telemetry = createFakeTelemetry(lineage);
-      sessions.push(telemetry);
+  let rejectShutdown;
+  const shutdownSettlement = new Promise((_resolve, reject) => {
+    rejectShutdown = reject;
+  });
+  const startTelemetry = async ({ lineage }) => {
+    const telemetry = createFakeTelemetry(lineage);
+    sessions.push(telemetry);
+    if (sessions.length === 1) {
       telemetry.controller.shutdown = async timeoutMs => {
         telemetry.controller.shutdownCalls.push(timeoutMs);
+        if (telemetry.controller.shutdownCalls.length > 1) {
+          return { operation: "shutdown", completed: true, timedOut: false };
+        }
         return {
           operation: "shutdown",
           completed: false,
@@ -1951,24 +2478,77 @@ test("never-settling exporter cleanup keeps repeated session replacement blocked
           settlement: shutdownSettlement,
         };
       };
-      return telemetry;
-    },
-  });
+    }
+    return telemetry;
+  };
+  const options = { loadConfig, otelOperationOwnership: ownership, startTelemetry };
   const ctx = {
     cwd: "/workspace/demo",
     ui: { notify: message => notifications.push(message) },
   };
 
-  await pi.handlers.get("session_start")({ sessionId: "session-never-first" }, ctx);
-  await pi.handlers.get("session_start")({ sessionId: "session-never-blocked-once" }, ctx);
-  await pi.handlers.get("session_start")({ sessionId: "session-never-blocked-twice" }, ctx);
+  registerHandlers(firstPi, options);
+  await firstPi.handlers.get("session_start")({ sessionId: "session-rejection-first" }, ctx);
+  await firstPi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "resume" }, ctx);
 
+  registerHandlers(reboundPi, options);
+  await reboundPi.handlers.get("session_start")({ sessionId: "session-rejection-blocked", reason: "resume" }, ctx);
   assert.equal(sessions.length, 1);
+
+  rejectShutdown(new Error("late exporter failure"));
+  await assert.rejects(shutdownSettlement, /late exporter failure/u);
+  await Promise.resolve();
+  assert.match(getObsStatusRuntimeState().lastExportError, /shutdown failed: late exporter failure/u);
+
+  await reboundPi.handlers.get("session_start")({ sessionId: "session-rejection-retry", reason: "resume" }, ctx);
+
+  assert.equal(sessions.length, 2);
   assert.deepEqual(sessions[0].controller.shutdownCalls, [
     defaultObservMeConfig.shutdown.flushTimeoutMs,
     defaultObservMeConfig.shutdown.flushTimeoutMs,
   ]);
-  assert.equal(notifications.filter(message => message.includes("shutdown cleanup is still unresolved")).length, 2);
+  assert.equal(notifications.filter(message => message.includes("cleanup is still unresolved")).length, 1);
+});
+
+test("never-settling cleanup blocks reload, new, resume, and fork extension registrations once", async () => {
+  const ownership = createOtelOperationOwnership();
+  const firstPi = createFakePi();
+  const sessions = [];
+  const notifications = [];
+  const shutdownSettlement = new Promise(() => undefined);
+  const startTelemetry = async ({ lineage }) => {
+    const telemetry = createFakeTelemetry(lineage);
+    sessions.push(telemetry);
+    telemetry.controller.shutdown = async timeoutMs => {
+      telemetry.controller.shutdownCalls.push(timeoutMs);
+      return {
+        operation: "shutdown",
+        completed: false,
+        timedOut: true,
+        settlement: shutdownSettlement,
+      };
+    };
+    return telemetry;
+  };
+  const options = { loadConfig, otelOperationOwnership: ownership, startTelemetry };
+  const ctx = {
+    cwd: "/workspace/demo",
+    ui: { notify: message => notifications.push(message) },
+  };
+
+  registerHandlers(firstPi, options);
+  await firstPi.handlers.get("session_start")({ sessionId: "session-never-first" }, ctx);
+  await firstPi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx);
+
+  for (const reason of ["reload", "new", "resume", "fork"]) {
+    const reboundPi = createFakePi();
+    registerHandlers(reboundPi, options);
+    await reboundPi.handlers.get("session_start")({ sessionId: `session-never-${reason}`, reason }, ctx);
+  }
+
+  assert.equal(sessions.length, 1);
+  assert.deepEqual(sessions[0].controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.equal(notifications.filter(message => message.includes("cleanup is still unresolved")).length, 1);
   assert.deepEqual(sessions[0].activeAgentLease.transitions, ["activate", "deactivate", "dispose"]);
 });
 
@@ -1999,10 +2579,6 @@ test("final lifecycle regression keeps runtime state consistent after duplicate 
   await pi.handlers.get("turn_start")({ turnIndex: 1 }, {});
 
   const firstSession = sessions[0];
-  firstSession.controller.flush = async timeoutMs => {
-    firstSession.controller.flushCalls.push(timeoutMs);
-    return { operation: "flush", completed: false, timedOut: true };
-  };
 
   assert.equal(getLocalObsSessionSnapshot().sessionId, "session-final-first");
   assert.equal(getLocalObsSessionSnapshot().turns, 1);
@@ -2208,6 +2784,43 @@ test("agent-run and turn handlers create canonical child spans with derived turn
   assert.equal(turnSpan.attributes["pi.turn.index"], 1);
   assert.equal(turnSpan.attributes["pi.agent.run.id"], "agent-run-000001");
   assert.equal(turnSpan.attributes["pi.workflow.id"], telemetry.lineage.workflowId);
+});
+
+test("turn image counts come from the correlated user prompt without stale carry-over", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-turn-images" }, { cwd: "/workspace/demo" });
+
+  await pi.handlers.get("before_agent_start")({ prompt: "text only" }, {});
+  await pi.handlers.get("agent_start")({ agentRunId: "agent-run-text" }, {});
+  await pi.handlers.get("turn_start")({ turnIndex: 0 }, {});
+  await pi.handlers.get("turn_end")({ turnIndex: 0 }, {});
+  await pi.handlers.get("turn_start")({ turnIndex: 1 }, {});
+  await pi.handlers.get("turn_end")({ turnIndex: 1 }, {});
+  await pi.handlers.get("agent_end")({ messages: [successfulAssistantMessage] }, {});
+
+  await pi.handlers.get("before_agent_start")({ prompt: "two images", images: [{}, {}] }, {});
+  await pi.handlers.get("agent_start")({ agentRunId: "agent-run-images" }, {});
+  await pi.handlers.get("turn_start")({ turnIndex: 0 }, {});
+  await pi.handlers.get("turn_end")({ turnIndex: 0 }, {});
+  await pi.handlers.get("agent_end")({ messages: [successfulAssistantMessage] }, {});
+
+  await pi.handlers.get("agent_start")({ agentRunId: "agent-run-without-source" }, {});
+  await pi.handlers.get("turn_start")({ turnIndex: 0 }, {});
+
+  const turnSpans = telemetry.tracer.spans.filter(span => span.name === SPAN_NAMES.PI_TURN);
+  assert.deepEqual(
+    turnSpans.map(span => span.attributes[TURN_ATTRIBUTES.PI_TURN_USER_MESSAGE_IMAGE_COUNT]),
+    [0, undefined, 2, undefined],
+  );
 });
 
 test("LLM handlers finalize usage and cost metrics from assistant message_end", async () => {
@@ -2478,6 +3091,106 @@ test("tool handlers create pi.tool.call spans, close success/error status, and k
   assertToolMetricLabelsAreLowCardinality(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.TOOL_RESULT_SIZE_CHARS);
 });
 
+test("later tool_call middleware mutations reconcile final input telemetry without crossing parallel ids", async () => {
+  const config = structuredClone(defaultObservMeConfig);
+  config.capture.toolArguments = true;
+  const { runner, telemetry } = await createToolMiddlewareRuntimeHarness(config);
+  const toolACall = {
+    type: "tool_call",
+    toolCallId: "tool-middleware-a",
+    toolName: "read",
+    input: { value: "before-a", password: "pre-middleware-secret" },
+  };
+  const toolBCall = {
+    type: "tool_call",
+    toolCallId: "tool-middleware-b",
+    toolName: "write",
+    input: { value: "after-b" },
+  };
+
+  await runner.emit({
+    type: "tool_execution_start",
+    toolCallId: toolACall.toolCallId,
+    toolName: toolACall.toolName,
+    args: toolACall.input,
+  });
+  await runner.emit({
+    type: "tool_execution_start",
+    toolCallId: toolBCall.toolCallId,
+    toolName: toolBCall.toolName,
+    args: toolBCall.input,
+  });
+  await runner.emitToolCall(toolACall);
+  await runner.emitToolCall(toolBCall);
+  assert.deepEqual(toolACall.input, { value: "after-a" });
+  assert.deepEqual(toolBCall.input, { value: "after-b" });
+
+  await runner.emitToolResult({
+    type: "tool_result",
+    toolCallId: toolBCall.toolCallId,
+    toolName: toolBCall.toolName,
+    input: toolBCall.input,
+    content: [{ type: "text", text: "b-result" }],
+    details: undefined,
+    isError: false,
+  });
+  await runner.emitToolResult({
+    type: "tool_result",
+    toolCallId: toolACall.toolCallId,
+    toolName: toolACall.toolName,
+    input: toolACall.input,
+    content: [{ type: "text", text: "a-result" }],
+    details: undefined,
+    isError: false,
+  });
+  await runner.emit({
+    type: "tool_execution_end",
+    toolCallId: toolACall.toolCallId,
+    toolName: toolACall.toolName,
+    result: { content: [{ type: "text", text: "a-result" }] },
+    isError: false,
+  });
+  await runner.emit({
+    type: "tool_execution_end",
+    toolCallId: toolBCall.toolCallId,
+    toolName: toolBCall.toolName,
+    result: { content: [{ type: "text", text: "b-result" }] },
+    isError: false,
+  });
+
+  const toolSpans = telemetry.tracer.spans.filter(span => span.name === SPAN_NAMES.PI_TOOL_CALL);
+  const toolA = toolSpans.find(span => span.attributes[TOOL_ATTRIBUTES.PI_TOOL_CALL_ID] === toolACall.toolCallId);
+  const toolB = toolSpans.find(span => span.attributes[TOOL_ATTRIBUTES.PI_TOOL_CALL_ID] === toolBCall.toolCallId);
+  const finalA = JSON.stringify(toolACall.input);
+  const finalB = JSON.stringify(toolBCall.input);
+  const hashSource = { env: process.env, envName: config.privacy.tenantSaltEnv };
+  assert.ok(toolA);
+  assert.ok(toolB);
+  assert.equal(toolA.attributes[TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_HASH], sha256(finalA, hashSource));
+  assert.equal(toolB.attributes[TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_HASH], sha256(finalB, hashSource));
+  assert.equal(toolA.attributes[TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_SIZE], finalA.length);
+  assert.equal(toolB.attributes[TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_SIZE], finalB.length);
+  assert.equal(toolA.attributes[TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_REDACTED], finalA);
+  assert.equal(toolB.attributes[TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_REDACTED], finalB);
+  assert.equal(toolA.attributes[TOOL_ATTRIBUTES.GEN_AI_TOOL_CALL_ARGUMENTS], finalA);
+  assert.equal(toolB.attributes[TOOL_ATTRIBUTES.GEN_AI_TOOL_CALL_ARGUMENTS], finalB);
+
+  const startedLogs = telemetry.logger.records.filter(record => record.body === LOG_EVENT_NAMES.TOOL_CALL_STARTED);
+  const completionLogs = telemetry.logger.records.filter(record => record.body === LOG_EVENT_NAMES.TOOL_CALL_COMPLETED);
+  assert.equal(startedLogs.length, 2);
+  assert.equal(completionLogs.length, 2);
+  assert.deepEqual(
+    completionLogs.map(record => record.attributes[TOOL_ATTRIBUTES.PI_TOOL_CALL_ID]).sort(),
+    [toolACall.toolCallId, toolBCall.toolCallId],
+  );
+  assert.ok(completionLogs.every(record => record.attributes[LOG_ATTRIBUTES.TRACE_ID] === toolA.spanContext().traceId));
+  assert.ok(completionLogs.every(record => record.attributes[LOG_ATTRIBUTES.SPAN_ID] === toolA.spanContext().spanId));
+  assert.ok(startedLogs.every(record => record.attributes[TOOL_ATTRIBUTES.PI_TOOL_ARGUMENTS_HASH] === undefined));
+  assertMetricRecordCount(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TOOL_CALLS_TOTAL, 2);
+  assertNoMetricRecord(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.REDACTION_FAILURES_TOTAL);
+  assert.doesNotMatch(JSON.stringify({ toolSpans, logs: telemetry.logger.records }), /before-a|pre-middleware-secret/u);
+});
+
 test("interleaved tool lifecycle events with explicit ids only update their own spans", async () => {
   const pi = createFakePi();
   let telemetry;
@@ -2666,6 +3379,105 @@ test("tool arguments and results are absent by default and redacted when capture
   assert.equal(capturedErrorLogs[0].attributes[LOG_ATTRIBUTES.ERROR_TYPE], "GuardMeDenied");
   assert.equal(capturedErrorLogs[0].attributes[LOG_ATTRIBUTES.TRACE_ID], failedToolSpan.spanContext().traceId);
   assert.equal(capturedErrorLogs[0].attributes[LOG_ATTRIBUTES.SPAN_ID], failedToolSpan.spanContext().spanId);
+});
+
+test("real Pi user_bash/session-record boundary completes ! and !! telemetry without blocking later extensions", async () => {
+  const { participantCalls, runner, sessionManager, telemetry } = await createUserBashRuntimeHarness();
+  const cases = [
+    {
+      event: { type: "user_bash", command: "printf normal", cwd: sessionManager.getCwd(), excludeFromContext: false },
+      result: { output: "normal", exitCode: 0, cancelled: false, truncated: false },
+    },
+    {
+      event: { type: "user_bash", command: "printf excluded", cwd: sessionManager.getCwd(), excludeFromContext: true },
+      result: { output: "excluded", exitCode: 0, cancelled: false, truncated: false },
+    },
+    {
+      event: { type: "user_bash", command: "false", cwd: sessionManager.getCwd(), excludeFromContext: false },
+      result: { output: "failed", exitCode: 1, cancelled: false, truncated: false },
+    },
+    {
+      event: { type: "user_bash", command: "sleep 10", cwd: sessionManager.getCwd(), excludeFromContext: false },
+      result: { output: "", exitCode: undefined, cancelled: true, truncated: false },
+    },
+    {
+      event: { type: "user_bash", command: "printf lots", cwd: sessionManager.getCwd(), excludeFromContext: false },
+      result: { output: "partial", exitCode: 0, cancelled: false, truncated: true, fullOutputPath: "/tmp/pi-output" },
+    },
+  ];
+
+  for (const runtimeCase of cases) {
+    const interception = await runner.emitUserBash(runtimeCase.event);
+    assert.equal(interception, undefined);
+    appendPiBashResult(sessionManager, runtimeCase.event, runtimeCase.result);
+    await waitForObservedBashCompletion(telemetry);
+  }
+
+  const deferredEvent = {
+    type: "user_bash",
+    command: "printf deferred",
+    cwd: sessionManager.getCwd(),
+    excludeFromContext: false,
+  };
+  assert.equal(await runner.emitUserBash(deferredEvent), undefined);
+  sessionManager.appendMessage({ role: "user", content: "streaming continued", timestamp: Date.now() });
+  await delay(20);
+  appendPiBashResult(
+    sessionManager,
+    deferredEvent,
+    { output: "deferred", exitCode: 0, cancelled: false, truncated: false },
+  );
+  await waitForObservedBashCompletion(telemetry);
+
+  const extensionEvent = {
+    type: "user_bash",
+    command: "extension-result",
+    cwd: sessionManager.getCwd(),
+    excludeFromContext: true,
+  };
+  const extensionInterception = await runner.emitUserBash(extensionEvent);
+  assert.deepEqual(extensionInterception, {
+    result: {
+      output: "provided by extension",
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+    },
+  });
+  appendPiBashResult(sessionManager, extensionEvent, extensionInterception.result);
+  await waitForObservedBashCompletion(telemetry);
+
+  const bashSpans = telemetry.tracer.spans.filter(span => span.name === SPAN_NAMES.PI_BASH_EXECUTION);
+  const completionLogs = telemetry.logger.records.filter(record => record.body === LOG_EVENT_NAMES.BASH_COMPLETED);
+  const completionMetrics = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_COUNTER_METRIC_NAMES.BASH_EXECUTIONS_TOTAL,
+  );
+  const durationMetrics = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.BASH_DURATION_MS,
+  );
+
+  assert.equal(participantCalls.length, 7);
+  assert.equal(bashSpans.length, 7);
+  assert.ok(bashSpans.every(span => span.ended));
+  assert.ok(bashSpans.every(span => span.events.filter(event => event.name === LOG_EVENT_NAMES.BASH_COMPLETED).length === 1));
+  assert.equal(completionMetrics.length, 7);
+  assert.equal(completionLogs.length, 7);
+  assert.equal(durationMetrics.length, 7);
+  assert.equal(bashSpans[0].attributes["pi.bash.exclude_from_context"], false);
+  assert.equal(bashSpans[1].attributes["pi.bash.exclude_from_context"], true);
+  assert.equal(bashSpans[2].status.code, 2);
+  assert.equal(bashSpans[3].status.message, "cancelled");
+  assert.equal(bashSpans[4].attributes["pi.bash.truncated"], true);
+  assert.equal(bashSpans[6].attributes["pi.bash.output.size"], "provided by extension".length);
+  assert.equal(telemetry.pendingUserBash, undefined);
+
+  await runner.emit({ type: "session_shutdown", reason: "quit" });
+  assert.equal(
+    telemetry.logger.records.some(
+      record => record.body === LOG_EVENT_NAMES.TELEMETRY_DROPPED && record.attributes?.reason === "bash_session_shutdown",
+    ),
+    false,
+  );
 });
 
 test("bash handlers create pi.bash.execution spans with exit/cancel/truncation attributes and counters", async () => {
@@ -3204,11 +4016,11 @@ test("failed agent runs increment the bounded error metric once while successful
   });
 
   await pi.handlers.get("session_start")({ sessionId: "session-agent-run-errors" }, { cwd: "/workspace/demo" });
-  await pi.handlers.get("agent_start")({ agentRunId: "agent-run-failed", source: "user" }, {});
-  await pi.handlers.get("agent_end")({ agentRunId: "agent-run-failed", status: "failed" }, {});
-  await pi.handlers.get("agent_end")({ agentRunId: "agent-run-failed", status: "failed" }, {});
-  await pi.handlers.get("agent_start")({ agentRunId: "agent-run-ok", source: "user" }, {});
-  await pi.handlers.get("agent_end")({ agentRunId: "agent-run-ok", status: "ok" }, {});
+  await pi.handlers.get("agent_start")({ type: "agent_start" }, {});
+  await pi.handlers.get("agent_end")({ type: "agent_end", messages: [failedAssistantMessage] }, {});
+  await pi.handlers.get("agent_end")({ type: "agent_end", messages: [failedAssistantMessage] }, {});
+  await pi.handlers.get("agent_start")({ type: "agent_start" }, {});
+  await pi.handlers.get("agent_end")({ type: "agent_end", messages: [successfulAssistantMessage] }, {});
 
   const errorRecords = telemetry.meter.records.filter(
     record => record.name === OBSERVME_COUNTER_METRIC_NAMES.AGENT_RUN_ERRORS_TOTAL,
@@ -3217,7 +4029,63 @@ test("failed agent runs increment the bounded error metric once while successful
   assert.equal(errorRecords[0].value, 1);
   assert.deepEqual(Object.keys(errorRecords[0].attributes).sort(), ["agent_role", "environment"]);
 
-  await pi.handlers.get("session_shutdown")({ status: "ok" }, {});
+  await pi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, {});
+});
+
+test("zero-based Pi turns and legacy missing-index turns complete with stable correlation", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  const agentRunId = "agent-run-zero-based";
+  const firstTurnId = `${agentRunId}-turn-000000`;
+  const laterTurnId = `${agentRunId}-turn-000001`;
+  const fallbackTurnId = `${agentRunId}-turn-000002`;
+
+  await pi.handlers.get("session_start")({ sessionId: "session-zero-based-turns" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("agent_start")({ type: "agent_start", agentRunId, source: "user" }, {});
+  await pi.handlers.get("turn_start")({ type: "turn_start", turnIndex: 0 }, {});
+  await pi.handlers.get("turn_start")({ type: "turn_start", turnIndex: 1 }, {});
+
+  const turnSpans = telemetry.tracer.spans.filter(span => span.name === SPAN_NAMES.PI_TURN);
+  const firstTurnSpan = turnSpans.find(span => span.attributes["pi.turn.id"] === firstTurnId);
+  const laterTurnSpan = turnSpans.find(span => span.attributes["pi.turn.id"] === laterTurnId);
+  assert.ok(firstTurnSpan);
+  assert.ok(laterTurnSpan);
+  assert.equal(telemetry.currentTurnId, laterTurnId);
+
+  await pi.handlers.get("turn_end")({ type: "turn_end", turnIndex: 0 }, {});
+
+  assert.equal(firstTurnSpan.ended, true);
+  assert.equal(laterTurnSpan.ended, false);
+  assert.equal(telemetry.spans.activeTurns.has(firstTurnId), false);
+  assert.equal(telemetry.spans.activeTurns.has(laterTurnId), true);
+  assert.equal(telemetry.currentTurnId, laterTurnId);
+  assertMetricRecordCount(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TURNS_COMPLETED_TOTAL, 1);
+  assertMetricRecordCount(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.TURN_DURATION_MS, 1);
+
+  await pi.handlers.get("turn_end")({ type: "turn_end", turnIndex: 1 }, {});
+  await pi.handlers.get("turn_start")({ type: "turn_start" }, {});
+  await pi.handlers.get("turn_end")({ type: "turn_end" }, {});
+
+  const fallbackTurnSpan = telemetry.tracer.spans.find(
+    span => span.name === SPAN_NAMES.PI_TURN && span.attributes["pi.turn.id"] === fallbackTurnId,
+  );
+  const completionLogs = telemetry.logger.records.filter(record => record.body === LOG_EVENT_NAMES.TURN_UNKNOWN);
+  assert.ok(fallbackTurnSpan);
+  assert.equal(laterTurnSpan.ended, true);
+  assert.equal(fallbackTurnSpan.ended, true);
+  assert.equal(telemetry.currentTurnId, undefined);
+  assert.equal(telemetry.spans.activeTurns.size, 0);
+  assertMetricRecordCount(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TURNS_COMPLETED_TOTAL, 3);
+  assertMetricRecordCount(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.TURN_DURATION_MS, 3);
+  assert.deepEqual(completionLogs.map(record => record.attributes?.["pi.turn.id"]), [firstTurnId, laterTurnId, fallbackTurnId]);
 });
 
 test("agent-run and turn metrics increment without high-cardinality ids as labels", async () => {
@@ -3345,7 +4213,7 @@ test("turn start without a prior agent start records a drop and still closes the
   assertActiveSpanValues(telemetry.meter.records, "turn", [1, -1]);
 });
 
-test("turn end without a resolvable turn index records a drop without completion telemetry", async () => {
+test("turn end without a resolvable index drops without cross-correlating another run", async () => {
   const pi = createFakePi();
   let telemetry;
   registerHandlers(pi, {
@@ -3356,18 +4224,32 @@ test("turn end without a resolvable turn index records a drop without completion
     },
   });
 
+  const activeAgentRunId = "agent-run-active-turn";
+  const activeTurnId = `${activeAgentRunId}-turn-000001`;
   await pi.handlers.get("session_start")({ sessionId: "session-missing-turn-index" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("agent_start")({ agentRunId: activeAgentRunId, source: "user" }, {});
+  await pi.handlers.get("turn_start")({ agentRunId: activeAgentRunId }, {});
   await pi.handlers.get("agent_start")({ agentRunId: "agent-run-missing-turn", source: "user" }, {});
-  await pi.handlers.get("turn_end")({}, {});
+  await pi.handlers.get("turn_end")({ agentRunId: "agent-run-missing-turn" }, {});
 
+  const activeTurnSpan = telemetry.tracer.spans.find(
+    span => span.name === SPAN_NAMES.PI_TURN && span.attributes["pi.turn.id"] === activeTurnId,
+  );
   const dropLog = telemetry.logger.records.find(record => record.body === LOG_EVENT_NAMES.TELEMETRY_DROPPED);
 
+  assert.ok(activeTurnSpan);
+  assert.equal(activeTurnSpan.ended, false);
+  assert.equal(telemetry.spans.activeTurns.has(activeTurnId), true);
   assert.equal(dropLog?.attributes?.operation, "turn_end");
   assert.equal(dropLog?.attributes?.reason, "turn_index_missing");
   assertMetricRecordCount(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TELEMETRY_DROPPED_TOTAL, 1);
   assertNoMetricRecord(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TURNS_COMPLETED_TOTAL);
   assert.equal(telemetry.logger.records.some(record => record.body === LOG_EVENT_NAMES.TURN_COMPLETED), false);
-  assertActiveSpanValues(telemetry.meter.records, "turn", []);
+  assertActiveSpanValues(telemetry.meter.records, "turn", [1]);
+
+  await pi.handlers.get("turn_end")({ agentRunId: activeAgentRunId, turnIndex: 1 }, {});
+  assert.equal(activeTurnSpan.ended, true);
+  assertMetricRecordCount(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TURNS_COMPLETED_TOTAL, 1);
 });
 
 test("tool execution end without a prior start is dropped instead of creating synthetic success telemetry", async () => {
@@ -3671,8 +4553,10 @@ test("failed root workflow shutdown records workflow failure telemetry", async (
   });
 
   await pi.handlers.get("session_start")({ sessionId: "session-3" }, { cwd: "/workspace/demo" });
+  await pi.handlers.get("agent_start")({ type: "agent_start" }, {});
+  await pi.handlers.get("agent_end")({ type: "agent_end", messages: [failedAssistantMessage] }, {});
   nowMs = 2_325;
-  await pi.handlers.get("session_shutdown")({ status: "failed", error: "boom" }, {});
+  await pi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, {});
 
   assert.equal(telemetry.tracer.spans[0].ended, true);
   assert.equal(telemetry.tracer.spans[0].status.code, 2);

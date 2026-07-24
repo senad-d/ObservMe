@@ -1,8 +1,14 @@
+import { fork } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { constants } from "node:fs";
 import type { BigIntStats } from "node:fs";
-import { lstat, mkdir, open, realpath, stat, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, realpath, stat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { AnchoredCreateCommand } from "./anchored-exclusive-create-helper.ts";
+import { readBoundedOpenSourceFileText } from "./read-source-file.ts";
 
 export interface ProjectLocalFilePathOptions {
   readonly cwd?: string;
@@ -15,6 +21,7 @@ export interface ProjectLocalFilePathOptions {
 
 export interface ProjectLocalFileOperationHooks {
   readonly beforeOpen?: () => Promise<void> | void;
+  readonly afterOpen?: () => Promise<void> | void;
 }
 
 export type ExclusiveProjectLocalFileCreateStatus = "created" | "exists";
@@ -34,6 +41,8 @@ interface CanonicalProjectPathSnapshot {
 
 const parentSegment = "..";
 const unsafeProjectPathErrorCode = "OBSERVME_UNSAFE_PROJECT_PATH";
+const unsafeProjectPathCleanupErrorCode = "OBSERVME_UNSAFE_PROJECT_PATH_CLEANUP_FAILED";
+const anchoredCreateHelperPath = fileURLToPath(new URL("./anchored-exclusive-create-helper.mjs", import.meta.url));
 
 export function resolveProjectLocalFilePath(options: ProjectLocalFilePathOptions): string {
   const root = resolve(options.cwd ?? process.cwd());
@@ -58,6 +67,7 @@ export async function resolveCanonicalProjectLocalFilePath(
 
 export async function readCanonicalProjectLocalFileText(
   options: ProjectLocalFilePathOptions,
+  maximumBytes: number,
   hooks: ProjectLocalFileOperationHooks = {},
 ): Promise<string | undefined> {
   const snapshot = await createCanonicalProjectPathSnapshot(options);
@@ -69,7 +79,9 @@ export async function readCanonicalProjectLocalFileText(
     fileHandle = await openProjectFileForRead(snapshot);
     if (!fileHandle) return undefined;
     await assertOpenedProjectFileIsStable(snapshot, fileHandle);
-    return await fileHandle.readFile({ encoding: "utf8" });
+    const text = await readBoundedOpenSourceFileText(fileHandle, maximumBytes);
+    await assertOpenedProjectFileIsStable(snapshot, fileHandle);
+    return text;
   } finally {
     await closeFileHandle(fileHandle);
   }
@@ -83,35 +95,202 @@ export async function createCanonicalProjectLocalFileExclusively(
   const initialSnapshot = await createCanonicalProjectPathSnapshot(options);
   await mkdir(dirname(initialSnapshot.canonicalCandidatePath), { recursive: true });
   const snapshot = await createCanonicalProjectPathSnapshot(options);
-  await hooks.beforeOpen?.();
-
-  let fileHandle: FileHandle | undefined;
+  if (await projectFileAlreadyExists(snapshot)) return "exists";
+  const helper = await startAnchoredCreateHelper(snapshot);
   let openedIdentity: FileIdentity | undefined;
 
   try {
-    fileHandle = await openProjectFileForExclusiveCreate(snapshot);
-    if (!fileHandle) {
+    await assertMissingProjectPathIsSafe(snapshot);
+    await hooks.beforeOpen?.();
+    sendHelperMessage(helper, { type: "create", fileName: basename(snapshot.canonicalCandidatePath) });
+    const openResult = await receiveAnchoredOpenResult(helper, snapshot);
+    if (openResult === "exists") {
       await assertExistingProjectFileIsSafe(options);
       return "exists";
     }
 
-    openedIdentity = toFileIdentity(await fileHandle.stat({ bigint: true }));
-    await assertOpenedProjectFileIsStable(snapshot, fileHandle);
-    await fileHandle.writeFile(content, { encoding: "utf8" });
-    await assertOpenedProjectFileIsStable(snapshot, fileHandle);
+    openedIdentity = openResult;
+    await hooks.afterOpen?.();
+    await assertAnchoredProjectFileIsStable(snapshot, openedIdentity);
+    sendHelperMessage(helper, { type: "write", content });
+    await receiveAnchoredWriteResult(helper, snapshot, openedIdentity);
+    await assertAnchoredProjectFileIsStable(snapshot, openedIdentity);
+    sendHelperMessage(helper, { type: "commit" });
+    await receiveAnchoredCommitResult(helper, snapshot);
+    openedIdentity = undefined;
     return "created";
   } catch (error) {
-    await closeFileHandle(fileHandle);
-    fileHandle = undefined;
-    if (openedIdentity) await removeCreatedFileIfIdentityMatches(snapshot, openedIdentity);
+    if (openedIdentity && !await abortAnchoredCreate(helper)) {
+      throw createUnsafeProjectPathCleanupError(snapshot.inputLabel);
+    }
+    if (!openedIdentity) await cancelAnchoredCreate(helper);
     throw error;
   } finally {
-    await closeFileHandle(fileHandle);
+    disconnectAnchoredCreateHelper(helper);
   }
 }
 
+async function startAnchoredCreateHelper(snapshot: CanonicalProjectPathSnapshot): Promise<ChildProcess> {
+  const canonicalParentPath = dirname(snapshot.canonicalCandidatePath);
+  assertProjectContainment(snapshot.canonicalRootPath, canonicalParentPath, snapshot.inputLabel);
+  const parentStats = await stat(canonicalParentPath, { bigint: true });
+  if (!parentStats.isDirectory()) throw createUnsafeProjectPathError(snapshot.inputLabel);
+
+  const helper = fork(anchoredCreateHelperPath, [], {
+    cwd: canonicalParentPath,
+    execArgv: [],
+    serialization: "json",
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+
+  try {
+    const message = await receiveHelperMessage(helper);
+    if (readHelperMessageType(message) !== "ready") throwHelperFailure(message, snapshot.inputLabel);
+    const directoryIdentity = readSerializedFileIdentity(message);
+    if (!directoryIdentity || !hasSameIdentity(toFileIdentity(parentStats), directoryIdentity)) {
+      throw createUnsafeProjectPathError(snapshot.inputLabel);
+    }
+    return helper;
+  } catch (error) {
+    disconnectAnchoredCreateHelper(helper);
+    throw error;
+  }
+}
+
+async function receiveAnchoredOpenResult(
+  helper: ChildProcess,
+  snapshot: CanonicalProjectPathSnapshot,
+): Promise<"exists" | FileIdentity> {
+  const message = await receiveHelperMessage(helper);
+  if (readHelperMessageType(message) === "exists") return "exists";
+  if (readHelperMessageType(message) !== "opened") throwHelperFailure(message, snapshot.inputLabel);
+
+  const identity = readSerializedFileIdentity(message);
+  if (!identity) throw createUnsafeProjectPathError(snapshot.inputLabel);
+  return identity;
+}
+
+async function receiveAnchoredWriteResult(
+  helper: ChildProcess,
+  snapshot: CanonicalProjectPathSnapshot,
+  openedIdentity: FileIdentity,
+): Promise<void> {
+  const message = await receiveHelperMessage(helper);
+  if (readHelperMessageType(message) !== "written") throwHelperFailure(message, snapshot.inputLabel);
+
+  const writtenIdentity = readSerializedFileIdentity(message);
+  if (!writtenIdentity || !hasSameIdentity(openedIdentity, writtenIdentity)) {
+    throw createUnsafeProjectPathError(snapshot.inputLabel);
+  }
+}
+
+async function receiveAnchoredCommitResult(
+  helper: ChildProcess,
+  snapshot: CanonicalProjectPathSnapshot,
+): Promise<void> {
+  const message = await receiveHelperMessage(helper);
+  if (readHelperMessageType(message) !== "committed") throwHelperFailure(message, snapshot.inputLabel);
+}
+
+async function abortAnchoredCreate(helper: ChildProcess): Promise<boolean> {
+  if (!helper.connected) return false;
+
+  try {
+    sendHelperMessage(helper, { type: "abort" });
+    const message = await receiveHelperMessage(helper);
+    return readHelperMessageType(message) === "aborted";
+  } catch {
+    return false;
+  }
+}
+
+async function cancelAnchoredCreate(helper: ChildProcess): Promise<void> {
+  if (!helper.connected) return;
+
+  try {
+    sendHelperMessage(helper, { type: "cancel" });
+    await receiveHelperMessage(helper);
+  } catch {
+    return;
+  }
+}
+
+async function receiveHelperMessage(helper: ChildProcess): Promise<unknown> {
+  const controller = new AbortController();
+
+  try {
+    const messageEvent = once(helper, "message", { signal: controller.signal });
+    const exitEvent = once(helper, "exit", { signal: controller.signal }).then(rejectUnexpectedHelperExit);
+    const [message] = await Promise.race([messageEvent, exitEvent]);
+    return message;
+  } finally {
+    controller.abort();
+  }
+}
+
+function rejectUnexpectedHelperExit(): never {
+  throw createAnchoredCreateFailure("EPIPE");
+}
+
+function sendHelperMessage(helper: ChildProcess, message: AnchoredCreateCommand): void {
+  if (!helper.connected) throw createAnchoredCreateFailure("EPIPE");
+  helper.send(message);
+}
+
+function disconnectAnchoredCreateHelper(helper: ChildProcess): void {
+  if (!helper.connected) return;
+
+  try {
+    helper.disconnect();
+  } catch {
+    return;
+  }
+}
+
+function readHelperMessageType(message: unknown): string | undefined {
+  if (!isMessageRecord(message) || typeof message.type !== "string") return undefined;
+  return message.type;
+}
+
+function readSerializedFileIdentity(message: unknown): FileIdentity | undefined {
+  if (!isMessageRecord(message) || !isMessageRecord(message.identity) && !isMessageRecord(message.directoryIdentity)) {
+    return undefined;
+  }
+
+  const serializedIdentity = isMessageRecord(message.identity) ? message.identity : message.directoryIdentity;
+  if (!isMessageRecord(serializedIdentity)) return undefined;
+  if (typeof serializedIdentity.device !== "string" || typeof serializedIdentity.inode !== "string") return undefined;
+
+  try {
+    return { device: BigInt(serializedIdentity.device), inode: BigInt(serializedIdentity.inode) };
+  } catch {
+    return undefined;
+  }
+}
+
+function throwHelperFailure(message: unknown, inputLabel: string): never {
+  const messageType = readHelperMessageType(message);
+  if (messageType === "cleanup_failed") throw createUnsafeProjectPathCleanupError(inputLabel);
+  if (messageType !== "error" || !isMessageRecord(message) || typeof message.code !== "string") {
+    throw createUnsafeProjectPathError(inputLabel);
+  }
+  if (message.code === "ELOOP" || message.code === "EINVAL") throw createUnsafeProjectPathError(inputLabel);
+  throw createAnchoredCreateFailure(message.code);
+}
+
+function createAnchoredCreateFailure(code: string): NodeJS.ErrnoException {
+  const error = new Error("Anchored ObservMe project file creation failed.") as NodeJS.ErrnoException;
+  error.code = code;
+  return error;
+}
+
+function isMessageRecord(message: unknown): message is Record<string, unknown> {
+  return typeof message === "object" && message !== null;
+}
+
 export function isUnsafeProjectPathError(error: unknown): boolean {
-  return isErrorWithCode(error) && error.code === unsafeProjectPathErrorCode;
+  if (!isErrorWithCode(error)) return false;
+  return error.code === unsafeProjectPathErrorCode || error.code === unsafeProjectPathCleanupErrorCode;
 }
 
 function resolveProjectLocalCandidatePath(root: string, options: ProjectLocalFilePathOptions): string {
@@ -191,24 +370,8 @@ async function openProjectFileForRead(snapshot: CanonicalProjectPathSnapshot): P
   }
 }
 
-async function openProjectFileForExclusiveCreate(
-  snapshot: CanonicalProjectPathSnapshot,
-): Promise<FileHandle | undefined> {
-  try {
-    return await open(snapshot.canonicalCandidatePath, createExclusiveWriteOpenFlags(), 0o600);
-  } catch (error) {
-    if (isFileAlreadyExistsError(error)) return undefined;
-    if (isSymlinkLoopError(error)) throw createUnsafeProjectPathError(snapshot.inputLabel);
-    throw error;
-  }
-}
-
 function createReadOpenFlags(): number {
   return constants.O_RDONLY | optionalOpenFlag(constants.O_NOFOLLOW) | optionalOpenFlag(constants.O_NONBLOCK);
-}
-
-function createExclusiveWriteOpenFlags(): number {
-  return constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | optionalOpenFlag(constants.O_NOFOLLOW);
 }
 
 function optionalOpenFlag(flag: number | undefined): number {
@@ -251,6 +414,43 @@ async function assertMissingProjectPathIsSafe(snapshot: CanonicalProjectPathSnap
   }
 }
 
+async function projectFileAlreadyExists(snapshot: CanonicalProjectPathSnapshot): Promise<boolean> {
+  try {
+    await assertCanonicalRootIsStable(snapshot);
+    const currentCanonicalPath = await realpath(snapshot.canonicalCandidatePath);
+    assertProjectContainment(snapshot.canonicalRootPath, currentCanonicalPath, snapshot.inputLabel);
+    const existingStats = await stat(currentCanonicalPath, { bigint: true });
+    if (!existingStats.isFile()) throw createUnsafeProjectPathError(snapshot.inputLabel);
+    return true;
+  } catch (error) {
+    if (!isMissingPathError(error) && !isNotDirectoryError(error)) {
+      if (isUnsafeProjectPathError(error)) throw error;
+      throw createUnsafeProjectPathError(snapshot.inputLabel);
+    }
+    await assertMissingProjectPathIsSafe(snapshot);
+    return false;
+  }
+}
+
+async function assertAnchoredProjectFileIsStable(
+  snapshot: CanonicalProjectPathSnapshot,
+  openedIdentity: FileIdentity,
+): Promise<void> {
+  try {
+    await assertCanonicalRootIsStable(snapshot);
+    const currentCanonicalPath = await realpath(snapshot.canonicalCandidatePath);
+    assertProjectContainment(snapshot.canonicalRootPath, currentCanonicalPath, snapshot.inputLabel);
+
+    const currentPathStats = await stat(currentCanonicalPath, { bigint: true });
+    if (!currentPathStats.isFile() || !hasSameIdentity(openedIdentity, toFileIdentity(currentPathStats))) {
+      throw createUnsafeProjectPathError(snapshot.inputLabel);
+    }
+  } catch (error) {
+    if (isUnsafeProjectPathError(error)) throw error;
+    throw createUnsafeProjectPathError(snapshot.inputLabel);
+  }
+}
+
 async function assertExistingProjectFileIsSafe(options: ProjectLocalFilePathOptions): Promise<void> {
   const snapshot = await createCanonicalProjectPathSnapshot(options);
 
@@ -270,19 +470,6 @@ async function assertCanonicalRootIsStable(snapshot: CanonicalProjectPathSnapsho
   if (!currentRootStats.isDirectory()) throw createUnsafeProjectPathError(snapshot.inputLabel);
   if (!hasSameIdentity(snapshot.rootIdentity, toFileIdentity(currentRootStats))) {
     throw createUnsafeProjectPathError(snapshot.inputLabel);
-  }
-}
-
-async function removeCreatedFileIfIdentityMatches(
-  snapshot: CanonicalProjectPathSnapshot,
-  openedIdentity: FileIdentity,
-): Promise<void> {
-  try {
-    const currentStats = await lstat(snapshot.canonicalCandidatePath, { bigint: true });
-    if (!hasSameIdentity(openedIdentity, toFileIdentity(currentStats))) return;
-    await unlink(snapshot.canonicalCandidatePath);
-  } catch {
-    return;
   }
 }
 
@@ -349,10 +536,6 @@ function isSymlinkLoopError(error: unknown): error is NodeJS.ErrnoException {
   return isErrorWithCode(error) && error.code === "ELOOP";
 }
 
-function isFileAlreadyExistsError(error: unknown): error is NodeJS.ErrnoException {
-  return isErrorWithCode(error) && error.code === "EEXIST";
-}
-
 function isErrorWithCode(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error;
 }
@@ -370,4 +553,12 @@ function createUnsafeProjectPathError(inputLabel: string): NodeJS.ErrnoException
 
 function createUnsafeProjectPathMessage(inputLabel: string): string {
   return `Unsafe ObservMe ${inputLabel}: path input must stay inside the active project root.`;
+}
+
+function createUnsafeProjectPathCleanupError(inputLabel: string): NodeJS.ErrnoException {
+  const error = new Error(
+    `Unsafe ObservMe ${inputLabel}: anchored file cleanup failed; inspect the trusted project directory.`,
+  ) as NodeJS.ErrnoException;
+  error.code = unsafeProjectPathCleanupErrorCode;
+  return error;
 }

@@ -14,6 +14,7 @@ const defaultRange = {
   from: new Date("2026-07-07T10:00:00.250Z"),
   to: new Date("2026-07-07T11:00:00.750Z"),
 };
+const responseFragmentMarker = "private-loki-response-fragment";
 
 function cloneDefaultConfig() {
   return structuredClone(defaultObservMeConfig);
@@ -179,6 +180,67 @@ test("queryLoki reports malformed success payloads as backend schema errors with
   );
 });
 
+test("queryLoki maps malformed JSON and error envelopes to fixed body-free errors", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const cases = [
+    {
+      body: responseFragmentMarker,
+      message: "Loki query failed: backend schema error: response body must be valid JSON.",
+    },
+    {
+      body: JSON.stringify({ status: "error", error: responseFragmentMarker }),
+      message: "Loki query failed: backend returned an error response.",
+    },
+  ];
+
+  for (const item of cases) {
+    await assert.rejects(
+      queryLoki(config, '{service_name="observme-pi-extension"}', defaultRange, {
+        fetch: async () => new Response(item.body, { status: 200 }),
+      }),
+      error => {
+        assert.equal(error.message, item.message);
+        assert.doesNotMatch(error.message, new RegExp(responseFragmentMarker, "u"));
+        return true;
+      },
+    );
+  }
+});
+
+test("queryLoki rejects unsupported envelopes and invalid stream items with fixed schema errors", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const cases = [
+    {
+      payload: [],
+      message: "Loki query failed: backend schema error: response must be a JSON object.",
+    },
+    {
+      payload: {
+        status: "success",
+        data: { resultType: "streams", result: [responseFragmentMarker] },
+      },
+      message: "Loki query failed: backend schema error: each data.result stream must be an object.",
+    },
+  ];
+
+  for (const item of cases) {
+    await assert.rejects(
+      queryLoki(config, '{service_name="observme-pi-extension"}', defaultRange, {
+        fetch: async () => new Response(JSON.stringify(item.payload), { status: 200 }),
+      }),
+      error => {
+        assert.equal(error.message, item.message);
+        assert.doesNotMatch(error.message, new RegExp(responseFragmentMarker, "u"));
+        return true;
+      },
+    );
+  }
+});
+
 test("queryLoki cancels injected oversized responses with a false Content-Length before JSON parsing", async () => {
   const config = cloneDefaultConfig();
   config.query.grafana.url = "http://grafana.local";
@@ -305,19 +367,23 @@ test("queryLoki rejects missing Loki datasource UID before fetching", async () =
   assert.equal(fetchCalls, 0);
 });
 
-test("queryLoki is optional and skips network calls when query integration is disabled", async () => {
+test("queryLoki reports disabled integration distinctly and skips network calls", async () => {
   const config = cloneDefaultConfig();
   config.query.enabled = false;
-  const fetcher = async () => {
-    throw new Error("fetch should not be called when query integration is disabled");
-  };
+  let fetchCalls = 0;
 
-  const logs = await queryLoki(
-    config,
-    '{service_name="observme-pi-extension", pi_session_id="session-1"}',
-    defaultRange,
-    { fetch: fetcher },
+  await assert.rejects(
+    queryLoki(config, '{service_name="observme-pi-extension", pi_session_id="session-1"}', defaultRange, {
+      fetch: async () => {
+        fetchCalls += 1;
+        throw new Error("fetch should not be called when query integration is disabled");
+      },
+    }),
+    error => {
+      assert.equal(error.name, "GrafanaQueryDisabledError");
+      assert.equal(error.message, "Grafana query integration is disabled (query.enabled=false).");
+      return true;
+    },
   );
-
-  assert.deepEqual(logs, []);
+  assert.equal(fetchCalls, 0);
 });

@@ -16,6 +16,7 @@ import {
 
 const traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
 const remoteTraceId = "11111111111111111111111111111111";
+const responseFragmentMarker = "private-tempo-command-response-fragment";
 
 function cloneDefaultConfig() {
   return structuredClone(defaultObservMeConfig);
@@ -54,11 +55,12 @@ function createTempoSearchResponse() {
   );
 }
 
-test("/obs trace builds current-session links with the configured Grafana URL template", async t => {
+test("/obs trace keeps current-session links available when query integration is disabled", async t => {
   clearObsSessionRuntimeState();
   t.after(() => clearObsSessionRuntimeState());
 
   const config = cloneDefaultConfig();
+  config.query.enabled = false;
   config.query.links.traceUrlTemplate = "https://grafana.local/explore?trace={traceId}&ds={tempoDatasourceUid}";
   config.query.grafana.datasourceUids.tempo = "tempo/main";
   startObsSessionRuntimeState({ sessionId: "session-1", traceId, config });
@@ -144,6 +146,44 @@ test("/obs trace --session searches Tempo by safe session id and renders a confi
   assert.match(notifications[0].message, /Trace link \(session\)/u);
   assert.match(notifications[0].message, new RegExp(`Open trace: https://grafana\\.local/explore\\?trace=${remoteTraceId}`, "u"));
   assert.doesNotMatch(notifications[0].message, /root pi\.session span/u);
+});
+
+test("/obs trace reports malformed Tempo responses as backend failures without body fragments", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const notifications = [];
+
+  await handleObsTraceCommand("trace --session session-malformed", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: async () => new Response(responseFragmentMarker, { status: 200 }),
+    getSession: () => ({}),
+  });
+
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].type, "error");
+  assert.match(notifications[0].message, /Tempo search failed: backend schema error: response body must be valid JSON/u);
+  assert.doesNotMatch(notifications[0].message, /No trace was found/u);
+  assert.doesNotMatch(notifications[0].message, new RegExp(responseFragmentMarker, "u"));
+});
+
+test("/obs trace keeps no-data guidance for legitimate empty Tempo responses", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const notifications = [];
+
+  await handleObsTraceCommand("trace --session session-empty", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: async () => new Response(JSON.stringify({ traces: [] }), { status: 200 }),
+    getSession: () => ({}),
+  });
+
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].type, "error");
+  assert.match(notifications[0].message, /No trace was found for the requested ObservMe session id/u);
+  assert.match(notifications[0].message, /check the session id, wait for trace export/u);
+  assert.doesNotMatch(notifications[0].message, /backend schema error/u);
 });
 
 test("/obs trace and /obs link reject raw prompt or command-like session ids before building query strings", async () => {

@@ -9,8 +9,31 @@ export type ObservMeAgentWaitReason = "dependency" | "rate_limit" | "child_runni
 export type ObservMeChildStatus = "starting" | "active" | "completed" | "failed" | "cancelled" | "orphaned";
 export type ObservMeTerminalChildStatus = Extract<ObservMeChildStatus, "completed" | "failed" | "cancelled">;
 export type ObservMeJoinStatus = "completed" | "failed" | "cancelled" | "timeout" | "unknown" | "waiting";
+export type ObservMeRunnerResultStatus = Extract<ObservMeJoinStatus, "completed" | "failed" | "cancelled" | "timeout">;
+export type ObservMeRunnerPhase = "launch" | "wait";
+export type ObservMeRunnerOutcomeKind =
+  | "child_completed"
+  | "child_failed"
+  | "child_cancelled"
+  | "wait_timeout"
+  | "caller_cancelled"
+  | "launcher_failure"
+  | "transport_failure";
+
+export type ObservMeRunnerSettlement =
+  | { readonly type: "result"; readonly status?: ObservMeRunnerResultStatus }
+  | { readonly type: "error"; readonly phase: ObservMeRunnerPhase; readonly error: unknown; readonly signal?: AbortSignal };
+
+export interface ObservMeRunnerOutcome {
+  readonly kind: ObservMeRunnerOutcomeKind;
+  readonly childStatus: ObservMeChildStatus;
+  readonly terminalChildStatus?: ObservMeTerminalChildStatus;
+  readonly joinStatus: ObservMeJoinStatus;
+}
+
 export type ObservMeIntegrationFailureReason =
   | "session_unavailable"
+  | "session_closing"
   | "invalid_request"
   | "spawn_already_exists"
   | "child_agent_already_exists"
@@ -125,6 +148,17 @@ interface IntegrationResponseHolder {
   api?: ObservMeIntegrationApi;
 }
 
+export function classifyObservMeRunnerOutcome(settlement: ObservMeRunnerSettlement): ObservMeRunnerOutcome {
+  if (settlement.type === "result") return classifyObservMeRunnerResult(settlement.status ?? "completed");
+  if (isAbortLikeRunnerError(settlement.error, settlement.signal)) {
+    return settlement.phase === "launch"
+      ? runnerOutcome("caller_cancelled", "cancelled", "cancelled", "cancelled")
+      : runnerOutcome("caller_cancelled", "active", "cancelled");
+  }
+  if (settlement.phase === "launch") return runnerOutcome("launcher_failure", "failed", "failed");
+  return runnerOutcome("transport_failure", "active", "unknown");
+}
+
 export function requestObservMeIntegration(host: ObservMeIntegrationHost): ObservMeIntegrationApi | undefined {
   const events = resolveIntegrationEventBus(host);
   if (!events) return undefined;
@@ -141,6 +175,32 @@ export function requestObservMeIntegration(host: ObservMeIntegrationHost): Obser
     return undefined;
   }
   return holder.api;
+}
+
+function classifyObservMeRunnerResult(status: ObservMeRunnerResultStatus): ObservMeRunnerOutcome {
+  if (status === "completed") return runnerOutcome("child_completed", "completed", "completed", "completed");
+  if (status === "failed") return runnerOutcome("child_failed", "failed", "failed", "failed");
+  if (status === "cancelled") return runnerOutcome("child_cancelled", "cancelled", "cancelled", "cancelled");
+  return runnerOutcome("wait_timeout", "active", "timeout");
+}
+
+function runnerOutcome(
+  kind: ObservMeRunnerOutcomeKind,
+  childStatus: ObservMeChildStatus,
+  joinStatus: ObservMeJoinStatus,
+  terminalChildStatus?: ObservMeTerminalChildStatus,
+): ObservMeRunnerOutcome {
+  return { kind, childStatus, joinStatus, terminalChildStatus };
+}
+
+function isAbortLikeRunnerError(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  if (!error || typeof error !== "object") return false;
+  try {
+    return "name" in error && error.name === "AbortError";
+  } catch {
+    return false;
+  }
 }
 
 function resolveIntegrationEventBus(host: unknown): ObservMeIntegrationEventBus | undefined {

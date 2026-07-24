@@ -209,7 +209,7 @@ test("ensureProjectObservMeConfig does not overwrite a target created after vali
   }
 });
 
-test("ensureProjectObservMeConfig removes an empty outside target when an ancestor changes before create", async () => {
+test("ensureProjectObservMeConfig never creates an outside target when an ancestor changes before create", async () => {
   const cwd = await createTempProject();
   const outsideDirectory = await createTempProject();
   const configDirectory = join(cwd, CONFIG_DIR_NAME);
@@ -235,6 +235,78 @@ test("ensureProjectObservMeConfig removes an empty outside target when an ancest
 
     await assert.rejects(readFile(outsideConfigPath, "utf8"), { code: "ENOENT" });
     await assert.rejects(readFile(join(stableConfigDirectory, "observme.yaml"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await Promise.all([removeTempProject(cwd), removeTempProject(outsideDirectory)]);
+  }
+});
+
+test("ensureProjectObservMeConfig leaves no outside inode when interrupted after an ancestor swap", async () => {
+  const cwd = await createTempProject();
+  const outsideDirectory = await createTempProject();
+  const configDirectory = join(cwd, CONFIG_DIR_NAME);
+  const stableConfigDirectory = join(cwd, "stable-interrupted-config");
+  const outsideConfigPath = join(outsideDirectory, "observme.yaml");
+
+  try {
+    await mkdir(configDirectory);
+
+    await assert.rejects(
+      ensureProjectObservMeConfig({
+        cwd,
+        isProjectTrusted: true,
+        projectFileOperationHooks: {
+          beforeOpen: async () => {
+            await rename(configDirectory, stableConfigDirectory);
+            await symlink(outsideDirectory, configDirectory, "dir");
+          },
+          afterOpen: async () => {
+            await assert.rejects(readFile(outsideConfigPath, "utf8"), { code: "ENOENT" });
+            throw new Error("injected interruption after anchored open");
+          },
+        },
+      }),
+      /injected interruption after anchored open/u,
+    );
+
+    await assert.rejects(readFile(outsideConfigPath, "utf8"), { code: "ENOENT" });
+    await assert.rejects(readFile(join(stableConfigDirectory, "observme.yaml"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await Promise.all([removeTempProject(cwd), removeTempProject(outsideDirectory)]);
+  }
+});
+
+test("ensureProjectObservMeConfig surfaces anchored cleanup failure without creating outside", async () => {
+  const cwd = await createTempProject();
+  const outsideDirectory = await createTempProject();
+  const configDirectory = join(cwd, CONFIG_DIR_NAME);
+  const stableConfigDirectory = join(cwd, "stable-cleanup-failure-config");
+  const stableConfigPath = join(stableConfigDirectory, "observme.yaml");
+  const outsideConfigPath = join(outsideDirectory, "observme.yaml");
+
+  try {
+    await mkdir(configDirectory);
+
+    await assert.rejects(
+      ensureProjectObservMeConfig({
+        cwd,
+        isProjectTrusted: true,
+        projectFileOperationHooks: {
+          beforeOpen: async () => {
+            await rename(configDirectory, stableConfigDirectory);
+            await symlink(outsideDirectory, configDirectory, "dir");
+          },
+          afterOpen: async () => {
+            await assert.rejects(readFile(outsideConfigPath, "utf8"), { code: "ENOENT" });
+            await rm(stableConfigPath);
+            await mkdir(stableConfigPath);
+            throw new Error("injected interruption before failed cleanup");
+          },
+        },
+      }),
+      /anchored file cleanup failed/u,
+    );
+
+    await assert.rejects(readFile(outsideConfigPath, "utf8"), { code: "ENOENT" });
   } finally {
     await Promise.all([removeTempProject(cwd), removeTempProject(outsideDirectory)]);
   }

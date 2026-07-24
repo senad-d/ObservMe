@@ -21,7 +21,7 @@ ObservMe must understand these entry types:
 
 ## 3. Message Roles and Entry Types Relevant to ObservMe
 
-For real-time capture, ObservMe should prefer Pi extension events (`session_start`, `agent_start`, `agent_end`, `turn_start`, `before_provider_request`, `after_provider_response`, `message_*`, `tool_execution_*`, `tool_call`, `tool_result`, `user_bash`, `model_select`, `thinking_level_select`, `session_compact`, `session_tree`, and `session_shutdown`). Session entries are still authoritative for startup recovery, explicit backfill, `/obs session`, and cross-checking event payloads.
+Current real-time handlers register exactly `session_start`, `session_shutdown`, `agent_start`, `agent_end`, `turn_start`, `turn_end`, `before_provider_request`, `after_provider_response`, `message_end`, `tool_execution_start`, `tool_call`, `tool_result`, `tool_execution_end`, `user_bash`, `session_info_changed`, `model_select`, `thinking_level_select`, `session_before_tree`, `session_tree`, and `session_compact`. ObservMe does not register wildcard `message_*` or `tool_execution_*` handlers and currently ignores streaming update events. Session entries remain authoritative for startup header/correlation recovery, interactive Bash completion, and explicit backfill. `/obs session` uses in-memory runtime counters and does not scan the session branch.
 
 ### `user`
 
@@ -70,7 +70,7 @@ Optional telemetry:
 
 ### `toolResult`
 
-Used to close tool spans and emit tool metrics.
+Used by explicit backfill for persisted tool-result records. Live tool spans and metrics use `tool_result` and `tool_execution_end` events instead.
 
 Default telemetry:
 
@@ -165,23 +165,24 @@ pi.compaction.modified_files_count
 | `turn_start` / `turn_end` | start/end `pi.turn` span using `turnIndex` and finalized turn data |
 | `before_provider_request` | start GenAI client span and record provider request metadata available from payload/`ctx.model` |
 | `after_provider_response` | record provider HTTP status/headers that are safe to capture |
-| `message_update` | optionally record streaming progress such as first-token/chunk timing |
+| `message_update` | No current ObservMe handler; streaming progress and first-token/chunk timing are not recorded. |
 | assistant `message_end` | record final model result, stop reason, usage, cost, and end GenAI span |
-| assistant toolCall block from finalized message | prepare correlation for tool spans when needed |
+| assistant toolCall block from finalized message | record tool-call count and optional captured arguments; live tool-span correlation comes from tool lifecycle events |
 | `tool_execution_start` | start `pi.tool.call` span before execution |
 | `tool_call` | validate/record mutable tool input metadata and blocking outcome |
-| `tool_result` / `tool_execution_end` | record result metadata and end `pi.tool.call` span |
-| parent tool/extension launches another Pi agent | emit `pi.agent.spawn` span and propagate trace/workflow/agent lineage to the child |
+| `tool_result` | attach intermediate result metadata/content to the active `pi.tool.call` span |
+| `tool_execution_end` | finalize result metadata, metrics, logs, status, and the `pi.tool.call` span |
+| ObservMe-aware parent integration launches another Pi agent | `startSubagent()` emits `pi.agent.spawn` telemetry and returns trace/workflow/agent lineage for the child |
 | parent tool/extension waits for or receives child agent result | emit `pi.agent.wait` / `pi.agent.join` spans or events with child status and critical-path timing |
-| `toolResult` message | cross-check persisted tool result order and content hashes |
-| `user_bash` plus `bashExecution` session message | create or complete `pi.bash.execution` telemetry for `!`/`!!` commands |
+| `toolResult` session message | Available to explicit backfill; live tool spans are completed from tool lifecycle events rather than this persisted message. |
+| `user_bash` plus the subsequently appended `bashExecution` session message | start and complete `pi.bash.execution` telemetry for `!`/`!!` commands; Pi does not emit `message_end` for this result |
 | `model_select` plus `model_change` entry | emit model-change log event and metric |
 | `thinking_level_select` plus `thinking_level_change` entry | emit thinking-level-change log event and metric |
 | `session_compact` | emit compaction span/log/metric from `compactionEntry` |
 | `session_tree` | emit branch/tree-navigation span/log/metric and include `summaryEntry` when present |
 | `session_shutdown` | end open spans and flush exporters within timeout |
 
-User-bash correlation is intentionally single-flight because Pi does not expose a durable call ID for `user_bash`. ObservMe starts the pending span at `user_bash`, retains only safe span/timing metadata, and completes it from the corresponding `bashExecution` record. Overlapping pre-events evict the ambiguous pending span and emit a bounded drop signal rather than risking a wrong match. An unmatched completion records duration only when it contains a valid start/completion timestamp pair; otherwise duration is omitted. Shutdown closes any pending user-bash span as incomplete. Raw commands and output remain subject to the shared opt-in content-capture policy.
+User-bash correlation is intentionally single-flight because Pi does not expose a durable call ID for `user_bash`. ObservMe starts the pending span at `user_bash`, retains only safe span/timing metadata and an append cursor, and adaptively checks the read-only `SessionManager.getEntries()` view until Pi records the corresponding `bashExecution` result. Returning `undefined` preserves Pi's first-result `user_bash` contract so later extensions can provide operations or a complete result. Overlapping pre-events evict the ambiguous pending span and emit a bounded drop signal rather than risking a wrong match. An unmatched completion records duration only when it contains a valid start/completion timestamp pair; otherwise duration is omitted. Shutdown closes any pending user-bash span as incomplete. Raw commands and output remain subject to the shared opt-in content-capture policy.
 
 The root `pi.session` span is intentionally long-lived and remains open until `session_shutdown`. During an active session, Tempo searches may show ended child spans before the root span is exported; post-shutdown traces must include the canonical `pi.session` root with the session and workflow attributes.
 
@@ -190,8 +191,7 @@ The root `pi.session` span is intentionally long-lived and remains open until `s
 ObservMe must maintain the following IDs:
 
 ```text
-observme.instance.id       # unique per ObservMe telemetry session/process startup
-observme.export.session_id # same as pi.session.id if available
+observme.instance.id       # unique per ObservMe telemetry session
 pi.session.id
 pi.workflow.id             # generated workflow/root execution id, high-cardinality trace/log attribute
 pi.workflow.root_agent_id
@@ -202,7 +202,7 @@ pi.agent.run.id            # one user-prompt lifecycle from agent_start to agent
 pi.agent.spawn.id          # individual subagent spawn operation if known
 pi.entry.id
 pi.turn.id
-pi.tool_call.id
+pi.tool.call.id
 trace_id
 span_id
 ```
@@ -213,7 +213,7 @@ Pi's documented extension events identify sessions, agent prompt lifecycles, tur
 
 Required lineage behavior:
 
-1. Generate `pi.agent.id` when the ObservMe runtime starts unless a trusted parent supplied one for a resumed child context.
+1. Generate `pi.agent.id` when the ObservMe runtime starts. A child envelope must not inherit a parent-supplied agent ID; only validated branch-correlation recovery or a controlled runtime context may restore one.
 2. Set `pi.agent.root_id = pi.agent.id` for root agents.
 3. Generate `pi.workflow.id` in the root agent unless a trusted parent supplied one, and preserve it across every descendant.
 4. For subagents, set `pi.agent.parent_id` to the parent `pi.agent.id`, preserve `pi.agent.root_id`, and increment `pi.agent.depth`.
@@ -221,7 +221,7 @@ Required lineage behavior:
 6. When the parent waits for or receives the child result, emit `pi.agent.wait` and/or `pi.agent.join` spans/events so critical-path latency is visible.
 7. Propagate W3C `traceparent`/`tracestate` plus ObservMe lineage environment variables such as `OBSERVME_WORKFLOW_ID`, `OBSERVME_PARENT_AGENT_ID`, `OBSERVME_ROOT_AGENT_ID`, and `OBSERVME_PARENT_SESSION_ID`.
 8. In the child, continue the trace when trace context is available; otherwise start a new trace and attach a span link or log event with parent trace/span metadata.
-9. If a child starts with malformed or missing parent lineage, classify it as root or orphan according to config and emit an orphan log/metric.
+9. If no parent envelope is present, start as a normal root. If a partial, malformed, oversized, or stale envelope is present, fail open to a root-like orphan and emit bounded orphan/propagation telemetry.
 
 Only lineage supplied in the child Pi process environment by an ObservMe-aware launcher is eligible for automatic continuation. Project-local `.env` values are configuration inputs and must not establish parent provenance. A propagated child candidate must carry a complete validated workflow/parent/root/depth/spawn envelope and, when trace propagation is enabled, a valid W3C `traceparent`; `tracestate` and duplicate parent trace/span metadata must also validate and agree when present. Partial, malformed, oversized, or stale envelopes fail open to a new root/orphan trace without exporting inherited raw values. Trusted lineage without usable W3C continuation starts a new trace with a validated parent span link when trace/span metadata is available, otherwise it emits the bounded `trace_context.propagation_failed` fallback signal.
 
@@ -256,8 +256,8 @@ On extension startup in an existing session:
 Allowed:
 
 - Read header on startup.
-- Read current branch on `/obs session`.
-- Read entries for explicit `/obs backfill` command.
+- Read the current branch (falling back to all entries only when the branch API is unavailable) for explicit `/obs backfill`.
+- Use in-memory runtime state for `/obs session`; it does not read historical entries.
 
 Not allowed by default:
 

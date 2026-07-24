@@ -7,10 +7,15 @@ import { createObservMeMetrics, createSpanRegistry, createAgentTreeTracker } fro
 import { createAgentLineageContext } from "../src/pi/agent-lineage.ts";
 import {
   completeSubagentSpawn,
+  endAgentJoin,
+  endAgentWait,
   failSubagentSpawn,
   observeTrustedSubagentLineage,
   recordAgentJoin,
   recordAgentWait,
+  runSubagentWithObservability,
+  startAgentJoin,
+  startAgentWait,
   startSubagentSpawn,
 } from "../src/pi/subagent-spawn.ts";
 import {
@@ -268,7 +273,6 @@ test("spawn and wait reasons stay consistent across spans, logs, runtime hints, 
     spawnReason: "arbitrary external reason",
   });
 
-  completeSubagentSpawn(telemetry, started.spawnId, { childAgentId: started.childAgentId });
   const wait = recordAgentWait(telemetry, {
     id: "wait-untyped-reason",
     spawnId: started.spawnId,
@@ -285,6 +289,7 @@ test("spawn and wait reasons stay consistent across spans, logs, runtime hints, 
     joinStatus: "waiting",
     durationMs: 22,
   });
+  completeSubagentSpawn(telemetry, started.spawnId, { childAgentId: started.childAgentId });
   const completedChildWait = recordAgentWait(telemetry, {
     id: "wait-completed-child",
     childAgentId: started.childAgentId,
@@ -678,6 +683,320 @@ test("wait and join spans record child status, counts, durations, and spawn fail
   );
   assertSubagentMetricLabelsAreLowCardinality(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.SUBAGENT_SPAWN_FAILURES_TOTAL);
   assertSubagentMetricLabelsAreLowCardinality(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.CHILD_AGENT_FAILURES_TOTAL);
+});
+
+test("wait and join handles reject retargeting and reuse their stored identity on completion", t => {
+  clearObsAgentsRuntimeState();
+  t.after(clearObsAgentsRuntimeState);
+  const telemetry = createFakeTelemetry();
+  const first = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-bound-first",
+    childAgentId: "child-bound-first",
+    spawnType: "command",
+  });
+  const second = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-bound-second",
+    childAgentId: "child-bound-second",
+    spawnType: "command",
+  });
+  const wait = startAgentWait(telemetry, {
+    id: "wait-bound-first",
+    spawnId: first.spawnId,
+    childAgentId: first.childAgentId,
+    childStatus: "active",
+    joinStatus: "waiting",
+    reason: "child_running",
+  });
+  const waitState = telemetry.spans.activeAgentWaits.get(wait.id);
+
+  assert.equal(waitState.id, wait.id);
+  assert.equal(waitState.kind, "wait");
+  assert.equal(waitState.spawnId, first.spawnId);
+  assert.equal(waitState.childAgentId, first.childAgentId);
+  assert.equal(waitState.childStatus, "active");
+  assert.equal(waitState.joinStatus, "waiting");
+  assert.equal(telemetry.agentTree.getAgent(first.childAgentId).status, "active");
+
+  const waitAttributesBeforeMismatch = structuredClone(wait.span.attributes);
+  const waitEventsBeforeMismatch = structuredClone(wait.span.events);
+  const waitMetricsBeforeMismatch = telemetry.meter.records.length;
+  const waitLogsBeforeMismatch = telemetry.logger.records.length;
+  const waitHintsBeforeMismatch = structuredClone(getLocalObsAgentsRuntimeSnapshot().waitJoinHints);
+  const firstTreeBeforeMismatch = telemetry.agentTree.getAgent(first.childAgentId);
+  const secondTreeBeforeMismatch = telemetry.agentTree.getAgent(second.childAgentId);
+
+  assert.deepEqual(endAgentWait(telemetry, wait.id, {
+    spawnId: second.spawnId,
+    childAgentId: second.childAgentId,
+    childStatus: "completed",
+    joinStatus: "completed",
+  }), { ok: false, reason: "child_agent_mismatch" });
+  assert.equal(telemetry.spans.activeAgentWaits.get(wait.id), waitState);
+  assert.equal(wait.span.ended, false);
+  assert.deepEqual(wait.span.attributes, waitAttributesBeforeMismatch);
+  assert.deepEqual(wait.span.events, waitEventsBeforeMismatch);
+  assert.equal(telemetry.meter.records.length, waitMetricsBeforeMismatch);
+  assert.equal(telemetry.logger.records.length, waitLogsBeforeMismatch);
+  assert.deepEqual(getLocalObsAgentsRuntimeSnapshot().waitJoinHints, waitHintsBeforeMismatch);
+  assert.deepEqual(telemetry.agentTree.getAgent(first.childAgentId), firstTreeBeforeMismatch);
+  assert.deepEqual(telemetry.agentTree.getAgent(second.childAgentId), secondTreeBeforeMismatch);
+
+  assert.deepEqual(endAgentWait(telemetry, wait.id, {
+    childStatus: "completed",
+    joinStatus: "completed",
+    durationMs: 7,
+  }), { ok: true });
+  assert.equal(wait.span.attributes["pi.agent.spawn.id"], first.spawnId);
+  assert.equal(wait.span.attributes["pi.agent.child.id"], first.childAgentId);
+  assert.equal(telemetry.agentTree.getAgent(first.childAgentId).status, "completed");
+  assert.equal(telemetry.agentTree.getAgent(second.childAgentId).status, "starting");
+
+  const join = startAgentJoin(telemetry, {
+    id: "join-bound-first",
+    spawnId: first.spawnId,
+    childAgentId: first.childAgentId,
+    childStatus: "completed",
+    joinStatus: "completed",
+    reason: "dependency",
+  });
+  const joinState = telemetry.spans.activeAgentJoins.get(join.id);
+
+  assert.equal(joinState.id, join.id);
+  assert.equal(joinState.kind, "join");
+  assert.equal(joinState.spawnId, first.spawnId);
+  assert.equal(joinState.childAgentId, first.childAgentId);
+  const joinMetricsBeforeMismatch = telemetry.meter.records.length;
+  const joinLogsBeforeMismatch = telemetry.logger.records.length;
+  const joinHintsBeforeMismatch = structuredClone(getLocalObsAgentsRuntimeSnapshot().waitJoinHints);
+
+  assert.deepEqual(endAgentJoin(telemetry, join.id, {
+    spawnId: second.spawnId,
+    childAgentId: second.childAgentId,
+    childStatus: "failed",
+    joinStatus: "failed",
+  }), { ok: false, reason: "child_agent_mismatch" });
+  assert.equal(telemetry.spans.activeAgentJoins.get(join.id), joinState);
+  assert.equal(join.span.ended, false);
+  assert.equal(telemetry.meter.records.length, joinMetricsBeforeMismatch);
+  assert.equal(telemetry.logger.records.length, joinLogsBeforeMismatch);
+  assert.deepEqual(getLocalObsAgentsRuntimeSnapshot().waitJoinHints, joinHintsBeforeMismatch);
+
+  assert.deepEqual(endAgentJoin(telemetry, join.id, { durationMs: 9 }), { ok: true });
+  assert.equal(join.span.attributes["pi.agent.spawn.id"], first.spawnId);
+  assert.equal(join.span.attributes["pi.agent.child.id"], first.childAgentId);
+  assert.equal(join.span.attributes["pi.agent.child.status"], "completed");
+  assert.equal(join.span.attributes["pi.agent.join.status"], "completed");
+
+  const lifecycleLogs = telemetry.logger.records.filter(record =>
+    [
+      LOG_EVENT_NAMES.AGENT_WAIT_STARTED,
+      LOG_EVENT_NAMES.AGENT_WAIT_COMPLETED,
+      LOG_EVENT_NAMES.AGENT_JOIN_STARTED,
+      LOG_EVENT_NAMES.AGENT_JOIN_COMPLETED,
+    ].includes(record.body)
+  );
+  assert.ok(lifecycleLogs.every(record => record.attributes["pi.agent.spawn.id"] === first.spawnId));
+  assert.ok(lifecycleLogs.every(record => record.attributes["pi.agent.child.id"] === first.childAgentId));
+  const hints = getLocalObsAgentsRuntimeSnapshot().waitJoinHints.filter(hint => hint.id === wait.id || hint.id === join.id);
+  assert.deepEqual(hints.map(hint => ({
+    id: hint.id,
+    active: hint.active,
+    spawnId: hint.spawnId,
+    childAgentId: hint.childAgentId,
+  })), [
+    { id: wait.id, active: false, spawnId: first.spawnId, childAgentId: first.childAgentId },
+    { id: join.id, active: false, spawnId: first.spawnId, childAgentId: first.childAgentId },
+  ]);
+});
+
+test("core runner preserves terminal child results and non-terminal wait outcomes", async () => {
+  const terminalCases = [
+    { status: "completed", expected: "completed" },
+    { status: "failed", expected: "failed" },
+    { status: "cancelled", expected: "cancelled" },
+  ];
+
+  for (const terminalCase of terminalCases) {
+    const telemetry = createFakeTelemetry();
+    const result = await runSubagentWithObservability(
+      telemetry,
+      "pi",
+      [],
+      async () => ({ status: terminalCase.status }),
+      {
+        spawnId: `spawn-runner-${terminalCase.status}`,
+        childAgentId: `child-runner-${terminalCase.status}`,
+      },
+    );
+
+    assert.deepEqual(result, { status: terminalCase.status });
+    assert.equal(telemetry.spans.activeSubagentSpawns.size, 0);
+    assert.equal(telemetry.agentTree.getAgent(`child-runner-${terminalCase.status}`).status, terminalCase.expected);
+  }
+
+  const timeoutTelemetry = createFakeTelemetry();
+  const timeoutResult = await runSubagentWithObservability(
+    timeoutTelemetry,
+    "pi",
+    [],
+    async () => ({ status: "timeout" }),
+    { spawnId: "spawn-runner-timeout", childAgentId: "child-runner-timeout" },
+  );
+
+  assert.deepEqual(timeoutResult, { status: "timeout" });
+  assert.equal(timeoutTelemetry.spans.activeSubagentSpawns.has("spawn-runner-timeout"), true);
+  assert.equal(timeoutTelemetry.agentTree.getAgent("child-runner-timeout").status, "active");
+  assert.deepEqual(
+    completeSubagentSpawn(timeoutTelemetry, "spawn-runner-timeout", {
+      childAgentId: "child-runner-timeout",
+      childStatus: "completed",
+    }),
+    { ok: true },
+  );
+  assert.deepEqual(
+    completeSubagentSpawn(timeoutTelemetry, "spawn-runner-timeout", {
+      childAgentId: "child-runner-timeout",
+      childStatus: "completed",
+    }),
+    { ok: false, reason: "spawn_not_found" },
+  );
+});
+
+test("core runner distinguishes caller cancellation, transport failure, and launcher failure", async () => {
+  const nonTerminalCases = [
+    { id: "abort", error: new DOMException("cancelled", "AbortError") },
+    { id: "transport", error: new Error("result channel closed") },
+  ];
+
+  for (const nonTerminalCase of nonTerminalCases) {
+    const telemetry = createFakeTelemetry();
+    await assert.rejects(
+      runSubagentWithObservability(
+        telemetry,
+        "pi",
+        [],
+        async () => {
+          throw nonTerminalCase.error;
+        },
+        {
+          spawnId: `spawn-runner-${nonTerminalCase.id}`,
+          childAgentId: `child-runner-${nonTerminalCase.id}`,
+        },
+      ),
+      nonTerminalCase.error,
+    );
+    assert.equal(telemetry.spans.activeSubagentSpawns.has(`spawn-runner-${nonTerminalCase.id}`), true);
+    assert.equal(telemetry.agentTree.getAgent(`child-runner-${nonTerminalCase.id}`).status, "active");
+    assert.equal(
+      telemetry.meter.records.some(record => record.name === OBSERVME_COUNTER_METRIC_NAMES.SUBAGENT_SPAWN_FAILURES_TOTAL),
+      false,
+    );
+  }
+
+  const launchTelemetry = createFakeTelemetry();
+  const launchError = new Error("spawn failed");
+  await assert.rejects(
+    runSubagentWithObservability(
+      launchTelemetry,
+      "pi",
+      [],
+      async () => {
+        throw launchError;
+      },
+      {
+        spawnId: "spawn-runner-launch-failure",
+        childAgentId: "child-runner-launch-failure",
+        runnerErrorPhase: "launch",
+      },
+    ),
+    launchError,
+  );
+  assert.equal(launchTelemetry.spans.activeSubagentSpawns.size, 0);
+  assert.equal(launchTelemetry.agentTree.getAgent("child-runner-launch-failure").status, "failed");
+  assertMetricValue(launchTelemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.SUBAGENT_SPAWN_FAILURES_TOTAL, 1);
+});
+
+test("bounded wait and join eviction deactivates the exact retained runtime hints", t => {
+  clearObsAgentsRuntimeState();
+  t.after(clearObsAgentsRuntimeState);
+  const config = structuredClone(defaultObservMeConfig);
+  config.limits.maxActiveAgentWaits = 1;
+  config.limits.maxActiveAgentJoins = 1;
+  const telemetry = createFakeTelemetry({ config });
+  const first = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-evicted-first",
+    childAgentId: "child-evicted-first",
+    spawnType: "command",
+  });
+  const second = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-evicted-second",
+    childAgentId: "child-evicted-second",
+    spawnType: "command",
+  });
+  const evictedWait = startAgentWait(telemetry, {
+    id: "wait-evicted-first",
+    spawnId: first.spawnId,
+    childAgentId: first.childAgentId,
+    childStatus: "active",
+    joinStatus: "waiting",
+  });
+  const retainedWait = startAgentWait(telemetry, {
+    id: "wait-retained-second",
+    spawnId: second.spawnId,
+    childAgentId: second.childAgentId,
+    childStatus: "active",
+    joinStatus: "waiting",
+  });
+  const evictedJoin = startAgentJoin(telemetry, {
+    id: "join-evicted-first",
+    spawnId: first.spawnId,
+    childAgentId: first.childAgentId,
+    childStatus: "active",
+    joinStatus: "waiting",
+  });
+  const retainedJoin = startAgentJoin(telemetry, {
+    id: "join-retained-second",
+    spawnId: second.spawnId,
+    childAgentId: second.childAgentId,
+    childStatus: "active",
+    joinStatus: "waiting",
+  });
+
+  assert.equal(evictedWait.span.ended, true);
+  assert.equal(evictedJoin.span.ended, true);
+  assert.equal(evictedWait.span.attributes["observme.evicted"], true);
+  assert.equal(evictedJoin.span.attributes["observme.evicted"], true);
+  assert.deepEqual([...telemetry.spans.activeAgentWaits.keys()], [retainedWait.id]);
+  assert.deepEqual([...telemetry.spans.activeAgentJoins.keys()], [retainedJoin.id]);
+
+  const hints = getLocalObsAgentsRuntimeSnapshot().waitJoinHints;
+  const evictedWaitHint = hints.find(hint => hint.id === evictedWait.id);
+  const evictedJoinHint = hints.find(hint => hint.id === evictedJoin.id);
+  assert.deepEqual(evictedWaitHint, {
+    kind: "wait",
+    id: evictedWait.id,
+    active: false,
+    spawnId: first.spawnId,
+    childAgentId: first.childAgentId,
+    childStatus: "active",
+    joinStatus: "unknown",
+    reason: "child_running",
+    durationMs: undefined,
+  });
+  assert.deepEqual(evictedJoinHint, {
+    kind: "join",
+    id: evictedJoin.id,
+    active: false,
+    spawnId: first.spawnId,
+    childAgentId: first.childAgentId,
+    childStatus: "active",
+    joinStatus: "unknown",
+    reason: "child_running",
+    durationMs: undefined,
+  });
+  assert.deepEqual(hints.filter(hint => hint.active).map(hint => hint.id), [retainedWait.id, retainedJoin.id]);
+  assert.equal(telemetry.agentTree.getAgent(first.childAgentId).status, "active");
+  assert.equal(telemetry.agentTree.getAgent(second.childAgentId).status, "active");
 });
 
 function assertMetricValue(records, metricName, value) {

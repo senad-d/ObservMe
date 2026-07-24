@@ -12,6 +12,8 @@ export type PrivacyPathMode = (typeof privacyPathModes)[number];
 export const ACTIVE_AGENT_LEASE_DURATION_MILLIS_MINIMUM = 10_000;
 export const ACTIVE_AGENT_LEASE_DURATION_MILLIS_MAXIMUM = 300_000;
 export const ACTIVE_AGENT_LEASE_EXPORT_SAFETY_MARGIN_MILLIS = 5_000;
+export const CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS = 64;
+export const TENANT_SALT_ENV_NAME_MAX_CHARS = 128;
 
 export interface OtlpTlsConfig {
   insecureSkipVerify: boolean;
@@ -202,10 +204,15 @@ const queryResultCountSchema = Type.Integer({
 });
 const ratioSchema = Type.Number({ minimum: 0, maximum: 1 });
 const pathModeSchema = StringEnum(privacyPathModes);
+const tenantSaltEnvironmentNameSchema = Type.String({
+  minLength: 1,
+  maxLength: TENANT_SALT_ENV_NAME_MAX_CHARS,
+  pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
+});
 
 export const customRedactionPatternSchema = Type.Object(
   {
-    name: Type.String({ minLength: 1 }),
+    name: Type.String({ minLength: 1, maxLength: CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS }),
     pattern: Type.String({ minLength: 1 }),
   },
   { additionalProperties: false },
@@ -334,7 +341,7 @@ export const observMeConfigSchema = Type.Object(
         redactionEnabled: Type.Boolean(),
         allowUnsafeCapture: Type.Boolean(),
         allowInsecureTransport: Type.Boolean(),
-        tenantSaltEnv: Type.String({ minLength: 1 }),
+        tenantSaltEnv: tenantSaltEnvironmentNameSchema,
         pathMode: pathModeSchema,
         customRedactionPatterns: Type.Array(customRedactionPatternSchema),
       },

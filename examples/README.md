@@ -7,9 +7,9 @@ The npm package ships configuration examples and an extension-integration exampl
 [`observme.yaml`](observme.yaml) is a privacy-preserving local-development profile for the repository's supported Grafana stack:
 
 - OTLP/HTTP exports to `http://localhost:4318`.
-- Grafana queries use `https://observability.local`.
-- Local self-signed TLS and IPv4 preference are enabled for that profile.
-- Prompt, response, thinking, tool, Bash, and path capture remain disabled.
+- Grafana queries use authenticated Nginx at `http://localhost`; Grafana is not published directly on port 3000.
+- TLS bypass and forced IPv4 are disabled for this local HTTP profile.
+- Prompt, response, thinking, tool, and Bash capture remain disabled; `capture.filePaths` remains false but has no direct live recording point.
 - Redaction remains enabled and unsafe capture remains disabled.
 - Metrics export every 15 seconds and renew a 60-second active-agent lease; keep producer and Prometheus clocks synchronized within 5 seconds.
 
@@ -44,7 +44,7 @@ For GitHub Actions, prefer graceful Pi/sidecar shutdown and an `if: always()` cl
 
 [`integrations/subagent-runner.ts`](integrations/subagent-runner.ts) demonstrates how another Pi extension can wrap any child transport with ObservMe's versioned integration API. The transport interface can represent a local subprocess, Pi RPC, tmux, SSH, a container, a queue, or another process manager.
 
-The generic adapter records spawn, launcher success/failure, wait, join, cancellation, timeout, and failure propagation while passing the returned environment to the transport unchanged. It does not prescribe task delivery, process management, result encoding, concurrency, retries, durable state, or child-ID handshake.
+The generic adapter records spawn, launcher success/failure, wait, join, cancellation, timeout, and failure propagation while passing the returned environment to the transport unchanged. Returned terminal child statuses end the child; timeout, wait abort, and transport-read failure keep it active. Use `start()` and retry the returned execution's `wait()` method when later completion must remain reachable after a non-terminal outcome. The adapter does not prescribe task delivery, process management, result encoding, concurrency, retries, durable state, or child-ID handshake.
 
 Read [`../docs/extension-integration.md`](../docs/extension-integration.md) before adapting it and [`../docs/agent-subagent-observability-requirements.md`](../docs/agent-subagent-observability-requirements.md) for the complete orchestration contract.
 

@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS } from "../src/config/schema.ts";
 import {
+  DEFAULT_MAX_INPUT_CHARS,
+  formatCustomReplacement,
+  MAX_CUSTOM_REDACTION_INTERMEDIATE_CHARS,
+  MAX_CUSTOM_REDACTION_MATCHES,
+  MAX_CUSTOM_REDACTION_REPLACEMENT_CHARS,
   redactPath,
   redactValue,
   sha256Prefix,
@@ -31,6 +38,32 @@ function defaultOptions(overrides = {}) {
     tenantSaltSource,
     ...overrides,
   };
+}
+
+function runWorstCaseBroadPatternInChild() {
+  const redactionModuleUrl = new URL("../src/privacy/redact.ts", import.meta.url).href;
+  const script = `
+    import { DEFAULT_MAX_INPUT_CHARS, redactValue } from ${JSON.stringify(redactionModuleUrl)};
+
+    const startedAt = Date.now();
+    const result = redactValue("x".repeat(DEFAULT_MAX_INPUT_CHARS), {
+      pathMode: "full",
+      customRedactionPatterns: [{ name: "broad", pattern: "." }],
+      tenantSaltSource: { secureRuntimeConfig: { tenantSalt: "broad-pattern-budget-test-salt" } },
+    });
+    process.stdout.write(JSON.stringify({
+      dropped: result.dropped,
+      hasValue: result.value !== undefined,
+      failures: result.failureMetrics.redactionFailures,
+      errors: result.errors,
+      elapsedMs: Date.now() - startedAt,
+    }));
+  `;
+
+  return spawnSync(process.execPath, ["--max-old-space-size=128", "--input-type=module", "--eval", script], {
+    encoding: "utf8",
+    timeout: 3_000,
+  });
 }
 
 test("redaction pipeline runs stages in the documented order", () => {
@@ -217,6 +250,120 @@ test("custom regex redactors from config are applied in addition to built-in pat
   assert.match(result.value, /\[REDACTED:internal_token:[a-f0-9]{12}\]/u);
   assert.match(result.value, /\[REDACTED:safe_alternation:[a-f0-9]{12}\]/u);
   assert.match(result.value, /\[REDACTED:safe_quantified_alternation:[a-f0-9]{12}\]/u);
+});
+
+test("custom redaction budgets accept exact boundaries and fail closed one unit beyond them", () => {
+  const maximumName = "n".repeat(CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS);
+  const replacement = formatCustomReplacement(maximumName, "x", tenantSaltSource);
+  assert.equal(replacement.length, MAX_CUSTOM_REDACTION_REPLACEMENT_CHARS);
+  assert.equal(
+    formatCustomReplacement(`${maximumName}sensitive-suffix`, "x", tenantSaltSource).length,
+    MAX_CUSTOM_REDACTION_REPLACEMENT_CHARS,
+  );
+
+  const overNameResult = redactValue(
+    "x",
+    defaultOptions({
+      pathMode: "full",
+      customRedactionPatterns: [{ name: `${maximumName}n`, pattern: "x" }],
+    }),
+  );
+  assert.equal(overNameResult.dropped, true);
+  assert.equal(overNameResult.value, undefined);
+  assert.deepEqual(overNameResult.failureMetrics, { redactionFailures: 1 });
+  assert.deepEqual(overNameResult.errors, [
+    `Custom redaction pattern at index 0 was rejected: Custom redaction pattern names are limited to ${CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS} characters.`,
+  ]);
+
+  const maximumInputResult = redactValue(
+    "q".repeat(DEFAULT_MAX_INPUT_CHARS),
+    defaultOptions({
+      pathMode: "full",
+      customRedactionPatterns: [{ name: maximumName, pattern: "x" }],
+      maxOutputChars: DEFAULT_MAX_INPUT_CHARS,
+    }),
+  );
+  assert.equal(maximumInputResult.dropped, false);
+  assert.equal(maximumInputResult.value?.length, DEFAULT_MAX_INPUT_CHARS);
+
+  const exactMatchResult = redactValue(
+    "x".repeat(MAX_CUSTOM_REDACTION_MATCHES),
+    defaultOptions({
+      pathMode: "full",
+      customRedactionPatterns: [{ name: maximumName, pattern: "x" }],
+      maxOutputChars: MAX_CUSTOM_REDACTION_INTERMEDIATE_CHARS,
+    }),
+  );
+  assert.equal(exactMatchResult.dropped, false);
+  assert.equal(exactMatchResult.value?.length, MAX_CUSTOM_REDACTION_MATCHES * replacement.length);
+
+  const truncatedMatchResult = redactValue(
+    "xx",
+    defaultOptions({
+      pathMode: "full",
+      customRedactionPatterns: [{ name: maximumName, pattern: "x" }],
+      maxOutputChars: replacement.length,
+    }),
+  );
+  assert.equal(truncatedMatchResult.dropped, false);
+  assert.equal(truncatedMatchResult.truncated, true);
+  assert.equal(truncatedMatchResult.originalLength, 2 * replacement.length);
+  assert.equal(truncatedMatchResult.value?.length, replacement.length);
+
+  const overMatchResult = redactValue(
+    "x".repeat(MAX_CUSTOM_REDACTION_MATCHES + 1),
+    defaultOptions({
+      pathMode: "full",
+      customRedactionPatterns: [{ name: maximumName, pattern: "x" }],
+    }),
+  );
+  assert.equal(overMatchResult.dropped, true);
+  assert.equal(overMatchResult.value, undefined);
+  assert.deepEqual(overMatchResult.failureMetrics, { redactionFailures: 1 });
+  assert.deepEqual(overMatchResult.errors, ["custom redaction budget exceeded"]);
+  assert.equal(overMatchResult.stages.includes("hashing"), false);
+
+  const exactOutputInputLength = MAX_CUSTOM_REDACTION_INTERMEDIATE_CHARS - replacement.length + 1;
+  const exactOutputInput = `${"q".repeat(exactOutputInputLength - 1)}x`;
+  const exactOutputResult = redactValue(
+    exactOutputInput,
+    defaultOptions({
+      pathMode: "full",
+      customRedactionPatterns: [{ name: maximumName, pattern: "x" }],
+      maxOutputChars: MAX_CUSTOM_REDACTION_INTERMEDIATE_CHARS,
+    }),
+  );
+  assert.equal(exactOutputResult.dropped, false);
+  assert.equal(exactOutputResult.value?.length, MAX_CUSTOM_REDACTION_INTERMEDIATE_CHARS);
+
+  const overOutputResult = redactValue(
+    `q${exactOutputInput}`,
+    defaultOptions({
+      pathMode: "full",
+      customRedactionPatterns: [{ name: maximumName, pattern: "x" }],
+    }),
+  );
+  assert.equal(overOutputResult.dropped, true);
+  assert.equal(overOutputResult.value, undefined);
+  assert.deepEqual(overOutputResult.failureMetrics, { redactionFailures: 1 });
+  assert.deepEqual(overOutputResult.errors, ["custom redaction budget exceeded"]);
+});
+
+test("worst-case broad custom redaction stays within explicit time, memory, and match budgets", () => {
+  const child = runWorstCaseBroadPatternInChild();
+
+  assert.equal(child.error, undefined, child.error?.message);
+  assert.equal(child.signal, null, child.stderr);
+  assert.equal(child.status, 0, child.stderr);
+  const summary = JSON.parse(child.stdout);
+  assert.deepEqual(summary, {
+    dropped: true,
+    hasValue: false,
+    failures: 1,
+    errors: ["custom redaction budget exceeded"],
+    elapsedMs: summary.elapsedMs,
+  });
+  assert.ok(summary.elapsedMs < 3_000, `broad-pattern budget took ${summary.elapsedMs}ms`);
 });
 
 test("unsafe custom regex redactors fail closed without exporting raw content", () => {

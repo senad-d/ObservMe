@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import { ObservMeLogSdk } from "../src/otel/logs.ts";
+import { ObservMeMetricSdk } from "../src/otel/metrics.ts";
 import { createOtelSdkController, startOtelSdk } from "../src/otel/sdk.ts";
+import { ObservMeTraceSdk } from "../src/otel/traces.ts";
 import { runBoundedOtelOperation } from "../src/otel/shutdown.ts";
 import { createCompositeOtelSignalSdk } from "../src/pi/handlers.ts";
 
@@ -126,6 +129,68 @@ test("failed multi-signal startup attempts every rollback when one cleanup fails
     trace: { starts: 1, shutdowns: 1 },
     metric: { starts: 1, shutdowns: 1 },
     log: { starts: 1, shutdowns: 1 },
+  });
+});
+
+test("multi-signal shutdown retries only the provider that rejected", async () => {
+  const signals = createProductionSignalHarness({
+    metricShutdown: createRejectOnceShutdown("metric provider shutdown failed"),
+  });
+  const composite = createCompositeOtelSignalSdk(signals.trace, signals.metric, signals.log, 100);
+  const controller = await startOtelSdk({
+    config: defaultObservMeConfig,
+    sdkFactory: () => composite,
+  });
+
+  const failed = await controller.shutdown(100);
+
+  assert.match(failed.error.message, /metric provider shutdown failed/u);
+  assert.equal(controller.state, "shutdown_failed");
+  assert.equal(composite.state, "shutdown_failed");
+  assert.deepEqual(signals.calls, {
+    trace: { shutdowns: 1 },
+    metric: { shutdowns: 1 },
+    log: { shutdowns: 1 },
+  });
+
+  const retry = await controller.shutdown(100);
+  const repeated = await controller.shutdown(100);
+
+  assert.deepEqual(retry, { operation: "shutdown", completed: true, timedOut: false });
+  assert.deepEqual(repeated, { operation: "shutdown", completed: true, timedOut: false });
+  assert.equal(controller.state, "shutdown");
+  assert.equal(composite.state, "shutdown");
+  assert.deepEqual(signals.calls, {
+    trace: { shutdowns: 1 },
+    metric: { shutdowns: 2 },
+    log: { shutdowns: 1 },
+  });
+});
+
+test("repeated multi-signal shutdown shares one in-flight attempt through late success", async () => {
+  const deferred = createDeferred();
+  const signals = createProductionSignalHarness({ metricShutdown: deferred.wait });
+  const composite = createCompositeOtelSignalSdk(signals.trace, signals.metric, signals.log, 100);
+  await composite.start();
+
+  const first = composite.shutdown();
+  const repeated = composite.shutdown();
+
+  assert.equal(composite.state, "shutting_down");
+  assert.deepEqual(signals.calls, {
+    trace: { shutdowns: 1 },
+    metric: { shutdowns: 1 },
+    log: { shutdowns: 1 },
+  });
+
+  deferred.resolve();
+  await Promise.all([first, repeated]);
+
+  assert.equal(composite.state, "shutdown");
+  assert.deepEqual(signals.calls, {
+    trace: { shutdowns: 1 },
+    metric: { shutdowns: 1 },
+    log: { shutdowns: 1 },
   });
 });
 
@@ -295,6 +360,52 @@ async function assertTransactionalSignalFailure(failingSignal) {
   assert.equal(composite.state, "failed");
 }
 
+function createProductionSignalHarness(options = {}) {
+  const calls = {
+    trace: { shutdowns: 0 },
+    metric: { shutdowns: 0 },
+    log: { shutdowns: 0 },
+  };
+
+  return {
+    calls,
+    trace: new ObservMeTraceSdk({
+      config: defaultObservMeConfig,
+      exporterFactory: () => ({}),
+      spanProcessorFactory: () => ({}),
+      tracerProviderFactory: () => ({
+        getTracer: () => ({}),
+        shutdown: createShutdownRecorder(calls.trace, options.traceShutdown),
+      }),
+    }),
+    metric: new ObservMeMetricSdk({
+      config: defaultObservMeConfig,
+      exporterFactory: () => ({}),
+      readerFactory: () => ({}),
+      meterProviderFactory: () => ({
+        getMeter: () => ({}),
+        shutdown: createShutdownRecorder(calls.metric, options.metricShutdown),
+      }),
+    }),
+    log: new ObservMeLogSdk({
+      config: defaultObservMeConfig,
+      exporterFactory: () => ({}),
+      processorFactory: () => ({}),
+      loggerProviderFactory: () => ({
+        getLogger: () => ({}),
+        shutdown: createShutdownRecorder(calls.log, options.logShutdown),
+      }),
+    }),
+  };
+}
+
+function createShutdownRecorder(calls, action) {
+  return () => {
+    calls.shutdowns += 1;
+    return action?.();
+  };
+}
+
 function createSignalHarness(failingSignal, options = {}) {
   const calls = {
     trace: { starts: 0, shutdowns: 0 },
@@ -351,6 +462,22 @@ function throwingOperation() {
 
 function throwingCleanup() {
   throw new Error("cleanup failed Authorization: Bearer cleanup-token");
+}
+
+function createRejectOnceShutdown(message) {
+  let attempts = 0;
+  return () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error(message);
+  };
+}
+
+function createDeferred() {
+  let resolve;
+  const promise = new Promise(innerResolve => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve, wait: () => promise };
 }
 
 function neverResolve() {

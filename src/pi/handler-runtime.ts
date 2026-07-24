@@ -24,6 +24,7 @@ import type { AgentLineageContext } from "./agent-lineage.ts";
 import { buildResourceLineageAttributes } from "./agent-lineage.ts";
 import type { AgentTreeNode } from "./agent-tree-tracker.ts";
 import { AgentTreeTracker } from "./agent-tree-tracker.ts";
+import { getProcessOtelOperationOwnership } from "./otel-operation-ownership.ts";
 import {
   emitLifecycleLog,
   errorClass,
@@ -34,9 +35,6 @@ import {
   isRecord,
   metricLabels,
   normalizeMetricValue,
-  readBoolean,
-  readString,
-  readUnknown,
   recordTelemetryDrop,
   stringifyAttributes,
   type TelemetryDropTarget,
@@ -70,6 +68,7 @@ const piApiCapabilityErrorMessage =
 const eventRegistrationOrder = [
   "session_start",
   "session_info_changed",
+  "before_agent_start",
   "agent_start",
   "turn_start",
   "before_provider_request",
@@ -201,7 +200,9 @@ export async function startSessionTelemetry(options: StartSessionTelemetryOption
   });
   const tracer = traceSdk.tracer;
   const metrics = createObservMeMetrics(metricSdk.meter);
-  const sessionReference: HandlerSessionState = {};
+  const sessionReference: HandlerSessionState = {
+    otelOperationOwnership: getProcessOtelOperationOwnership(),
+  };
   const getTelemetryDropTarget = resolveSessionTelemetryDropTarget.bind(undefined, sessionReference, metrics);
   const spans = createSpanRegistry(config, metrics, getTelemetryDropTarget);
   const agentTree = createAgentTreeTracker(config, options.lineage, metrics, getTelemetryDropTarget);
@@ -385,11 +386,6 @@ export function createSpanRegistry(
 
 export function isRootWorkflow(lineage: AgentLineageContext): boolean {
   return lineage.role === "root" || lineage.role === "orchestrator";
-}
-
-export function workflowFailed(event: unknown): boolean {
-  const status = readString(event, "status") ?? readString(event, "outcome");
-  return readBoolean(event, "failed") === true || Boolean(readUnknown(event, "error")) || status === "failed" || status === "error";
 }
 
 export function monotonicNowMs(): number {
@@ -652,6 +648,7 @@ class ObservMeCompositeOtelSignalSdk implements CompositeOtelSignalSdk {
   readonly #cleanupTimeoutMs: number;
   readonly #startedSignalSdks: SessionScopedOtelSdk[] = [];
   #startingSignalSdk?: SessionScopedOtelSdk;
+  #shutdownPromise?: Promise<void>;
   #state: CompositeOtelSignalSdk["state"] = "idle";
 
   constructor(
@@ -697,11 +694,25 @@ class ObservMeCompositeOtelSignalSdk implements CompositeOtelSignalSdk {
 
   async shutdown(): Promise<void> {
     if (this.#state === "shutdown") return;
+    if (this.#state === "shutting_down" && this.#shutdownPromise) return this.#shutdownPromise;
 
+    this.#state = "shutting_down";
+    const shutdownPromise = this.shutdownOwnedSignalSdks();
+    this.#shutdownPromise = shutdownPromise;
+    try {
+      await shutdownPromise;
+    } finally {
+      if (this.#shutdownPromise === shutdownPromise) this.#shutdownPromise = undefined;
+    }
+  }
+
+  private async shutdownOwnedSignalSdks(): Promise<void> {
     try {
       await this.shutdownStartedSignalSdks();
-    } finally {
       this.#state = "shutdown";
+    } catch (error) {
+      this.#state = "shutdown_failed";
+      throw error;
     }
   }
 
@@ -713,23 +724,35 @@ class ObservMeCompositeOtelSignalSdk implements CompositeOtelSignalSdk {
   }
 
   private async shutdownStartedSignalSdks(): Promise<void> {
-    const signalSdks = this.takeStartedSignalSdks();
+    const signalSdks = this.listOwnedSignalSdks();
     const results = await Promise.allSettled(signalSdks.map(shutdownCompositeSignalSdk));
+    let firstFailure: unknown;
+    let hasFailure = false;
 
-    for (const result of results) {
-      if (result.status === "rejected") throw result.reason;
+    for (const [index, result] of results.entries()) {
+      if (result.status === "fulfilled") {
+        this.releaseSignalSdk(signalSdks[index]);
+      } else if (!hasFailure) {
+        firstFailure = result.reason;
+        hasFailure = true;
+      }
     }
+
+    if (hasFailure) throw firstFailure;
   }
 
-  private takeStartedSignalSdks(): SessionScopedOtelSdk[] {
+  private listOwnedSignalSdks(): SessionScopedOtelSdk[] {
     const signalSdks = [...this.#startedSignalSdks];
     if (this.#startingSignalSdk && !signalSdks.includes(this.#startingSignalSdk)) {
       signalSdks.push(this.#startingSignalSdk);
     }
-
-    this.#startedSignalSdks.length = 0;
-    this.#startingSignalSdk = undefined;
     return signalSdks.reverse();
+  }
+
+  private releaseSignalSdk(sdk: SessionScopedOtelSdk): void {
+    const index = this.#startedSignalSdks.indexOf(sdk);
+    if (index >= 0) this.#startedSignalSdks.splice(index, 1);
+    if (this.#startingSignalSdk === sdk) this.#startingSignalSdk = undefined;
   }
 }
 

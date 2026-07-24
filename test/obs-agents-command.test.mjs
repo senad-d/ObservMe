@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { getObsRootCommandArgumentCompletions, registerObsCommand } from "../src/commands/obs.ts";
 import {
@@ -7,6 +8,7 @@ import {
   OBS_AGENTS_ORPHAN_PROMQL,
   OBS_AGENTS_SPAWNED_PROMQL,
   getObsAgentsSnapshot,
+  handleObsAgentsCommand,
   renderObsAgents,
 } from "../src/commands/obs-agents.ts";
 import {
@@ -24,6 +26,15 @@ const remoteTraceId = "11111111111111111111111111111111";
 
 function cloneDefaultConfig() {
   return structuredClone(defaultObservMeConfig);
+}
+
+function createReadyQueryConfig() {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local/grafana/";
+  config.query.grafana.token = "grafana-token";
+  config.query.grafana.datasourceUids.prometheus = "mimir/main";
+  config.query.grafana.datasourceUids.tempo = "tempo/main";
+  return config;
 }
 
 function createCommandContext(notifications) {
@@ -169,6 +180,10 @@ function createTempoSearchResponse() {
     }),
     { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
   );
+}
+
+function createBackendFailureResponse(status = 503) {
+  return new Response("token=backend-secret", { status, statusText: "Backend unavailable" });
 }
 
 function responseForPrometheusQuery(query) {
@@ -339,14 +354,10 @@ test("renderObsAgents bounds injected display fields and strips label controls",
 });
 
 test("/obs agents queries low-cardinality PromQL and Tempo lineage attributes", async () => {
-  const config = cloneDefaultConfig();
+  const config = createReadyQueryConfig();
   config.query.timeoutMs = 987;
   config.query.maxAgents = 1;
   config.query.maxTraces = 1;
-  config.query.grafana.url = "http://grafana.local/grafana/";
-  config.query.grafana.token = "grafana-token";
-  config.query.grafana.datasourceUids.prometheus = "mimir/main";
-  config.query.grafana.datasourceUids.tempo = "tempo/main";
 
   const calls = [];
   const fetcher = async (input, init) => {
@@ -398,6 +409,166 @@ test("/obs agents queries low-cardinality PromQL and Tempo lineage attributes", 
   assert.equal(snapshot.aggregateRows.orphaned.length, 1);
   assert.equal(snapshot.traces[0].traceId, remoteTraceId);
   assert.deepEqual(snapshot.tempoSearchAttributes, { "pi.agent.id": "agent-root", "pi.workflow.id": "workflow-1" });
+});
+
+test("/obs agents completes delayed independent enrichment within one request timeout budget", async () => {
+  const config = createReadyQueryConfig();
+  config.query.timeoutMs = 450;
+  const queryDelayMs = 250;
+  const calls = [];
+  const startedAt = performance.now();
+
+  const snapshot = await getObsAgentsSnapshot(createCommandContext([]), {
+    loadConfig: async () => config,
+    fetch: async input => {
+      const url = new URL(String(input));
+      calls.push(url);
+      await delay(queryDelayMs);
+      if (url.pathname.endsWith("/api/v1/query")) return responseForPrometheusQuery(url.searchParams.get("query"));
+      if (url.pathname.endsWith("/api/search")) return createTempoSearchResponse();
+      throw new Error(`Unexpected query URL: ${url.toString()}`);
+    },
+    getRuntime: () => createRuntimeSnapshot(),
+    now: () => new Date("2026-07-07T12:00:00.000Z"),
+  });
+  const elapsedMs = performance.now() - startedAt;
+  const prometheusQueries = calls
+    .filter(url => url.pathname.endsWith("/api/v1/query"))
+    .map(url => url.searchParams.get("query"));
+
+  assert.ok(elapsedMs < config.query.timeoutMs, `expected one ${config.query.timeoutMs}ms budget, took ${elapsedMs}ms`);
+  assert.equal(calls.length, 4);
+  assert.deepEqual(prometheusQueries, [
+    OBS_AGENTS_SPAWNED_PROMQL,
+    OBS_AGENTS_FANOUT_P95_PROMQL,
+    OBS_AGENTS_ORPHAN_PROMQL,
+  ]);
+  assert.deepEqual(snapshot.aggregateRows.spawned.map(row => row.value), [0.5, 999]);
+  assert.deepEqual(snapshot.aggregateRows.fanoutP95.map(row => row.value), [4, 999]);
+  assert.deepEqual(snapshot.aggregateRows.orphaned.map(row => row.value), [0, 999]);
+  assert.equal(snapshot.traces[0].traceId, remoteTraceId);
+});
+
+test("/obs agents keeps local state when query enrichment is disabled", async () => {
+  const config = createReadyQueryConfig();
+  config.query.enabled = false;
+  const notifications = [];
+  let fetchCalls = 0;
+
+  await handleObsAgentsCommand("agents", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: async () => {
+      fetchCalls += 1;
+      throw new Error("disabled enrichment must not make a network request");
+    },
+    getRuntime: () => createRuntimeSnapshot(),
+  });
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(notifications[0].type, "warning");
+  assert.match(notifications[0].message, /Workflow: workflow-1 root=agent-root/u);
+  assert.match(notifications[0].message, /Recent children: agent-child-a.*agent-child-b/u);
+  assert.match(
+    notifications[0].message,
+    /Prometheus unavailable: Grafana query integration is disabled \(query\.enabled=false\)\. Next: set query\.enabled=true to enable Grafana-backed commands\./u,
+  );
+  assert.match(
+    notifications[0].message,
+    /Tempo unavailable: Grafana query integration is disabled \(query\.enabled=false\)\. Next: set query\.enabled=true to enable Grafana-backed commands\./u,
+  );
+  assert.doesNotMatch(notifications[0].message, /ObservMe agents unavailable/u);
+});
+
+test("/obs agents keeps local state when Grafana enrichment is not ready", async () => {
+  const config = cloneDefaultConfig();
+  const notifications = [];
+  let fetchCalls = 0;
+
+  await handleObsAgentsCommand("agents", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: async () => {
+      fetchCalls += 1;
+      return createBackendFailureResponse();
+    },
+    getRuntime: () => createRuntimeSnapshot(),
+  });
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(notifications[0].type, "warning");
+  assert.match(notifications[0].message, /Current tree: depth=2 width=4 active=1 orphaned=0/u);
+  assert.match(notifications[0].message, /Prometheus unavailable: Grafana query configuration is not ready/u);
+  assert.match(notifications[0].message, /Tempo unavailable: Grafana query configuration is not ready/u);
+  assert.doesNotMatch(notifications[0].message, /OBSERVME_GRAFANA_TOKEN/u);
+});
+
+test("/obs agents preserves successful Prometheus enrichment when Tempo fails", async () => {
+  const config = createReadyQueryConfig();
+  const notifications = [];
+  const fetcher = async input => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/api/v1/query")) return responseForPrometheusQuery(url.searchParams.get("query"));
+    if (url.pathname.endsWith("/api/search")) return createBackendFailureResponse(502);
+    throw new Error(`Unexpected query URL: ${url.toString()}`);
+  };
+
+  await handleObsAgentsCommand("agents", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: fetcher,
+    getRuntime: () => createRuntimeSnapshot(),
+  });
+
+  assert.equal(notifications[0].type, "warning");
+  assert.match(notifications[0].message, /Workflow: workflow-1 root=agent-root/u);
+  assert.match(notifications[0].message, /spawn_series=2 fanout_series=2 orphan_series=2/u);
+  assert.doesNotMatch(notifications[0].message, /Prometheus unavailable/u);
+  assert.match(notifications[0].message, /Tempo unavailable: Tempo search failed: HTTP 502 Backend unavailable/u);
+  assert.doesNotMatch(notifications[0].message, /backend-secret/u);
+});
+
+test("/obs agents keeps local and Prometheus state when Tempo times out", async () => {
+  const config = createReadyQueryConfig();
+  const notifications = [];
+  const fetcher = async input => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/api/v1/query")) return responseForPrometheusQuery(url.searchParams.get("query"));
+    throw new DOMException("token=tempo-secret", "AbortError");
+  };
+
+  await handleObsAgentsCommand("agents", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: fetcher,
+    getRuntime: () => createRuntimeSnapshot(),
+  });
+
+  assert.equal(notifications[0].type, "warning");
+  assert.match(notifications[0].message, /Subagents spawned in current trace: 2/u);
+  assert.match(notifications[0].message, /spawn_series=2 fanout_series=2 orphan_series=2/u);
+  assert.match(notifications[0].message, /Tempo unavailable: Tempo search timed out\./u);
+  assert.doesNotMatch(notifications[0].message, /tempo-secret/u);
+});
+
+test("/obs agents always renders local state when every backend request fails", async () => {
+  const config = createReadyQueryConfig();
+  const notifications = [];
+  let fetchCalls = 0;
+
+  await handleObsAgentsCommand("agents", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: async () => {
+      fetchCalls += 1;
+      return createBackendFailureResponse();
+    },
+    getRuntime: () => createRuntimeSnapshot(),
+  });
+
+  assert.equal(fetchCalls, 4);
+  assert.equal(notifications[0].type, "warning");
+  assert.match(notifications[0].message, /Workflow: workflow-1 root=agent-root/u);
+  assert.match(notifications[0].message, /Current tree: depth=2 width=4 active=1 orphaned=0/u);
+  assert.match(notifications[0].message, /Wait\/join hints: .*join:agent-child-b/u);
+  assert.match(notifications[0].message, /Prometheus unavailable: Prometheus query failed: HTTP 503 Backend unavailable/u);
+  assert.match(notifications[0].message, /Tempo unavailable: Tempo search failed: HTTP 503 Backend unavailable/u);
+  assert.doesNotMatch(notifications[0].message, /backend-secret|ObservMe agents unavailable/u);
 });
 
 test("local agents runtime snapshots current tree state without importing query clients", t => {

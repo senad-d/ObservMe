@@ -85,7 +85,7 @@ test("generated starter fallback produces one structured Grafana Explore link fo
   const url = new URL(link);
   const panes = JSON.parse(url.searchParams.get("panes"));
 
-  assert.equal(url.origin + url.pathname, "https://observability.local/explore");
+  assert.equal(url.origin + url.pathname, "http://localhost/explore");
   assert.equal(url.searchParams.get("schemaVersion"), "1");
   assert.equal(panes.observmeTrace.datasource, "tempo");
   assert.equal(panes.observmeTrace.queries[0].query, traceId);

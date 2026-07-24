@@ -139,7 +139,8 @@ function isConsistentCorrelationLineage(
   depth: number,
 ): boolean {
   if (depth === 0) return parentAgentId === undefined && rootAgentId === agentId;
-  return parentAgentId !== undefined && parentAgentId !== agentId;
+  if (parentAgentId === undefined || parentAgentId === agentId || rootAgentId === agentId) return false;
+  return depth === 1 ? parentAgentId === rootAgentId : parentAgentId !== rootAgentId;
 }
 
 function correlationsEqual(

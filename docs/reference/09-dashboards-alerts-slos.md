@@ -613,7 +613,7 @@ Find traces where pi.compaction.tokens_before > 50000
 Find traces by pi.session.id
 Find child traces/spans by pi.agent.parent_id or pi.agent.root_id
 Find all traces/spans in an orchestrated workflow by pi.workflow.id
-Find joins where pi.agent.join.status = timeout or error
+Find joins where pi.agent.join.status = timeout or failed
 ```
 
 ## 11. Suggested Alerts

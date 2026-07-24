@@ -19,7 +19,13 @@ export const DOCUMENTED_LOG_BATCH_DEFAULTS = {
   scheduledDelayMillis: 1000,
 } satisfies LogsBatchConfig;
 
-export type LogPipelineState = "idle" | "disabled" | "started" | "shutdown";
+export type LogPipelineState =
+  | "idle"
+  | "disabled"
+  | "started"
+  | "shutting_down"
+  | "shutdown_failed"
+  | "shutdown";
 
 export interface OtlpLogExporterOptions {
   readonly url: string;
@@ -70,6 +76,7 @@ export class ObservMeLogSdk {
   #processor?: LogRecordProcessor;
   #provider?: LogProviderLike;
   #logger: Logger = noopLogger;
+  #shutdownPromise?: Promise<void>;
   #state: LogPipelineState = "idle";
 
   constructor(options: ObservMeLogSdkOptions) {
@@ -114,17 +121,31 @@ export class ObservMeLogSdk {
 
   async shutdown(): Promise<void> {
     if (this.#state === "shutdown") return;
+    if (this.#state === "shutting_down" && this.#shutdownPromise) return this.#shutdownPromise;
 
+    this.#state = "shutting_down";
+    this.#logger = noopLogger;
+    const shutdownPromise = this.shutdownOwnedResources();
+    this.#shutdownPromise = shutdownPromise;
+    try {
+      await shutdownPromise;
+    } finally {
+      if (this.#shutdownPromise === shutdownPromise) this.#shutdownPromise = undefined;
+    }
+  }
+
+  private async shutdownOwnedResources(): Promise<void> {
     try {
       if (this.#provider?.shutdown) await this.#provider.shutdown();
       else if (this.#processor) await this.#processor.shutdown();
       else await this.#exporter?.shutdown();
-    } finally {
       this.#provider = undefined;
       this.#processor = undefined;
       this.#exporter = undefined;
       this.#state = "shutdown";
-      this.#logger = noopLogger;
+    } catch (error) {
+      this.#state = "shutdown_failed";
+      throw error;
     }
   }
 }

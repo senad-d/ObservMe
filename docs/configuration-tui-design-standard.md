@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines a reusable visual standard for a terminal-based configuration interface. It describes only how the interface should look and behave visually. It does not define any product-specific content, setting names, configuration keys, file paths, or implementation details.
+This document defines a reusable visual standard for a possible terminal-based configuration interface. ObservMe does not currently register or ship a configuration TUI; its implemented user surface is the `/obs` command plus YAML/environment configuration. This design note describes only how a future interface should look and behave visually. It does not define product-specific content, setting names, configuration keys, file paths, or current implementation details.
 
 ## Design Goal
 

@@ -66,6 +66,9 @@ observme:
     exportIntervalMillis: 15000
     exportTimeoutMillis: 3000
     activeAgentLeaseDurationMillis: 60000
+    # Reserved compatibility field: names are validated, but current recorders do
+    # not add configured labels to measurements.
+    labels: []
 
   logs:
     enabled: true
@@ -82,7 +85,7 @@ observme:
     toolResults: false
     bashCommands: false
     bashOutput: false
-    filePaths: false
+    filePaths: false  # reserved; no direct live file-path recording point
 
   privacy:
     redactionEnabled: true
@@ -93,6 +96,10 @@ observme:
     customRedactionPatterns:
       - name: internal-token
         pattern: "(?i)internal_token=[a-z0-9-]+"
+
+    # Custom redaction is fail-closed: at most 16 patterns, 64 characters
+    # per normalized name, 256 characters per expression, 4,096 total
+    # matches, and 1,000,000 intermediate output characters per value.
 
   limits:
     maxPromptChars: 12000
@@ -146,7 +153,21 @@ observme:
 
 `query.maxLogs`, `query.maxTraces`, `query.maxMetricSeries`, and `query.maxAgents` accept integers from 1 through 100. Query clients enforce the same upper bound at runtime before issuing backend requests.
 
+The top-level `environment` accepts only `production`, `development`, or `test`. It drives production transport validation and the `environment` metric label. In YAML it does not automatically rewrite `resource.attributes["deployment.environment.name"]`; set both consistently. `OBSERVME_ENVIRONMENT` maps to both fields. Likewise, the top-level YAML `tenant` field has no separate live routing/telemetry read; set `resource.attributes["observme.tenant.id"]`. `OBSERVME_TENANT` maps to both values.
+
+`workflow.maxDepthWarning` currently clamps the low-cardinality `subagent_depth` metric label; it does not emit a UI warning. `workflow.maxFanoutWarning` is accepted and configurable but has no current live read after config loading.
+
+`metrics.labels` is currently a reserved compatibility field. Config validation rejects forbidden high-cardinality names in the array, but live metric recorders do not add configured labels to measurements.
+
+`capture.filePaths` is currently a reserved compatibility setting. It is accepted, can be overridden by `OBSERVME_CAPTURE_FILE_PATHS`, and appears in `/obs status`, but no live handler uses it to export a direct path field. `privacy.pathMode` independently scrubs recognized absolute paths embedded in prompts, responses, tool data, or Bash content when those fields are enabled. `pathMode: full` preserves those embedded paths regardless of `capture.filePaths`.
+
+The redaction helper includes a PII-detector stage for programmatic callers, but the current `ObservMeConfig` schema has no PII setting and live content capture does not inject a detector. Built-in secret, path, custom-pattern, truncation, and salted-hash stages remain active; do not describe PII removal as a live guarantee.
+
 ## 2. Environment Variables
+
+### 2.1 Configuration overrides
+
+These names are mapped by `src/config/load-config.ts` and can come from a trusted project `.env` or the process environment:
 
 ```text
 OBSERVME_ENABLED
@@ -157,20 +178,11 @@ OBSERVME_OTLP_PROTOCOL
 OBSERVME_OTLP_TRACES_ENDPOINT
 OBSERVME_OTLP_METRICS_ENDPOINT
 OBSERVME_OTLP_LOGS_ENDPOINT
+OBSERVME_OTLP_TIMEOUT_MS
 OBSERVME_OTLP_TOKEN
 OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS
-OBSERVME_WORKFLOW_ID
 OBSERVME_WORKFLOW_MAX_DEPTH_WARNING
 OBSERVME_WORKFLOW_MAX_FANOUT_WARNING
-OBSERVME_AGENT_ID
-OBSERVME_PARENT_AGENT_ID
-OBSERVME_ROOT_AGENT_ID
-OBSERVME_PARENT_SESSION_ID
-OBSERVME_PARENT_TRACE_ID
-OBSERVME_PARENT_SPAN_ID
-OBSERVME_AGENT_DEPTH
-OBSERVME_SPAWN_ID
-OBSERVME_AGENT_CAPABILITY
 OBSERVME_PROPAGATE_TRACE_CONTEXT
 OBSERVME_PROPAGATE_TO_SUBAGENTS
 OBSERVME_WRITE_CORRELATION_ENTRY
@@ -183,7 +195,6 @@ OBSERVME_GRAFANA_LOKI_DATASOURCE_UID
 OBSERVME_GRAFANA_PROMETHEUS_DATASOURCE_UID
 OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY
 OBSERVME_GRAFANA_PREFER_IPV4
-OBSERVME_HASH_SALT
 OBSERVME_CAPTURE_PROMPTS
 OBSERVME_CAPTURE_RESPONSES
 OBSERVME_CAPTURE_TOOL_ARGUMENTS
@@ -197,7 +208,30 @@ OBSERVME_ALLOW_UNSAFE_CAPTURE
 OBSERVME_ALLOW_INSECURE_TRANSPORT
 ```
 
-### 2.1 Active-agent lease configuration
+`OBSERVME_HASH_SALT` is not a config-field override. It is the default secure salt input selected by `privacy.tenantSaltEnv` and is required when the redaction pipeline hashes captured content.
+
+### 2.2 Launcher-only lineage envelope
+
+These names are read only from the Pi process environment at the trusted parent/child boundary, not from project `.env` configuration:
+
+```text
+OBSERVME_WORKFLOW_ID
+OBSERVME_AGENT_ID
+OBSERVME_PARENT_AGENT_ID
+OBSERVME_ROOT_AGENT_ID
+OBSERVME_PARENT_SESSION_ID
+OBSERVME_PARENT_TRACE_ID
+OBSERVME_PARENT_SPAN_ID
+OBSERVME_AGENT_DEPTH
+OBSERVME_SPAWN_ID
+OBSERVME_AGENT_CAPABILITY
+traceparent
+tracestate
+```
+
+An ObservMe-aware launcher should pass the environment returned by `startSubagent()` rather than setting these values itself. In particular, a child envelope must not inherit `OBSERVME_AGENT_ID`; the child generates its own agent ID. `OBSERVME_AGENT_ID` is retained as an internal configurable environment-name contract for validated recovery/runtime contexts.
+
+### 2.3 Active-agent lease configuration
 
 | Setting | Default | Supported values | Purpose |
 | --- | --- | --- | --- |
@@ -244,8 +278,9 @@ Project config, project `.env`, and starter-config creation use the same fail-cl
 - The lexical path and resolved canonical target must both remain inside one stable canonical project root.
 - Existing file or directory symlinks are supported when their targets remain inside that root. Out-of-root, dangling, or unverifiable symlinks are rejected.
 - Reads and creates use opened file handles whose file identity, root identity, and canonical containment are verified before bytes are consumed or written. Concurrent replacement of a file, ancestor, or project root therefore rejects the operation instead of following the substituted target.
+- Global and project `observme.yaml` files are limited to 262,144 bytes (256 KiB), and project `.env` is limited to 131,072 bytes (128 KiB). Exact-limit files load; larger and sparse files are rejected from opened-file metadata before content allocation or parsing.
 - Normal missing in-root paths remain supported. Starter creation is exclusive and idempotent, never overwrites an existing file, and removes an unverified empty target if post-open validation fails.
-- Rejected project sources use the bounded `config_source_rejected` classification. Warnings and status diagnostics do not include canonical targets, external paths, file contents, or environment values; the rejected layer is skipped and other accepted layers continue to apply.
+- Unsafe paths use `config_source_rejected`, while oversized files use `config_source_too_large`. Warnings and status diagnostics do not include canonical targets, external paths, file contents, or environment values; the rejected layer is skipped and other accepted layers continue to apply.
 
 Automatic project starter file:
 
@@ -268,7 +303,7 @@ capture:
   toolResults: false
   bashCommands: false
   bashOutput: false
-  filePaths: false
+  filePaths: false  # reserved; no direct live file-path recording point
 privacy:
   redactionEnabled: true
   allowUnsafeCapture: false
@@ -300,15 +335,15 @@ capture:
 
 ## 7. Local Grafana Query Development
 
-For the bundled `observability-stack/`, the supported `/obs` command path is authenticated Grafana through nginx HTTPS at `https://observability.local`. The default stack does not publish Grafana on `localhost:3000`; use a direct `http://127.0.0.1:<port>` Grafana URL only for tests or a custom Compose override.
+For the bundled `observability-stack/`, the supported `/obs` command path is authenticated Grafana through Nginx at `http://localhost`. The default stack does not publish Grafana directly on `localhost:3000`; Nginx on host port 80 is the supported entrypoint.
 
 ```yaml
 query:
   enabled: true
   links:
-    traceUrlTemplate: https://observability.local/explore?left=...
+    traceUrlTemplate: http://localhost/explore?left=...
   grafana:
-    url: https://observability.local
+    url: http://localhost
     token: ${OBSERVME_GRAFANA_TOKEN}      # preferred service-account/bearer token
     username: admin                       # local Basic auth fallback
     password: ${OBSERVME_GRAFANA_PASSWORD}
@@ -317,9 +352,9 @@ query:
       loki: loki
       prometheus: prometheus
     tls:
-      insecureSkipVerify: true            # local self-signed cert only
+      insecureSkipVerify: false           # no TLS on the bundled local endpoint
     transport:
-      preferIPv4: true                    # avoids observability.local IPv6 stalls
+      preferIPv4: false                   # localhost needs no forced address family
 ```
 
 Rules:
@@ -330,8 +365,9 @@ Rules:
 - When the token is blank or an unresolved placeholder, a resolved `query.grafana.username` and `query.grafana.password` are sent as Basic auth for local development.
 - Query-backed commands and `/obs health` must fail fast before Grafana calls when Grafana auth is unresolved/missing/incomplete, `query.grafana.url` is invalid, or a required datasource UID is blank.
 - `/obs health` must report Grafana `401`/`403` responses as authentication failures and must not print token or password values.
-- `query.grafana.tls.insecureSkipVerify=true` is only for local self-signed certificates; production requires `privacy.allowInsecureTransport=true` as an explicit acknowledgement and should trust the CA instead.
-- `transport.preferIPv4=true` uses Node's local HTTP(S) transport with IPv4 DNS lookup for Grafana calls.
+- The bundled endpoint is plain local HTTP, so `query.grafana.tls.insecureSkipVerify=false`; `privacy.allowInsecureTransport=true` acknowledges the development-only plaintext transport.
+- `query.grafana.tls.insecureSkipVerify=true` is only for a custom self-signed HTTPS profile; production requires `privacy.allowInsecureTransport=true` as an explicit acknowledgement and should trust the CA instead.
+- `transport.preferIPv4=true` uses Node's local HTTP(S) transport with IPv4 DNS lookup when a custom hostname needs it; the bundled localhost profile leaves it false.
 - Provisioned datasource UIDs are `tempo`, `loki`, and `prometheus`; Loki selectors use normalized labels such as `service_name`, `pi_session_id`, `event_name`, and `event_category` for ObservMe data.
 
 ## 8. Unsafe Debug Mode

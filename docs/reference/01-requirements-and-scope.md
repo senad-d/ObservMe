@@ -73,7 +73,7 @@ ObservMe must never block Pi agent execution because the collector or backend is
 
 Required behavior:
 
-- Export failures are logged locally only as minimal warnings through Pi UI when debug is enabled.
+- Export failures update bounded runtime status and emit secret-safe diagnostics when a telemetry/UI path is available; there is no ObservMe debug-mode setting.
 - Telemetry is dropped when queues are full.
 - Tool calls, model calls, and sessions must continue.
 
@@ -90,8 +90,10 @@ capture:
   toolResults: false
   bashCommands: false
   bashOutput: false
-  filePaths: false
+  filePaths: false  # reserved; no direct live file-path recording point
 ```
+
+Recognized absolute paths embedded in other enabled content are controlled by `privacy.pathMode`; `pathMode: full` preserves them regardless of `capture.filePaths`.
 
 Metadata such as token counts, duration, status, model, provider, tool name, agent role, subagent depth, and error class is captured by default. High-cardinality identifiers such as `pi.workflow.id`, `pi.workflow.root_agent_id`, `pi.agent.id`, `pi.agent.parent_id`, `pi.agent.run.id`, `pi.session.id`, trace IDs, and tool-call IDs are allowed on spans/logs but must not be promoted to metric labels by default.
 
@@ -131,9 +133,9 @@ ObservMe is not:
 - A vendor-specific AI observability SDK
 - A prompt evaluation framework
 - A policy enforcement extension
-- A session replay system by default
+- A full session replay system
 
-Session replay can be enabled only with explicit content capture settings.
+The explicit `/obs backfill` command can replay bounded current-session entries as OTEL log records after confirmation. It does not reconstruct historical spans or metrics, and content remains governed by the normal capture policy.
 
 ## 5. Production Capabilities
 
@@ -149,7 +151,7 @@ Session replay can be enabled only with explicit content capture settings.
 - Bash execution spans
 - Compaction spans
 - Branch spans
-- Extension error spans
+- Bounded extension failure logs and metrics (no dedicated extension-error span)
 
 ### Metrics
 
@@ -190,6 +192,7 @@ Session replay can be enabled only with explicit content capture settings.
 - `/obs logs`
 - `/obs link`
 - `/obs agents`
+- `/obs backfill`
 
 ## 6. Success Criteria
 

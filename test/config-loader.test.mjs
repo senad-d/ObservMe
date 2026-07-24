@@ -1,6 +1,7 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,7 +13,12 @@ import {
   loadSessionConfigWithDiagnostics,
   parseObservMeConfigText,
 } from "../src/config/load-config.ts";
+import {
+  OBSERVME_CONFIG_FILE_MAX_BYTES,
+  OBSERVME_ENV_FILE_MAX_BYTES,
+} from "../src/config/read-source-file.ts";
 import { applyContentCapturePolicy } from "../src/privacy/content-capture.ts";
+import { createEnvTenantSaltSource, trySha256 } from "../src/privacy/hash.ts";
 
 const globalConfigYaml = `
 observme:
@@ -64,6 +70,77 @@ async function createTempConfigProject() {
 
 async function removeTempConfigProject(path) {
   await rm(path, { force: true, recursive: true });
+}
+
+function padSourceTextToBytes(text, byteLimit) {
+  const remainingBytes = byteLimit - Buffer.byteLength(text);
+  assert.ok(remainingBytes >= 0);
+  return `${text}${"#".repeat(remainingBytes)}`;
+}
+
+async function createSizedConfigSources(sizeOffset, sparseMultiplier = 1) {
+  const cwd = await createTempConfigProject();
+  const globalConfigPath = join(cwd, "global-observme.yaml");
+  const projectConfigPath = join(cwd, CONFIG_DIR_NAME, "observme.yaml");
+  const envFilePath = join(cwd, ".env");
+  await mkdir(join(cwd, CONFIG_DIR_NAME));
+
+  if (sparseMultiplier === 1) {
+    await writeFile(
+      globalConfigPath,
+      padSourceTextToBytes("observme:\n  tenant: global-limit\n", OBSERVME_CONFIG_FILE_MAX_BYTES + sizeOffset),
+    );
+    await writeFile(
+      projectConfigPath,
+      padSourceTextToBytes("observme:\n  tenant: project-limit\n", OBSERVME_CONFIG_FILE_MAX_BYTES + sizeOffset),
+    );
+    await writeFile(
+      envFilePath,
+      padSourceTextToBytes("OBSERVME_TENANT=env-limit\n", OBSERVME_ENV_FILE_MAX_BYTES + sizeOffset),
+    );
+  } else {
+    await Promise.all([
+      writeFile(globalConfigPath, ""),
+      writeFile(projectConfigPath, ""),
+      writeFile(envFilePath, ""),
+    ]);
+    await Promise.all([
+      truncate(globalConfigPath, OBSERVME_CONFIG_FILE_MAX_BYTES * sparseMultiplier + sizeOffset),
+      truncate(projectConfigPath, OBSERVME_CONFIG_FILE_MAX_BYTES * sparseMultiplier + sizeOffset),
+      truncate(envFilePath, OBSERVME_ENV_FILE_MAX_BYTES * sparseMultiplier + sizeOffset),
+    ]);
+  }
+
+  return { cwd, globalConfigPath };
+}
+
+async function assertOversizedConfigSourcesRejected(sparseMultiplier = 1) {
+  const { cwd, globalConfigPath } = await createSizedConfigSources(1, sparseMultiplier);
+  const warnings = [];
+
+  try {
+    const loaded = await loadSessionConfigWithDiagnostics({
+      cwd,
+      globalConfigPath,
+      isProjectTrusted: true,
+      env: {},
+      logger: { warn: message => warnings.push(message) },
+    });
+
+    assert.deepEqual(loaded.config, defaultObservMeConfig);
+    assert.equal(loaded.diagnostics.globalConfigStatus, "rejected");
+    assert.equal(loaded.diagnostics.projectConfigStatus, "rejected");
+    assert.equal(loaded.diagnostics.envFileStatus, "rejected");
+    assert.deepEqual(loaded.diagnostics.rejection, {
+      issueCodes: ["config_source_too_large"],
+      issueCount: 3,
+    });
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /config_source_too_large/u);
+    assert.doesNotMatch(warnings[0], /observme-config-loader|global-observme|observme\.yaml|\.env/u);
+  } finally {
+    await removeTempConfigProject(cwd);
+  }
 }
 
 const malformedProjectConfigCases = [
@@ -426,6 +503,35 @@ test("session loader keeps normal project config and env paths inside cwd", asyn
   assert.equal(config.otlp.endpoint, "https://project.example.test:4318");
 });
 
+test("session loader accepts global, project, and env files at their exact byte limits", async () => {
+  const { cwd, globalConfigPath } = await createSizedConfigSources(0);
+
+  try {
+    const loaded = await loadSessionConfigWithDiagnostics({
+      cwd,
+      globalConfigPath,
+      isProjectTrusted: true,
+      env: {},
+    });
+
+    assert.equal(loaded.diagnostics.globalConfigStatus, "loaded");
+    assert.equal(loaded.diagnostics.projectConfigStatus, "loaded");
+    assert.equal(loaded.diagnostics.envFileStatus, "loaded");
+    assert.equal(loaded.config.tenant, "env-limit", "normal source precedence remains intact at the limit");
+    assert.equal(loaded.diagnostics.rejection, undefined);
+  } finally {
+    await removeTempConfigProject(cwd);
+  }
+});
+
+test("session loader rejects allocated global, project, and env files over their byte limits", async () => {
+  await assertOversizedConfigSourcesRejected();
+});
+
+test("session loader rejects oversized sparse config and env files before reading their contents", async () => {
+  await assertOversizedConfigSourcesRejected(64);
+});
+
 test("session loader rejects out-of-root directory and environment file symlinks", async () => {
   const cwd = await createTempConfigProject();
   const outsideDirectory = await createTempConfigProject();
@@ -781,6 +887,85 @@ OBSERVME_ALLOW_INSECURE_TRANSPORT=true
 OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS=50000
 `;
 
+const validProcessLineageEnvironment = {
+  OBSERVME_WORKFLOW_ID: "workflow-process",
+  OBSERVME_AGENT_ID: "agent-process",
+  OBSERVME_PARENT_AGENT_ID: "agent-parent-process",
+  OBSERVME_ROOT_AGENT_ID: "agent-root-process",
+  OBSERVME_PARENT_SESSION_ID: "session-parent-process",
+  OBSERVME_PARENT_TRACE_ID: "0123456789abcdef0123456789abcdef",
+  OBSERVME_PARENT_SPAN_ID: "0123456789abcdef",
+  OBSERVME_AGENT_DEPTH: "2",
+  OBSERVME_SPAWN_ID: "spawn-process",
+  OBSERVME_AGENT_CAPABILITY: "review",
+};
+
+const malformedProcessLineageEnvironment = {
+  ...validProcessLineageEnvironment,
+  OBSERVME_WORKFLOW_ID: "private-workflow/unsafe",
+  OBSERVME_PARENT_TRACE_ID: "not-a-private-trace",
+  OBSERVME_AGENT_DEPTH: "999",
+};
+
+test("session loader excludes trusted project .env lineage values from validation", async () => {
+  const loaded = await loadSessionConfigWithDiagnostics({
+    globalConfigPath: "missing-global.yaml",
+    projectConfigPath: "missing-project.yaml",
+    envFilePath: "project.env",
+    isProjectTrusted: true,
+    readText: createReader({
+      "project.env": [
+        ...Object.entries(malformedProcessLineageEnvironment).map(([name, value]) => `${name}=${value}`),
+        "OBSERVME_TENANT=project-tenant",
+        "OBSERVME_HASH_SALT=trusted-project-salt",
+      ].join("\n"),
+    }),
+    env: { OBSERVME_TENANT: "process-tenant" },
+    runtimeOptions: { capture: { prompts: true } },
+  });
+  const capture = applyContentCapturePolicy({
+    captureEnabled: loaded.config.capture.prompts,
+    value: "password=project-secret",
+    kind: "prompt",
+    config: loaded.config,
+  });
+
+  assert.equal(loaded.diagnostics.rejection, undefined);
+  assert.equal(loaded.config.tenant, "process-tenant", "process config overrides retain precedence");
+  assert.equal(loaded.config.resource.attributes["observme.tenant.id"], "process-tenant");
+  assert.equal(capture.mode, "redacted", "the trusted project salt remains available to capture");
+  assert.equal(capture.captured, true);
+});
+
+test("session loader validates lineage values only from the Pi process environment", async () => {
+  const valid = await loadSessionConfigWithDiagnostics({
+    globalConfigPath: "missing-global.yaml",
+    isProjectTrusted: false,
+    readText: createReader({}),
+    env: validProcessLineageEnvironment,
+  });
+  const warnings = [];
+  const malformed = await loadSessionConfigWithDiagnostics({
+    globalConfigPath: "missing-global.yaml",
+    isProjectTrusted: false,
+    readText: createReader({}),
+    env: malformedProcessLineageEnvironment,
+    logger: { warn: message => warnings.push(message) },
+  });
+
+  assert.equal(valid.diagnostics.rejection, undefined);
+  assert.deepEqual(malformed.config, defaultObservMeConfig, "malformed process provenance fails open to defaults");
+  assert.deepEqual(malformed.diagnostics.rejection, {
+    issueCodes: ["malformed_lineage_value"],
+    issueCount: 3,
+  });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /malformed_lineage_value/u);
+  for (const value of Object.values(malformedProcessLineageEnvironment)) {
+    assert.equal(warnings[0].includes(value), false);
+  }
+});
+
 test("session loader reads trusted project .env and lets system env override it", async () => {
   const calls = [];
   const config = await loadSessionConfig({
@@ -854,6 +1039,43 @@ test("session loader registers trusted project .env tenant salt for redacted cap
     if (previousSalt === undefined) delete process.env.OBSERVME_HASH_SALT;
     else process.env.OBSERVME_HASH_SALT = previousSalt;
   }
+});
+
+test("session loader retains only the selected custom salt with process-over-project precedence", async () => {
+  const config = await loadSessionConfig({
+    globalConfigPath: "missing-global.yaml",
+    projectConfigPath: "project.yaml",
+    envFilePath: "project.env",
+    isProjectTrusted: true,
+    readText: createReader({
+      "project.yaml": "observme:\n  privacy:\n    tenantSaltEnv: CUSTOM_OBSERVME_SALT\n",
+      "project.env": [
+        "OBSERVME_CAPTURE_PROMPTS=true",
+        "OBSERVME_TENANT=project-tenant",
+        "CUSTOM_OBSERVME_SALT=project-custom-salt",
+        "DATABASE_URL=postgres://project-secret",
+      ].join("\n"),
+    }),
+    env: {
+      OBSERVME_TENANT: "process-tenant",
+      CUSTOM_OBSERVME_SALT: "process-custom-salt",
+      AWS_SECRET_ACCESS_KEY: "unrelated-process-secret",
+    },
+  });
+  const retainedSource = createEnvTenantSaltSource(config);
+  const expectedHash = createHash("sha256").update("process-custom-salt\0private-input").digest("hex");
+
+  assert.equal(config.capture.prompts, true, "supported project overrides still apply");
+  assert.equal(config.tenant, "process-tenant", "process overrides retain precedence over project .env");
+  assert.deepEqual(retainedSource, {
+    env: { CUSTOM_OBSERVME_SALT: "process-custom-salt" },
+    envName: "CUSTOM_OBSERVME_SALT",
+  });
+  assert.equal(trySha256("private-input", config), expectedHash, "hashing uses the higher-precedence custom salt");
+  assert.doesNotMatch(
+    JSON.stringify(retainedSource),
+    /DATABASE_URL|project-secret|AWS_SECRET_ACCESS_KEY|unrelated-process-secret/u,
+  );
 });
 
 test("factory-safe loader excludes project config and still applies global/env/runtime layers", async () => {

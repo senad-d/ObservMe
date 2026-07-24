@@ -78,6 +78,7 @@ export const AGENT_RUN_ATTRIBUTES = {
   PI_AGENT_RUN_ID: "pi.agent.run.id",
   PI_AGENT_RUN_INDEX: "pi.agent.run.index",
   PI_AGENT_RUN_SOURCE: "pi.agent.run.source",
+  PI_AGENT_RUN_OUTCOME: "pi.agent.run.outcome",
   PI_AGENT_RUN_PROMPT_HASH: "pi.agent.run.prompt.hash",
   PI_AGENT_RUN_PROMPT_LENGTH: "pi.agent.run.prompt.length",
   GEN_AI_AGENT_ID: "gen_ai.agent.id",
@@ -120,6 +121,7 @@ export const AGENT_WAIT_JOIN_ATTRIBUTES = {
 export const TURN_ATTRIBUTES = {
   PI_TURN_ID: "pi.turn.id",
   PI_TURN_INDEX: "pi.turn.index",
+  PI_TURN_OUTCOME: "pi.turn.outcome",
   PI_TURN_BRANCH_PATH_HASH: "pi.turn.branch_path_hash",
   PI_TURN_USER_MESSAGE_HASH: "pi.turn.user_message.hash",
   PI_TURN_USER_MESSAGE_LENGTH: "pi.turn.user_message.length",

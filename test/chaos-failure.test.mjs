@@ -16,6 +16,7 @@ import { SPAN_NAMES } from "../src/semconv/spans.ts";
 import {
   createAgentTreeTracker,
   createObservMeMetrics,
+  createOtelOperationOwnership,
   createSpanRegistry,
   registerHandlers,
 } from "../src/pi/handlers.ts";
@@ -221,6 +222,7 @@ function createHandlerHarness(config, controller) {
 
   registerHandlers(pi, {
     loadConfig: async () => config,
+    otelOperationOwnership: createOtelOperationOwnership(),
     startTelemetry: async options => {
       harness.telemetry = createFakeTelemetry({
         config: options.config,
@@ -501,7 +503,24 @@ test("chaos: redaction exception drops the field, increments failure metric, and
     await harness.pi.handlers.get("tool_execution_start")({
       toolCallId: "tool-redaction",
       toolName: "bash",
+      args: rawValue,
+    }, {});
+    await harness.pi.handlers.get("tool_call")({
+      toolCallId: "tool-redaction",
+      toolName: "bash",
       input: rawValue,
+    }, {});
+    await harness.pi.handlers.get("tool_result")({
+      toolCallId: "tool-redaction",
+      toolName: "bash",
+      input: rawValue,
+      result: "blocked",
+    }, {});
+    await harness.pi.handlers.get("tool_execution_end")({
+      toolCallId: "tool-redaction",
+      toolName: "bash",
+      success: false,
+      result: "blocked",
     }, {});
   });
 
@@ -510,7 +529,7 @@ test("chaos: redaction exception drops the field, increments failure metric, and
     telemetry.meter.records,
     OBSERVME_COUNTER_METRIC_NAMES.REDACTION_FAILURES_TOTAL,
     1,
-    record => record.attributes.operation === "tool_content_capture" && record.attributes.error_class === "redaction_error",
+    record => record.attributes.operation === "tool_content_capture" && record.attributes.error_class === "redaction_failed",
   );
   assert.ok(telemetry.logger.records.some(record => isRedactionFailedLog(record, "tool_content_capture")));
   assert.doesNotMatch(JSON.stringify(serializableSpanTelemetry(telemetry.tracer.spans)), /raw secret value/u);
@@ -531,6 +550,6 @@ function isRedactionFailedLog(record, operation) {
     record.body === LOG_EVENT_NAMES.REDACTION_FAILED &&
     record.attributes?.[LOG_ATTRIBUTES.EVENT_CATEGORY] === "redaction" &&
     record.attributes?.operation === operation &&
-    record.attributes?.[LOG_ATTRIBUTES.ERROR_TYPE] === "redaction_error"
+    record.attributes?.[LOG_ATTRIBUTES.ERROR_TYPE] === "redaction_failed"
   );
 }

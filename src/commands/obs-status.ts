@@ -13,7 +13,10 @@ import {
   describeGrafanaTransportSecurity,
   describeOtlpTransportSecurity,
 } from "../config/transport-security.ts";
-import { getGrafanaQueryReadiness } from "../query/grafana-readiness.ts";
+import {
+  formatGrafanaQueryDisabledGuidance,
+  getGrafanaQueryReadiness,
+} from "../query/grafana-readiness.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { notifyObsCommand } from "./obs-command-support.ts";
 import { sanitizeObsDiagnosticText } from "./obs-diagnostics.ts";
@@ -335,6 +338,8 @@ function formatFileSourceStatus(
 
 function formatGrafanaQueryReadiness(config: ObservMeConfig): string {
   const readiness = getGrafanaQueryReadiness(config);
+  if (readiness.status === "disabled") return formatGrafanaQueryDisabledGuidance();
+
   const issueCodes = readiness.issues.map(issue => issue.code).join(", ");
   return issueCodes ? `${readiness.status} (${issueCodes})` : readiness.status;
 }

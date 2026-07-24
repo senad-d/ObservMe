@@ -28,7 +28,7 @@ function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function createHarness(config) {
+function createHarness(config, options = {}) {
   const calls = {
     exporterOptions: undefined,
     readerOptions: undefined,
@@ -37,7 +37,7 @@ function createHarness(config) {
     shutdownCalls: 0,
   };
   const meter = createFakeMeter();
-  const provider = createFakeMetricProvider(calls, meter);
+  const provider = createFakeMetricProvider(calls, meter, options.shutdown);
   const sdk = new ObservMeMetricSdk({
     config,
     exporterFactory: options => {
@@ -57,7 +57,7 @@ function createHarness(config) {
   return { sdk, calls, meter };
 }
 
-function createFakeMetricProvider(calls, meter) {
+function createFakeMetricProvider(calls, meter, shutdownAction) {
   return {
     getMeter: () => meter,
     forceFlush: () => {
@@ -65,6 +65,7 @@ function createFakeMetricProvider(calls, meter) {
     },
     shutdown: () => {
       calls.shutdownCalls += 1;
+      return shutdownAction?.();
     },
   };
 }
@@ -159,6 +160,24 @@ test("metric startup failure releases a reader created before provider construct
   assert.equal(sdk.state, "shutdown");
 });
 
+test("failed metric provider shutdown remains owned and retryable", async () => {
+  const { sdk, calls } = createHarness(defaultObservMeConfig, {
+    shutdown: createRejectOnceShutdown("metric shutdown failed"),
+  });
+  await sdk.start();
+
+  await assert.rejects(() => sdk.shutdown(), /metric shutdown failed/u);
+
+  assert.equal(sdk.state, "shutdown_failed");
+  assert.equal(calls.shutdownCalls, 1);
+
+  await sdk.shutdown();
+  await sdk.shutdown();
+
+  assert.equal(sdk.state, "shutdown");
+  assert.equal(calls.shutdownCalls, 2);
+});
+
 test("disabled metrics keep pre-start instruments safe and avoid exporter or provider factories", async () => {
   const config = cloneDefault({ metrics: { enabled: false } });
   const { sdk, calls } = createHarness(config);
@@ -172,6 +191,14 @@ test("disabled metrics keep pre-start instruments safe and avoid exporter or pro
   assert.equal(calls.readerOptions, undefined);
   assert.equal(calls.providerOptions, undefined);
 });
+
+function createRejectOnceShutdown(message) {
+  let attempts = 0;
+  return () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error(message);
+  };
+}
 
 test("top-level disablement keeps enabled metric settings from creating exporters or providers", async () => {
   const config = cloneDefault({ enabled: false, metrics: { enabled: true } });

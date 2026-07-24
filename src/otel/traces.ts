@@ -28,7 +28,13 @@ export const DOCUMENTED_TRACE_BATCH_DEFAULTS = {
   exportTimeoutMillis: 3000,
 } satisfies TraceBatchConfig;
 
-export type TracePipelineState = "idle" | "disabled" | "started" | "shutdown";
+export type TracePipelineState =
+  | "idle"
+  | "disabled"
+  | "started"
+  | "shutting_down"
+  | "shutdown_failed"
+  | "shutdown";
 
 export interface OtlpTraceExporterOptions {
   readonly url: string;
@@ -78,6 +84,7 @@ export class ObservMeTraceSdk {
   #processor?: SpanProcessor;
   #provider?: TraceProviderLike;
   #tracer: Tracer = noopTracer;
+  #shutdownPromise?: Promise<void>;
   #state: TracePipelineState = "idle";
 
   constructor(options: ObservMeTraceSdkOptions) {
@@ -123,17 +130,31 @@ export class ObservMeTraceSdk {
 
   async shutdown(): Promise<void> {
     if (this.#state === "shutdown") return;
+    if (this.#state === "shutting_down" && this.#shutdownPromise) return this.#shutdownPromise;
 
+    this.#state = "shutting_down";
+    this.#tracer = noopTracer;
+    const shutdownPromise = this.shutdownOwnedResources();
+    this.#shutdownPromise = shutdownPromise;
+    try {
+      await shutdownPromise;
+    } finally {
+      if (this.#shutdownPromise === shutdownPromise) this.#shutdownPromise = undefined;
+    }
+  }
+
+  private async shutdownOwnedResources(): Promise<void> {
     try {
       if (this.#provider?.shutdown) await this.#provider.shutdown();
       else if (this.#processor) await this.#processor.shutdown();
       else await this.#exporter?.shutdown();
-    } finally {
       this.#provider = undefined;
       this.#processor = undefined;
       this.#exporter = undefined;
       this.#state = "shutdown";
-      this.#tracer = noopTracer;
+    } catch (error) {
+      this.#state = "shutdown_failed";
+      throw error;
     }
   }
 }

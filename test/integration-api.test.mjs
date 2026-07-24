@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { trace } from "@opentelemetry/api";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
@@ -106,6 +107,16 @@ function createFakeTelemetry() {
   };
 }
 
+function captureSubagentMutationState(session) {
+  return {
+    activeSubagentSpawns: session.spans.activeSubagentSpawns.size,
+    agentTreeSize: session.agentTree.size,
+    agentTreeSummary: session.agentTree.summarize(),
+    metricRecords: session.meter.records.length,
+    tracerSpans: session.tracer.spans.length,
+  };
+}
+
 test("integration API is discovered through Pi events and reports inactive sessions safely", () => {
   const events = createEventBus();
   const state = {};
@@ -148,6 +159,73 @@ test("integration discovery ignores malformed providers and event-bus failures",
     }),
     undefined,
   );
+});
+
+test("integration API rejects child environments that Node cannot spawn without mutation", () => {
+  const events = createEventBus();
+  const session = createFakeTelemetry();
+  registerObservMeIntegration({ events }, { session });
+  const api = requestObservMeIntegration({ events });
+  const originalState = captureSubagentMutationState(session);
+  const invalidEnvironments = [
+    { name: "NUL key", env: { "INVALID\u0000KEY": "value" } },
+    { name: "NUL value", env: { VALID_KEY: "invalid\u0000value" } },
+    { name: "equals-sign key", env: { "INVALID=KEY": "value" } },
+    { name: "oversized key", env: { ["K".repeat(129)]: "value" } },
+  ];
+
+  assert.ok(api);
+  for (const invalidEnvironment of invalidEnvironments) {
+    assert.deepEqual(
+      api.startSubagent({ spawnId: "spawn-invalid-environment", env: invalidEnvironment.env }),
+      { ok: false, reason: "invalid_request" },
+      invalidEnvironment.name,
+    );
+    assert.deepEqual(captureSubagentMutationState(session), originalState, invalidEnvironment.name);
+  }
+});
+
+test("integration API returns a sanitized environment that round-trips through a Node child", () => {
+  const events = createEventBus();
+  const session = createFakeTelemetry();
+  registerObservMeIntegration({ events }, { session });
+  const api = requestObservMeIntegration({ events });
+  const boundaryKey = "K".repeat(128);
+  const roundTripValue = `round-trip-${process.platform}`;
+
+  assert.ok(api);
+  const started = api.startSubagent({
+    spawnId: "spawn-environment-round-trip",
+    env: {
+      PATH: process.env.PATH,
+      [boundaryKey]: "boundary-value",
+      OBSERVME_ROUND_TRIP: roundTripValue,
+      OBSERVME_WORKFLOW_ID: "workflow-stale",
+      OBSERVME_AGENT_ID: "agent-stale",
+      OBSERVME_PARENT_AGENT_ID: "parent-stale",
+      OBSERVME_ROOT_AGENT_ID: "root-stale",
+      OBSERVME_AGENT_DEPTH: "63",
+    },
+  });
+  assert.equal(started.ok, true);
+  if (!started.ok) return;
+
+  const launched = spawnSync(process.execPath, ["-e", "process.stdout.write(JSON.stringify(process.env));"], {
+    encoding: "utf8",
+    env: started.env,
+  });
+
+  assert.equal(launched.error, undefined);
+  assert.equal(launched.status, 0, launched.stderr);
+  const childEnvironment = JSON.parse(launched.stdout);
+  assert.equal(childEnvironment[boundaryKey], "boundary-value");
+  assert.equal(childEnvironment.OBSERVME_ROUND_TRIP, roundTripValue);
+  assert.equal(childEnvironment.OBSERVME_WORKFLOW_ID, "workflow-integration");
+  assert.equal(childEnvironment.OBSERVME_AGENT_ID, undefined);
+  assert.equal(childEnvironment.OBSERVME_PARENT_AGENT_ID, "agent-parent");
+  assert.equal(childEnvironment.OBSERVME_ROOT_AGENT_ID, "agent-root");
+  assert.equal(childEnvironment.OBSERVME_AGENT_DEPTH, "0");
+  assert.deepEqual(api.completeSubagent(started.spawnId), { ok: true });
 });
 
 test("integration API rejects unsafe requests and duplicate active lifecycle identifiers", () => {

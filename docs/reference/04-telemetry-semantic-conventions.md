@@ -15,7 +15,7 @@ llm.*         Legacy ObservMe aliases only; do not use as the sole representatio
 
 Do not introduce a bare `agent.*` namespace for new telemetry. Use `pi.agent.*` for Pi runtime lineage and `gen_ai.agent.*` only where OpenTelemetry's GenAI agent attributes fit.
 
-ObservMe-owned metric names use snake_case and are prefixed with `observme_`. Official GenAI metrics such as `gen_ai.client.token.usage` may also be emitted when the selected OpenTelemetry SDK/backend supports them. Because OTEL GenAI conventions are still evolving, ObservMe's `observme_*` metrics remain the stable product contract.
+ObservMe-owned metric names use snake_case and are prefixed with `observme_`. The current runtime registers `gen_ai.client.token.usage` and `gen_ai.client.operation.duration` instruments for compatibility but does not record measurements to them. ObservMe's live `observme_*` metrics remain the stable product contract.
 
 Span names use dotted lowercase operation names:
 
@@ -35,32 +35,34 @@ pi.model.change
 pi.thinking.change
 ```
 
+`pi.model.change` and `pi.thinking.change` are reserved names with no live standalone span. Current model/thinking handlers add events to `pi.session` and emit structured logs.
+
 ## 2. Resource Attributes
 
-Set once at SDK initialization.
+Resource attributes are set once at SDK initialization. Current runtime values come from `resource.attributes`, generated telemetry-instance identity, and generated/validated agent lineage.
 
 ```text
 service.name                       = observme-pi-extension
-service.namespace                  = pi
-service.version                    = <extension version>
-service.instance.id                = <uuid per ObservMe telemetry session/process startup>
-telemetry.sdk.name                 = opentelemetry          # normally set by SDK
-observme.version                   = <extension version>
-observme.instance.id               = <uuid per ObservMe telemetry session/process startup>
-pi.agent.id                        = <uuid or trusted propagated id per logical agent runtime>
-pi.agent.parent_id                 = <parent agent id>, optional high-cardinality resource attribute
-pi.agent.root_id                   = <root agent id>, optional high-cardinality resource attribute
-pi.agent.role                      = root|subagent
+service.namespace                  = optional configured/Collector-added value; not added by the extension default
+service.version                    = reserved/configurable; not added by the extension default
+service.instance.id                = <uuid per ObservMe telemetry session>
+telemetry.sdk.name                 = normally added by the OpenTelemetry SDK
+observme.version                   = reserved/configurable; not added by the extension default
+observme.instance.id               = <same generated uuid per ObservMe telemetry session>
+pi.agent.id                        = <generated id per logical agent runtime>
+pi.agent.parent_id                 = <validated parent agent id>, optional high-cardinality resource attribute
+pi.agent.root_id                   = <root agent id>
+pi.agent.role                      = root|subagent|orchestrator|worker|reviewer|unknown
 pi.agent.depth                     = 0 for root, 1+ for subagents
 pi.agent.capability                = optional trusted safe capability name
-pi.cwd.hash                        = sha256(cwd)
-pi.cwd.basename                    = basename(cwd), optional
+pi.cwd.hash                        = reserved/configurable resource key; live cwd hash is on pi.session.cwd_hash
+pi.cwd.basename                    = reserved/configurable resource key
 deployment.environment.name        = development|test|staging|production|custom
-observme.environment               = dev|ci|prod|unknown, optional compatibility alias
+observme.environment               = optional compatibility alias; not added by the extension default
 observme.tenant.id                 = optional tenant/routing id
 pi.workflow.id                     = generated workflow/root execution id; high-cardinality resource/span/log attribute
 pi.workflow.root_agent_id          = root agent id for the workflow tree
-pi.user.hash                       = optional stable user hash
+pi.user.hash                       = reserved/configurable; not added by the extension default
 pi.project.name                    = optional safe project name
 ```
 
@@ -68,7 +70,7 @@ Never set raw `cwd` by default because paths often include usernames, project co
 
 ## 3. Common Span Attributes
 
-Every ObservMe span should include:
+ObservMe spans include the following fields when the relevant lifecycle state is available. The `pi.session` span carries the full common capture/convention flags; child spans add the applicable correlation fields rather than blindly repeating every key:
 
 ```text
 pi.session.id
@@ -115,20 +117,21 @@ pi.model.id.current
 pi.thinking.level.current
 ```
 
-Events:
+Live events/logs:
 
 ```text
 session.started
 session.named
 session.shutdown
-session.error
 ```
+
+`session_info_changed` updates active metadata and emits `session.named` on the session span and log stream. `session.error` is reserved and has no current live emission point.
 
 Shutdown event/log attributes:
 
 ```text
 pi.workflow.duration_ms
-pi.workflow.status                  # ok|error
+pi.workflow.status                  # ok|error|cancelled|unknown
 ```
 
 ## 5. Workflow, Agent, and Subagent Spans
@@ -156,11 +159,12 @@ Attributes:
 pi.agent.id
 pi.agent.parent_id                  # optional
 pi.agent.root_id
-pi.agent.role                       # root|subagent
+pi.agent.role                       # root|subagent|orchestrator|worker|reviewer|unknown
 pi.agent.depth
 pi.agent.run.id
 pi.agent.run.index
-pi.agent.run.source                 # user|rpc|extension|unknown when known
+pi.agent.run.source                 # Pi-reported source passed through when present; unknown otherwise
+pi.agent.run.outcome                # ok|error|cancelled|unknown
 pi.agent.run.prompt.hash
 pi.agent.run.prompt.length
 ```
@@ -169,8 +173,8 @@ Official GenAI attributes may be mirrored when they describe the Pi agent rather
 
 ```text
 gen_ai.agent.id                     # same as pi.agent.id, span/log attribute only
-gen_ai.agent.name                   # optional configured safe name
-gen_ai.agent.version                # ObservMe/Pi agent version if meaningful
+gen_ai.agent.name                   # reserved; not currently emitted
+gen_ai.agent.version                # reserved; not currently emitted
 ```
 
 ### 5.2 Subagent Spawn Span
@@ -189,7 +193,7 @@ Attributes:
 pi.agent.spawn.id
 pi.agent.spawn.type                 # tool|command|extension|unknown
 pi.agent.spawn.reason               # delegated_task|parallel_search|review|tool_wrapper|unknown
-pi.agent.spawn.outcome              # started|failed|cancelled|timeout
+pi.agent.spawn.outcome              # completed|failed|cancelled; set on terminal transition
 pi.agent.spawn.tool_call_id          # if spawned from a tool call
 pi.agent.spawn.command.hash          # if spawned by a command; never raw by default
 pi.agent.child.id                    # if known after spawn
@@ -225,8 +229,8 @@ pi.agent.id
 pi.agent.child.id                  # high-cardinality span/log attribute only
 pi.agent.spawn.id                  # high-cardinality span/log attribute only
 pi.agent.wait.reason               # dependency|rate_limit|child_running|unknown
-pi.agent.join.status               # ok|error|cancelled|timeout|partial|unknown
-pi.agent.child.status              # ok|error|cancelled|timeout|unknown
+pi.agent.join.status               # waiting|completed|failed|cancelled|timeout|unknown
+pi.agent.child.status              # starting|active|completed|failed|cancelled|orphaned
 pi.agent.failure.propagated         # true if child failure failed the parent operation
 pi.agent.children.active
 pi.agent.child.count
@@ -245,6 +249,7 @@ Attributes:
 ```text
 pi.turn.id
 pi.turn.index
+pi.turn.outcome                     # ok|error|cancelled|unknown
 pi.turn.branch_path_hash
 pi.turn.user_message.hash
 pi.turn.user_message.length
@@ -287,6 +292,7 @@ gen_ai.usage.cache_creation.input_tokens
 gen_ai.usage.reasoning.output_tokens          # if provider reports reasoning/thinking tokens
 gen_ai.conversation.id                        # pi.session.id when safe to expose in spans/logs
 error.type                                    # error class when the operation fails
+http.response.status_code                     # provider HTTP status when the provider response reports one
 ```
 
 ObservMe/Pi-specific LLM attributes:
@@ -346,7 +352,7 @@ pi.tool.error
 pi.tool.error_class
 gen_ai.tool.call.id                 # optional official alias for GenAI tool-call correlation
 gen_ai.tool.name                    # optional official alias
-gen_ai.tool.type                    # function|extension|datastore when applicable
+gen_ai.tool.type                    # function|extension (datastore is reserved; not currently emitted)
 ```
 
 Optional:
@@ -481,7 +487,7 @@ observme_llm_cost_usd_total
 ```text
 observme_workflow_duration_ms
 observme_agent_run_duration_ms
-observme_agent_lifetime_duration_ms
+observme_agent_lifetime_duration_ms       # registered, not recorded by current handlers
 observme_subagent_spawn_duration_ms
 observme_agent_wait_duration_ms
 observme_agent_join_duration_ms
@@ -547,7 +553,7 @@ A renewable lease is a bounded liveness signal, not proof that the operating-sys
 
 - Record `observme_tool_result_size_chars` once from the finalized `tool_execution_end` result, using the same bounded tool labels as tool-call metrics.
 - Increment `observme_agent_run_errors_total` only when an ended agent run is classified as failed.
-- Record `observme_workflow_duration_ms` once for a root workflow at shutdown from its stored start time, with bounded `status=ok|error`.
+- Record `observme_workflow_duration_ms` once for a root workflow at shutdown from its stored start time, with bounded `status=ok|error|cancelled|unknown` derived from observed Pi terminal payloads rather than the shutdown reason.
 - Record `observme_subagent_spawn_duration_ms` from spawn start through either launcher completion or launcher failure.
 - Increment `observme_child_agent_failures_total` when an actual child completion/join reports failed status; a launcher failure before child creation is only a spawn failure.
 - Increment `observme_parent_recovered_from_child_failure_total` once when a failed child is joined with `failurePropagated=false` and parent recovery is confirmed.
@@ -590,14 +596,16 @@ Metric labels for these signals are restricted to the low-cardinality allowlist 
 
 This telemetry contract must not require changing project trust behavior, `/obs status`, `/obs health`, the configured local OTLP endpoint, Grafana authentication/profile, or intentionally enabled local debug capture settings.
 
-### 12.7 Optional official GenAI metrics
+### 12.7 Reserved official GenAI metrics
 
-Emit these in addition to ObservMe metrics only when the SDK/backend path handles dotted OTEL metric names correctly:
+The runtime registers these histogram instruments but current handlers never call `record()` on them:
 
 ```text
-gen_ai.client.token.usage                     # histogram, unit {token}, attribute gen_ai.token.type=input|output
-gen_ai.client.operation.duration              # histogram, unit s
+gen_ai.client.token.usage
+gen_ai.client.operation.duration
 ```
+
+Use the live `observme_llm_*` counters and `observme_llm_request_duration_ms` histogram. Do not build dashboards or alerts that assume the reserved GenAI instruments contain data.
 
 ## 13. Metric Labels
 
@@ -614,13 +622,13 @@ status
 error_class
 reason                                       # bounded enum only, e.g. span_registry_full|export_timeout
 agent_role                                  # root|subagent|orchestrator|worker|reviewer|unknown
-agent_capability                            # bounded configured capability enum/string
+agent_capability                            # reserved for launchers with a bounded capability enum; not currently emitted
 subagent_depth                              # bounded bucket or small integer
 spawn_type                                  # tool|command|extension|unknown
 spawn_reason                                # delegated_task|parallel_search|review|tool_wrapper|unknown
-pi_version
-observme_version
-token_type                                    # Prometheus-normalized alias for gen_ai.token.type when applicable
+pi_version                                  # reserved; not currently emitted
+observme_version                            # reserved; not currently emitted
+token_type                                    # reserved Prometheus-normalized alias for gen_ai.token.type; not currently emitted
 ```
 
 Forbidden high-cardinality labels:
@@ -668,6 +676,7 @@ trace_id
 span_id
 severity
 error.type
+handler                             # failed handler's Pi event name on handler.failed logs
 observme.config.source
 observme.config.rejection.issue_codes
 observme.config.rejection.issue_count
@@ -696,9 +705,13 @@ session.duplicate_start
 workflow.started
 workflow.completed
 workflow.failed
+workflow.cancelled
+workflow.unknown
 agent.run.started
 agent.run.completed
 agent.run.failed
+agent.run.cancelled
+agent.run.unknown
 agent.spawn.started
 agent.spawn.completed
 agent.spawn.failed
@@ -711,6 +724,9 @@ agent.orphaned
 trace_context.propagation_failed
 turn.started
 turn.completed
+turn.failed
+turn.cancelled
+turn.unknown
 llm.request.started
 llm.request.completed
 llm.request.failed
@@ -733,6 +749,8 @@ handler.failed
 telemetry.dropped
 ```
 
+`session.error` remains in the public name registry but has no current live emission point. Content events are opt-in in live telemetry; explicit backfill can reuse lifecycle/content event names for replayed session entries and marks every replayed record with `observme.replayed=true`.
+
 ## 15. Exemplars
 
 Metrics that correspond to traces should include exemplars where supported:
@@ -745,7 +763,6 @@ Metrics that correspond to traces should include exemplars where supported:
 - `observme_tool_duration_ms`
 - `observme_turn_duration_ms`
 - `observme_llm_cost_usd_total`
-- `gen_ai.client.operation.duration`
 
 For Loki OTLP ingestion, remember that attribute names containing dots are normalized with underscores in Loki queries (for example `event.name` becomes `event_name`, and `pi.session.id` becomes `pi_session_id`).
 

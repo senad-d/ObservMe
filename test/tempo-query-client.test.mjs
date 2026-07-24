@@ -10,6 +10,7 @@ const defaultRange = {
   from: new Date("2026-07-07T10:00:00.250Z"),
   to: new Date("2026-07-07T11:00:00.750Z"),
 };
+const responseFragmentMarker = "private-tempo-response-fragment";
 
 function cloneDefaultConfig() {
   return structuredClone(defaultObservMeConfig);
@@ -121,6 +122,69 @@ test("searchTempo clamps oversized runtime maxTraces before transport and result
 
   assert.equal(requestUrl.searchParams.get("limit"), String(QUERY_RESULT_COUNT_MAXIMUM));
   assert.equal(traces.length, 3);
+});
+
+test("searchTempo maps malformed JSON to a fixed body-free schema error", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+
+  await assert.rejects(
+    searchTempo(config, { "pi.session.id": "session-1" }, defaultRange, {
+      fetch: async () => new Response(responseFragmentMarker, { status: 200 }),
+    }),
+    error => {
+      assert.equal(error.message, "Tempo search failed: backend schema error: response body must be valid JSON.");
+      assert.doesNotMatch(error.message, new RegExp(responseFragmentMarker, "u"));
+      return true;
+    },
+  );
+});
+
+test("searchTempo rejects error envelopes, unsupported shapes, and invalid trace items without response fragments", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const cases = [
+    {
+      payload: { status: "error", error: responseFragmentMarker },
+      message: "Tempo search failed: backend returned an error response.",
+    },
+    {
+      payload: [],
+      message: "Tempo search failed: backend schema error: response must be a JSON object.",
+    },
+    {
+      payload: { traces: [{ rootServiceName: responseFragmentMarker }] },
+      message:
+        "Tempo search failed: backend schema error: each response.traces item must include a non-empty traceID or traceId string.",
+    },
+  ];
+
+  for (const item of cases) {
+    await assert.rejects(
+      searchTempo(config, { "pi.session.id": "session-1" }, defaultRange, {
+        fetch: async () => new Response(JSON.stringify(item.payload), { status: 200 }),
+      }),
+      error => {
+        assert.equal(error.message, item.message);
+        assert.doesNotMatch(error.message, new RegExp(responseFragmentMarker, "u"));
+        return true;
+      },
+    );
+  }
+});
+
+test("searchTempo preserves legitimate empty trace envelopes", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+
+  const traces = await searchTempo(config, { "pi.session.id": "session-1" }, defaultRange, {
+    fetch: async () => new Response(JSON.stringify({ traces: [] }), { status: 200 }),
+  });
+
+  assert.deepEqual(traces, []);
 });
 
 test("searchTempo cancels injected responses whose declared Content-Length exceeds the limit", async () => {
@@ -247,14 +311,23 @@ test("searchTempo rejects missing Tempo datasource UID before fetching", async (
   assert.equal(fetchCalls, 0);
 });
 
-test("searchTempo is optional and skips network calls when query integration is disabled", async () => {
+test("searchTempo reports disabled integration distinctly and skips network calls", async () => {
   const config = cloneDefaultConfig();
   config.query.enabled = false;
-  const fetcher = async () => {
-    throw new Error("fetch should not be called when query integration is disabled");
-  };
+  let fetchCalls = 0;
 
-  const traces = await searchTempo(config, { "pi.session.id": "session-1" }, defaultRange, { fetch: fetcher });
-
-  assert.deepEqual(traces, []);
+  await assert.rejects(
+    searchTempo(config, { "pi.session.id": "session-1" }, defaultRange, {
+      fetch: async () => {
+        fetchCalls += 1;
+        throw new Error("fetch should not be called when query integration is disabled");
+      },
+    }),
+    error => {
+      assert.equal(error.name, "GrafanaQueryDisabledError");
+      assert.equal(error.message, "Grafana query integration is disabled (query.enabled=false).");
+      return true;
+    },
+  );
+  assert.equal(fetchCalls, 0);
 });

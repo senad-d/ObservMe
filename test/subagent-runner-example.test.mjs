@@ -97,6 +97,127 @@ test("generic subagent runner wraps any transport with ObservMe lifecycle", asyn
   ]);
 });
 
+test("generic subagent runner preserves returned child failure, cancellation, and timeout distinctions", async () => {
+  const resultCases = [
+    { status: "failed", childStatus: "failed", joinStatus: "failed", terminal: true },
+    { status: "cancelled", childStatus: "cancelled", joinStatus: "cancelled", terminal: true },
+    { status: "timeout", childStatus: "active", joinStatus: "timeout", terminal: false },
+  ];
+
+  for (const resultCase of resultCases) {
+    const calls = [];
+    const events = createEventBus();
+    registerIntegration(events, createIntegrationApi(calls));
+    const transport = {
+      async launch() {
+        return "handle";
+      },
+      async wait() {
+        return { status: resultCase.status };
+      },
+    };
+    const runner = new ObservableSubagentRunner({ events }, transport);
+
+    assert.deepEqual(await runner.run({ request: "work" }), { status: resultCase.status });
+    const endWait = calls.find(call => call[0] === "endWait");
+    const endJoin = calls.find(call => call[0] === "endJoin");
+    assert.equal(endWait[2].childStatus, resultCase.childStatus);
+    assert.equal(endWait[2].joinStatus, resultCase.joinStatus);
+    assert.equal(endJoin[2].childStatus, resultCase.childStatus);
+    assert.equal(endJoin[2].joinStatus, resultCase.joinStatus);
+    assert.equal(calls.some(call => call[0] === "completeSubagent"), resultCase.terminal);
+  }
+});
+
+test("generic subagent runner keeps the child active after wait abort and transport failure", async () => {
+  const errorCases = [
+    { error: new DOMException("cancelled", "AbortError"), joinStatus: "cancelled" },
+    { error: new Error("transport read failed"), joinStatus: "unknown" },
+  ];
+
+  for (const errorCase of errorCases) {
+    const calls = [];
+    const events = createEventBus();
+    registerIntegration(events, createIntegrationApi(calls));
+    const transport = {
+      async launch() {
+        return "handle";
+      },
+      async wait() {
+        throw errorCase.error;
+      },
+    };
+    const runner = new ObservableSubagentRunner({ events }, transport);
+
+    await assert.rejects(runner.run({ request: "work" }), errorCase.error);
+    const endWait = calls.find(call => call[0] === "endWait");
+    const endJoin = calls.find(call => call[0] === "endJoin");
+    assert.equal(endWait[2].childStatus, "active");
+    assert.equal(endWait[2].joinStatus, errorCase.joinStatus);
+    assert.equal(endJoin[2].childStatus, "active");
+    assert.equal(endJoin[2].joinStatus, errorCase.joinStatus);
+    assert.equal(calls.some(call => call[0] === "completeSubagent" || call[0] === "failSubagent"), false);
+  }
+});
+
+test("generic subagent execution can complete once after a timeout", async () => {
+  const calls = [];
+  const events = createEventBus();
+  registerIntegration(events, createIntegrationApi(calls));
+  const results = [{ status: "timeout" }, { status: "completed", value: "late-result" }];
+  let waitIndex = 0;
+  const transport = {
+    async launch() {
+      return "handle";
+    },
+    async wait() {
+      const result = results[waitIndex];
+      waitIndex += 1;
+      return result;
+    },
+  };
+  const runner = new ObservableSubagentRunner({ events }, transport);
+  const execution = await runner.start({ request: "work" });
+
+  assert.deepEqual(await execution.wait(), { status: "timeout" });
+  assert.deepEqual(await execution.wait(), { status: "completed", value: "late-result" });
+  assert.deepEqual(await execution.wait(), { status: "completed", value: "late-result" });
+  assert.equal(waitIndex, 2);
+  assert.equal(calls.filter(call => call[0] === "completeSubagent").length, 1);
+  assert.deepEqual(
+    calls.filter(call => call[0] === "endWait").map(call => [call[2].childStatus, call[2].joinStatus]),
+    [["active", "timeout"], ["completed", "completed"]],
+  );
+});
+
+test("generic subagent runner separates launcher failure from launch cancellation", async () => {
+  const launchCases = [
+    { error: new Error("launch failed"), expectedMethod: "failSubagent", expectedStatus: undefined },
+    { error: new DOMException("cancelled", "AbortError"), expectedMethod: "completeSubagent", expectedStatus: "cancelled" },
+  ];
+
+  for (const launchCase of launchCases) {
+    const calls = [];
+    const events = createEventBus();
+    registerIntegration(events, createIntegrationApi(calls));
+    const transport = {
+      async launch() {
+        throw launchCase.error;
+      },
+      async wait() {
+        return { status: "completed" };
+      },
+    };
+    const runner = new ObservableSubagentRunner({ events }, transport);
+
+    await assert.rejects(runner.run({ request: "work" }), launchCase.error);
+    const outcomeCall = calls.find(call => call[0] === launchCase.expectedMethod);
+    assert.ok(outcomeCall);
+    if (launchCase.expectedStatus) assert.equal(outcomeCall[2].childStatus, launchCase.expectedStatus);
+    assert.equal(calls.some(call => call[0] === "startWait"), false);
+  }
+});
+
 test("generic subagent runner remains transport-functional when ObservMe is absent", async () => {
   const events = createEventBus();
   let launchContext;

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { handleObsCostCommand } from "../src/commands/obs-cost.ts";
+import { handleObsErrorsCommand } from "../src/commands/obs-errors.ts";
 import { handleObsLogsCommand } from "../src/commands/obs-logs.ts";
+import { handleObsToolsCommand } from "../src/commands/obs-tools.ts";
 import { handleObsTraceCommand } from "../src/commands/obs-trace.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 
@@ -71,6 +73,43 @@ test("/obs logs explains a missing current session with a concrete next action",
   assert.match(notifications[0].message, /ObservMe logs unavailable: Session: No current ObservMe session id is available\./u);
   assert.match(notifications[0].message, /Next: run \/obs session to confirm a current session before \/obs logs\./u);
   assertNoSensitiveDiagnosticText(notifications[0].message);
+});
+
+test("query-backed /obs commands report disabled integration consistently without network calls", async () => {
+  const config = createQueryReadyConfig();
+  config.query.enabled = false;
+  const notifications = [];
+  let fetchCalls = 0;
+  const options = {
+    loadConfig: async () => config,
+    fetch: async () => {
+      fetchCalls += 1;
+      throw new Error("disabled query commands must not make network calls");
+    },
+  };
+
+  await handleObsCostCommand("cost", createCommandContext(notifications), options);
+  await handleObsToolsCommand("tools", createCommandContext(notifications), options);
+  await handleObsErrorsCommand("errors", createCommandContext(notifications), options);
+  await handleObsLogsCommand("logs", createCommandContext(notifications), {
+    ...options,
+    getSession: () => ({ sessionId: "session-1" }),
+    now: () => fixedNow,
+  });
+  await handleObsTraceCommand("trace --session session-remote", createCommandContext(notifications), {
+    ...options,
+    getSession: () => ({ sessionId: "session-local", traceId: undefined, turns: 0 }),
+    now: () => fixedNow,
+  });
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(notifications.length, 5);
+  for (const notification of notifications) {
+    assert.equal(notification.type, "error");
+    assert.match(notification.message, /Grafana query integration is disabled \(query\.enabled=false\)\./u);
+    assert.match(notification.message, /Next: set query\.enabled=true to enable Grafana-backed commands\./u);
+    assert.doesNotMatch(notification.message, /generate|wait for telemetry|verify .* datasource/iu);
+  }
 });
 
 test("/obs cost reports missing Grafana auth before fetching", async () => {

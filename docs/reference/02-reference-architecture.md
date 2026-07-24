@@ -164,10 +164,10 @@ ObservMe records current model, cwd hash, session id, agent id, agent run id, tu
 
 ```text
 Pi emits before_provider_request before the provider payload is sent
-ObservMe creates a GenAI client span (`pi.llm.request` or official `chat <model>` naming)
-Attributes: provider, model, api, estimated input, settings
-Pi emits message_update/message_end for the assistant response
-ObservMe ends the span and updates usage/cost metrics from the finalized assistant message
+ObservMe creates the `pi.llm.request` span
+Attributes: provider, model, api, input size, and available request settings
+Pi emits after_provider_response and then message_end for the finalized assistant response
+ObservMe updates response metadata, ends the span at assistant message_end, and records usage/cost metrics
 ```
 
 ### 3.4 Tool Call
@@ -175,17 +175,17 @@ ObservMe ends the span and updates usage/cost metrics from the finalized assista
 ```text
 Pi emits tool_execution_start and tool_call before execution
 ObservMe creates pi.tool.call span
-Pi emits tool_result/tool_execution_end and later a toolResult message
-ObservMe closes the span from tool result/execution-end data
+Pi emits tool_result/tool_execution_end
+ObservMe captures intermediate result metadata and closes the span from tool_execution_end
 Metrics update success/failure and latency
 ```
 
 ### 3.5 Subagent Spawn and Agent-Tree Flow
 
 ```text
-A parent tool/extension decides to start another Pi agent
-ObservMe creates pi.agent.spawn span with spawn id, workflow id, parent agent id, parent session id, tool call id
-ObservMe propagates traceparent/tracestate, OBSERVME_WORKFLOW_ID, and OBSERVME_AGENT_* environment variables to the child
+An ObservMe-aware parent extension requests the integration API before starting another Pi agent
+Its startSubagent call creates pi.agent.spawn telemetry and returns a sanitized lineage/W3C environment
+The launcher passes that returned environment unchanged to the child
 Child ObservMe runtime starts pi.session with pi.workflow.id, pi.agent.parent_id, and pi.agent.root_id
 If the parent waits for the child, ObservMe records pi.agent.wait and/or pi.agent.join spans/events
 Metrics increment subagent spawn, fan-out, depth, active-agent, wait/join, orphan, and propagation-failure counters/histograms; per-agent drill-down uses traces/logs, not metric labels
@@ -225,7 +225,6 @@ pi.session
 │   │   ├── pi.llm.request
 │   │   ├── pi.tool.call bash
 │   │   ├── pi.tool.call read
-│   │   └── event: llm.request.completed
 │   └── pi.turn 2
 │       ├── pi.llm.request
 │       ├── pi.tool.call subagent
@@ -255,7 +254,7 @@ Per-workflow and per-agent drill-down should use Tempo/Loki attributes such as `
 
 ## 6. Deployment Topologies
 
-### 5.1 Local Development
+### 6.1 Local Development
 
 ```text
 Pi -> localhost:4318 -> Collector -> debug exporter
@@ -263,7 +262,7 @@ Pi -> localhost:4318 -> Collector -> debug exporter
 
 Used for extension testing.
 
-### 5.2 Developer Workstation with Shared Collector
+### 6.2 Developer Workstation with Shared Collector
 
 ```text
 Pi -> regional collector DNS -> Grafana stack
@@ -271,7 +270,7 @@ Pi -> regional collector DNS -> Grafana stack
 
 Recommended when developers run Pi locally but telemetry must be centralized.
 
-### 5.3 Ephemeral CI Agent
+### 6.3 Ephemeral CI Agent
 
 ```text
 CI Pi container -> sidecar collector -> central collector gateway -> Grafana stack
@@ -279,7 +278,7 @@ CI Pi container -> sidecar collector -> central collector gateway -> Grafana sta
 
 Sidecar collector provides fast local handoff and retries while the job is alive.
 
-### 5.4 Kubernetes
+### 6.4 Kubernetes
 
 ```text
 Pi pod -> daemonset collector -> gateway collector -> Tempo/Loki/Mimir

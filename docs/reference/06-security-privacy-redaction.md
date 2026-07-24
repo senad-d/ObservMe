@@ -17,10 +17,12 @@ capture:
   toolResults: false
   bashCommands: false
   bashOutput: false
-  filePaths: false
+  filePaths: false  # reserved; no direct live file-path recording point
 ```
 
-Failed-tool output is content, not default operational metadata. It may appear in the Tools dashboard only after `capture.toolResults` is explicitly enabled. The value must pass the shared capture policy before being emitted as the body of a dedicated `tool.error.captured` log; capture-disabled and fail-closed redaction paths emit no body. Broad session-log queries must exclude `event.category="tool_content"`.
+`capture.filePaths` does not gate paths embedded in other captured fields. It is accepted and shown by `/obs status`, but no current live handler records a standalone path content field. Recognized absolute paths inside enabled prompt, response, tool, or Bash content are controlled by `privacy.pathMode`; `full` preserves them regardless of `capture.filePaths`.
+
+Failed-tool output is content, not default operational metadata. It may appear in the Tools dashboard only after `capture.toolResults` is explicitly enabled. The value must pass the shared capture policy before being emitted as the body of a dedicated `tool.error.captured` log; capture-disabled and fail-closed redaction paths emit no body. Broad session-log queries must exclude both `event.category="llm_content"` and `event.category="tool_content"`.
 
 Default allowed metadata:
 
@@ -80,19 +82,21 @@ error class
 
 ## 4. Redaction Pipeline
 
-Every optional content field must pass through:
+Every optional content field passes through:
 
 ```text
 raw value
   -> size guard
   -> secret detector
-  -> PII detector if enabled
+  -> PII detector stage
   -> path scrubber
   -> custom regex redactors
   -> truncation
   -> hashing
   -> export
 ```
+
+The helper supports an injected PII detector for programmatic use, but the current `ObservMeConfig` schema has no PII setting and live capture does not inject or enable a detector. The PII stage is therefore a pass-through in current extension telemetry. Do not rely on ObservMe as a PII scanner.
 
 ## 5. Secret Detection Patterns
 
@@ -142,7 +146,7 @@ privacy:
   pathMode: hash        # hash|basename|full|drop
 ```
 
-`hash`, `basename`, and `drop` must remove every recognized raw absolute path. Hashes are deterministic only within the configured tenant salt and fail closed when salt resolution fails. `drop` omits a standalone path and uses a bounded placeholder for an embedded path. `full` is the only explicit mode that preserves raw path text; it is reached only after the relevant content/path capture opt-in, and all other redaction stages still apply. URL credential redaction runs before path handling so the remaining URL is not malformed.
+`hash`, `basename`, and `drop` remove every recognized raw absolute path. Hashes are deterministic only within the configured tenant salt and fail closed when salt resolution fails. `drop` omits a standalone path and uses a bounded placeholder for an embedded path. `full` is the only explicit mode that preserves raw path text; it applies whenever another content field is enabled and does not depend on the reserved `capture.filePaths` flag. All other redaction stages still apply. URL credential redaction runs before path handling so the remaining URL is not malformed.
 
 ## 7. Hashing
 
@@ -272,20 +276,13 @@ Never derive tenant solely from raw cwd or username.
 
 ## 14. Auditability
 
-ObservMe should emit security-relevant logs:
-
-- capture settings at startup
-- agent-lineage propagation enabled/disabled
-- redaction enabled/disabled
-- redaction failures
-- exporter authentication failures
-- rejected unsafe config
+Implemented security-relevant diagnostics include bounded `config.rejected`, `redaction.failed`, `export.failed`, `handler.failed`, and `trace_context.propagation_failed` logs, plus secret-safe `/obs status` and `/obs health` output. Session startup attributes include the prompt/response/tool-argument capture flags and redaction state; `/obs status` reports all capture flags. ObservMe does not emit a separate startup audit log for every capture setting or a dedicated exporter-authentication event.
 
 Do not log secrets while reporting security failures.
 
 ## 15. Safe Config Validation
 
-Trusted project config, project `.env`, and starter-config creation share one filesystem boundary. Their lexical paths and canonical targets must remain inside the stable canonical project root. Existing symlinks are supported only when they resolve to files or directories inside that root; out-of-root, dangling, replaced, or unverifiable paths fail closed. Reads and starter writes use identity-verified file handles and recheck containment so a concurrent file, ancestor, or root change cannot substitute an external target. A rejected project source is not loaded, starter creation does not overwrite an existing file, and diagnostics expose only a bounded failure class rather than canonical or external path details.
+Trusted project config, project `.env`, and starter-config creation share one filesystem boundary. Their lexical paths and canonical targets must remain inside the stable canonical project root. Existing symlinks are supported only when they resolve to files or directories inside that root; out-of-root, dangling, replaced, or unverifiable paths fail closed. Reads and starter writes use identity-verified file handles and recheck containment so a concurrent file, ancestor, or root change cannot substitute an external target. Before allocation, opened-file metadata also enforces a 256 KiB limit for global/project `observme.yaml` and a 128 KiB limit for project `.env`; oversized and sparse sources fail closed with a fixed path-free classification. A rejected project source is not loaded, starter creation does not overwrite an existing file, and diagnostics expose only a bounded failure class rather than canonical or external path details.
 
 Reject config if:
 

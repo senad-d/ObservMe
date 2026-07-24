@@ -92,12 +92,12 @@ export const agentEvents = {
 export const turnEvents = {
   start: {
     type: "turn_start",
-    turnIndex: 1,
+    turnIndex: 0,
     timestamp: 1_750_000_000_000,
   } satisfies TurnStartEvent,
   end: {
     type: "turn_end",
-    turnIndex: 1,
+    turnIndex: 0,
     message: assistantMessage,
     toolResults: [],
   } satisfies TurnEndEvent,
@@ -240,3 +240,108 @@ export const sessionShutdownEvent = {
   type: "session_shutdown",
   reason: "quit",
 } satisfies SessionShutdownEvent;
+
+const assistantErrorMessage = {
+  ...assistantMessage,
+  content: [{ type: "text", text: "Provider request failed." }],
+  stopReason: "error",
+  errorMessage: "provider unavailable",
+} satisfies TurnEndEvent["message"];
+
+const assistantAbortedMessage = {
+  ...assistantMessage,
+  content: [{ type: "text", text: "Request cancelled." }],
+  stopReason: "aborted",
+  errorMessage: "cancelled by user",
+} satisfies TurnEndEvent["message"];
+
+const assistantToolUseMessage = {
+  ...assistantMessage,
+  content: [{ type: "toolCall", id: "terminal-tool-1", name: "read", arguments: { path: "README.md" } }],
+  stopReason: "toolUse",
+} satisfies TurnEndEvent["message"];
+
+const successfulToolResultMessage = {
+  role: "toolResult",
+  toolCallId: "terminal-tool-1",
+  toolName: "read",
+  content: [{ type: "text", text: "ok" }],
+  isError: false,
+  timestamp: 1_750_000_002_000,
+} satisfies TurnEndEvent["toolResults"][number];
+
+const failedToolResultMessage = {
+  ...successfulToolResultMessage,
+  content: [{ type: "text", text: "read failed" }],
+  isError: true,
+} satisfies TurnEndEvent["toolResults"][number];
+
+const unknownTerminalMessage = {
+  role: "user",
+  content: "No assistant result was emitted.",
+  timestamp: 1_750_000_002_500,
+} satisfies TurnEndEvent["message"];
+
+export const terminalOutcomeEvents = {
+  success: {
+    turn: {
+      type: "turn_end",
+      turnIndex: 0,
+      message: assistantMessage,
+      toolResults: [successfulToolResultMessage],
+    } satisfies TurnEndEvent,
+    agent: {
+      type: "agent_end",
+      messages: [unknownTerminalMessage, assistantMessage, successfulToolResultMessage],
+    } satisfies AgentEndEvent,
+  },
+  assistantError: {
+    turn: {
+      type: "turn_end",
+      turnIndex: 0,
+      message: assistantErrorMessage,
+      toolResults: [],
+    } satisfies TurnEndEvent,
+    agent: {
+      type: "agent_end",
+      messages: [assistantErrorMessage],
+    } satisfies AgentEndEvent,
+  },
+  toolError: {
+    turn: {
+      type: "turn_end",
+      turnIndex: 0,
+      message: assistantToolUseMessage,
+      toolResults: [failedToolResultMessage],
+    } satisfies TurnEndEvent,
+    agent: {
+      type: "agent_end",
+      messages: [unknownTerminalMessage, assistantToolUseMessage, failedToolResultMessage, assistantMessage],
+    } satisfies AgentEndEvent,
+  },
+  cancelled: {
+    turn: {
+      type: "turn_end",
+      turnIndex: 0,
+      message: assistantAbortedMessage,
+      toolResults: [],
+    } satisfies TurnEndEvent,
+    agent: {
+      type: "agent_end",
+      messages: [assistantAbortedMessage],
+    } satisfies AgentEndEvent,
+  },
+  unknown: {
+    turn: {
+      type: "turn_end",
+      turnIndex: 0,
+      message: unknownTerminalMessage,
+      toolResults: [],
+    } satisfies TurnEndEvent,
+    agent: {
+      type: "agent_end",
+      messages: [unknownTerminalMessage],
+    } satisfies AgentEndEvent,
+  },
+  shutdown: sessionShutdownEvent,
+} as const;

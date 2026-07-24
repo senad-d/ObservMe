@@ -7,7 +7,13 @@ import {
   ACTIVE_AGENT_LEASE_DURATION_MILLIS_MAXIMUM,
   ACTIVE_AGENT_LEASE_DURATION_MILLIS_MINIMUM,
   ACTIVE_AGENT_LEASE_EXPORT_SAFETY_MARGIN_MILLIS,
+  CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS,
+  TENANT_SALT_ENV_NAME_MAX_CHARS,
 } from "../src/config/schema.ts";
+import {
+  MAX_CUSTOM_REDACTION_PATTERN_CHARS,
+  MAX_CUSTOM_REDACTION_PATTERNS,
+} from "../src/privacy/redact.ts";
 import {
   emitUnsafeCaptureWarning,
   ensureValidObservMeConfig,
@@ -110,6 +116,26 @@ for (const pathMode of documentedPathModeValues) {
     assertValid(cloneDefault({ privacy: { pathMode } }), { env: {} });
   });
 }
+
+test("validation bounds tenant-salt environment names without echoing rejected values", () => {
+  const maximumName = `_${"A".repeat(TENANT_SALT_ENV_NAME_MAX_CHARS - 1)}`;
+  assertValid(cloneDefault({ privacy: { tenantSaltEnv: maximumName } }), { env: {} });
+
+  const invalidNames = [
+    "1PRIVATE_TENANT_SALT",
+    "PRIVATE-TENANT-SALT",
+    "PRIVATE TENANT SALT",
+    "PRIVATE_TENANT_SALT=private-config-value",
+    `A${"B".repeat(TENANT_SALT_ENV_NAME_MAX_CHARS)}`,
+  ];
+
+  for (const tenantSaltEnv of invalidNames) {
+    const result = validateObservMeConfig(cloneDefault({ privacy: { tenantSaltEnv } }), { env: {} });
+    assert.equal(result.valid, false);
+    assert.ok(result.issues.some(issue => issue.code === "invalid_config_shape"));
+    assert.equal(JSON.stringify(result).includes(tenantSaltEnv), false);
+  }
+});
 
 test("removed automatic replay configuration fails structural validation", () => {
   assertInvalid(cloneDefault({ replayOnStart: true }), "invalid_config_shape", { env: {} });
@@ -492,15 +518,41 @@ test("validation rejects unsafe custom redaction regex patterns", () => {
   );
 });
 
-test("validation bounds custom redaction regex pattern count and length", () => {
-  const tooManyPatterns = Array.from({ length: 17 }, (_value, index) => ({ name: `safe-${index}`, pattern: `token-${index}` }));
+test("validation bounds custom redaction pattern names, count, and expression length", () => {
+  const maximumPatterns = Array.from({ length: MAX_CUSTOM_REDACTION_PATTERNS }, (_value, index) => ({
+    name: `safe-${index}`,
+    pattern: `token-${index}`,
+  }));
+  const maximumName = "n".repeat(CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS);
 
+  assertValid(cloneDefault({ privacy: { customRedactionPatterns: maximumPatterns } }));
+  assertValid(cloneDefault({
+    privacy: {
+      customRedactionPatterns: [{ name: maximumName, pattern: "a".repeat(MAX_CUSTOM_REDACTION_PATTERN_CHARS) }],
+    },
+  }));
   assertInvalid(
-    cloneDefault({ privacy: { customRedactionPatterns: tooManyPatterns } }),
+    cloneDefault({
+      privacy: {
+        customRedactionPatterns: [...maximumPatterns, { name: "over-limit", pattern: "over-limit" }],
+      },
+    }),
     "custom_redaction_pattern_limit",
   );
   assertInvalid(
-    cloneDefault({ privacy: { customRedactionPatterns: [{ name: "long", pattern: "a".repeat(257) }] } }),
+    cloneDefault({
+      privacy: {
+        customRedactionPatterns: [{ name: `${maximumName}n`, pattern: "token" }],
+      },
+    }),
+    "invalid_config_shape",
+  );
+  assertInvalid(
+    cloneDefault({
+      privacy: {
+        customRedactionPatterns: [{ name: "long", pattern: "a".repeat(MAX_CUSTOM_REDACTION_PATTERN_CHARS + 1) }],
+      },
+    }),
     "custom_redaction_pattern_too_long",
   );
 });

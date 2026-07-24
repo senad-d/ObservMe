@@ -182,10 +182,14 @@ async function loadObsToolsConfig(ctx: ObsToolsCommandContext, options: ObsTools
 
 async function queryObsTools(config: ObservMeConfig, options: ObsToolsSnapshotOptions): Promise<ObsToolsQueryResults> {
   const client = createPrometheusQueryClient(config, { fetch: options.fetch });
-  const calls = await client.queryPrometheus(OBS_TOOLS_CALLS_PROMQL, undefined, { resultLimit: "metricSeries" });
-  const failures = await client.queryPrometheus(OBS_TOOLS_FAILURES_PROMQL, undefined, { resultLimit: "metricSeries" });
+  const [callsResult, failuresResult] = await Promise.allSettled([
+    client.queryPrometheus(OBS_TOOLS_CALLS_PROMQL, undefined, { resultLimit: "metricSeries" }),
+    client.queryPrometheus(OBS_TOOLS_FAILURES_PROMQL, undefined, { resultLimit: "metricSeries" }),
+  ]);
 
-  return { calls, failures };
+  if (callsResult.status === "rejected") throw callsResult.reason;
+  if (failuresResult.status === "rejected") throw failuresResult.reason;
+  return { calls: callsResult.value, failures: failuresResult.value };
 }
 
 function toObsToolCallRow(series: PrometheusMetricSeries): ObsToolCallRow | undefined {

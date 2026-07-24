@@ -122,8 +122,6 @@ async function queryPrometheusWithTransport(
   time: Date | undefined,
   options: PrometheusQueryExecutionOptions,
 ): Promise<QueryResult> {
-  if (!config.query.enabled) return emptyPrometheusQueryResult();
-
   assertGrafanaQueryReady(config, "prometheus");
   const normalizedQuery = normalizePrometheusQuery(query);
   const queryTime = normalizeQueryTime(time);
@@ -199,18 +197,13 @@ async function readPrometheusQueryResult(
 ): Promise<QueryResult> {
   if (!response.ok) throw new Error(`Prometheus query failed: ${transport.formatHttpFailure(response)}`);
 
-  const payload = (await response.json()) as unknown;
-  const apiError = readPrometheusApiError(payload);
-  if (apiError) throw new Error(`Prometheus query failed: ${apiError}`);
+  const payload = await transport.readJson(response, "prometheus");
+  if (isPrometheusApiError(payload)) throw new Error("Prometheus query failed: backend returned an error response.");
   return extractPrometheusQueryResult(payload, resultLimit);
 }
 
-function readPrometheusApiError(payload: unknown): string | undefined {
-  if (!isRecord(payload) || payload.status !== "error") return undefined;
-
-  const errorType = readOptionalString(payload, "errorType");
-  const errorMessage = readOptionalString(payload, "error");
-  return [errorType, errorMessage].filter(isNonEmptyString).join(": ") || "unknown Prometheus API error";
+function isPrometheusApiError(payload: unknown): boolean {
+  return isRecord(payload) && payload.status === "error";
 }
 
 function createPrometheusSchemaError(reason: string): Error {
@@ -319,30 +312,14 @@ function readStringRecord(value: unknown): Record<string, string> {
   return record;
 }
 
-function readOptionalString(item: Record<string, unknown>, key: string): string | undefined {
-  const value = item[key];
-  if (typeof value !== "string") return undefined;
-
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function readStringOrNumber(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return undefined;
 }
 
-function isNonEmptyString(value: string | undefined): value is string {
-  return value !== undefined;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function emptyPrometheusQueryResult(): QueryResult {
-  return { resultType: "vector", series: [] };
 }
 
 function resolveResultLimit(config: ObservMeConfig, limit: PrometheusResultLimit | number | undefined): number {

@@ -10,8 +10,10 @@ const environmentExampleFile = ".env.example";
 const collectorExampleFile = "examples/collector.yaml";
 const stackDatasourcesFile = "observability-stack/config/grafana/provisioning/datasources/datasources.yaml";
 const stackCollectorFile = "observability-stack/config/otel/otel-collector.yaml";
+const stackEnvironmentExampleFile = "observability-stack/.env.example";
+const stackNginxFile = "observability-stack/nginx/nginx.conf";
 const productionCollectorHeading = "## 6. Production Collector for Grafana Stack";
-const supportedLocalGrafanaUrl = "https://observability.local";
+const supportedLocalGrafanaUrl = "http://localhost";
 const supportedLocalDatasourceUids = {
   tempo: "tempo",
   loki: "loki",
@@ -104,12 +106,12 @@ async function observmeExampleLoadsAsValidSafeConfig() {
   assert.equal(config.query.grafana.username, "admin");
   assert.equal(config.query.grafana.password, "${OBSERVME_GRAFANA_PASSWORD}");
   assert.deepEqual(config.query.grafana.datasourceUids, supportedLocalDatasourceUids);
-  assert.equal(config.query.grafana.tls.insecureSkipVerify, true);
-  assert.equal(config.query.grafana.transport.preferIPv4, true);
+  assert.equal(config.query.grafana.tls.insecureSkipVerify, false);
+  assert.equal(config.query.grafana.transport.preferIPv4, false);
 }
 
 async function observmeExampleMatchesSupportedLocalQueryProfile() {
-  const [config, datasources, collector] = await Promise.all([
+  const [config, datasources, collector, stackEnvironment, nginx] = await Promise.all([
     loadFactoryConfig({
       env: {},
       globalConfigPath: observmeExampleFile,
@@ -117,17 +119,22 @@ async function observmeExampleMatchesSupportedLocalQueryProfile() {
     }),
     readText(stackDatasourcesFile),
     readText(stackCollectorFile),
+    readText(stackEnvironmentExampleFile),
+    readText(stackNginxFile),
   ]);
   const grafanaUrl = new URL(config.query.grafana.url);
   const stackDatasourceUids = extractGrafanaDatasourceUidsByType(datasources);
   const lokiResourceLabels = extractOtelCsvAttributeValue(collector, "loki.resource.labels");
   const lokiAttributeLabels = extractOtelCsvAttributeValue(collector, "loki.attribute.labels");
 
-  assert.equal(grafanaUrl.protocol, "https:");
-  assert.equal(grafanaUrl.hostname, "observability.local");
+  assert.equal(grafanaUrl.protocol, "http:");
+  assert.equal(grafanaUrl.hostname, "localhost");
   assert.equal(config.query.links.traceUrlTemplate, `${supportedLocalGrafanaUrl}/explore?left=...`);
-  assert.equal(config.query.grafana.tls.insecureSkipVerify, true);
-  assert.equal(config.query.grafana.transport.preferIPv4, true);
+  assert.equal(config.query.grafana.tls.insecureSkipVerify, false);
+  assert.equal(config.query.grafana.transport.preferIPv4, false);
+  assert.match(stackEnvironment, /^OBSERVABILITY_URL=http:\/\/localhost$/mu);
+  assert.match(stackEnvironment, /^NGINX_HTTP_PORT=80$/mu);
+  assert.match(nginx, /listen 80 default_server;/u);
   assert.equal(stackDatasourceUids.tempo, config.query.grafana.datasourceUids.tempo);
   assert.equal(stackDatasourceUids.loki, config.query.grafana.datasourceUids.loki);
   assert.equal(stackDatasourceUids.prometheus, config.query.grafana.datasourceUids.prometheus);
@@ -162,9 +169,13 @@ async function observmeExampleIsQueryReadyWithDocumentedSecretInputs() {
   assertSupportedDatasourceReadiness(tokenAuthConfig);
 }
 
-async function environmentExampleDocumentsActiveAgentLease() {
+async function environmentExampleDocumentsLocalProfileAndActiveAgentLease() {
   const environmentExample = await readText(environmentExampleFile);
 
+  assert.match(environmentExample, /^OBSERVME_OTLP_TIMEOUT_MS=3000$/mu);
+  assert.match(environmentExample, /^OBSERVME_GRAFANA_URL=http:\/\/localhost$/mu);
+  assert.match(environmentExample, /^OBSERVME_GRAFANA_TLS_INSECURE_SKIP_VERIFY=false$/mu);
+  assert.match(environmentExample, /^OBSERVME_GRAFANA_PREFER_IPV4=false$/mu);
   assert.match(environmentExample, /^OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS=60000$/mu);
   assert.doesNotMatch(environmentExample, /^OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS=.*(?:token|password|secret)/miu);
 }
@@ -287,7 +298,7 @@ test("example YAML files have parseable YAML syntax", examplesHaveValidYamlSynta
 test("ObservMe example config loads as a valid supported local config", observmeExampleLoadsAsValidSafeConfig);
 test("ObservMe example matches the supported local Grafana query profile", observmeExampleMatchesSupportedLocalQueryProfile);
 test("ObservMe example is query-ready with documented secret inputs", observmeExampleIsQueryReadyWithDocumentedSecretInputs);
-test("environment example documents the active-agent lease without credentials", environmentExampleDocumentsActiveAgentLease);
+test("environment example documents the local profile and active-agent lease without credentials", environmentExampleDocumentsLocalProfileAndActiveAgentLease);
 test("Collector example matches the documented production Grafana-stack reference", collectorExampleMatchesProductionReference);
 test(
   "Collector examples use lease-independent cleanup expiration longer than the default lease",

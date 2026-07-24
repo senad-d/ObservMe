@@ -80,9 +80,11 @@ const documentedLogEventNames = [
   "agent.join.completed",
   "agent.join.started",
   "agent.orphaned",
+  "agent.run.cancelled",
   "agent.run.completed",
   "agent.run.failed",
   "agent.run.started",
+  "agent.run.unknown",
   "agent.spawn.cancelled",
   "agent.spawn.completed",
   "agent.spawn.failed",
@@ -116,11 +118,16 @@ const documentedLogEventNames = [
   "tool.call.started",
   "tool.error.captured",
   "trace_context.propagation_failed",
+  "turn.cancelled",
   "turn.completed",
+  "turn.failed",
   "turn.started",
+  "turn.unknown",
+  "workflow.cancelled",
   "workflow.completed",
   "workflow.failed",
   "workflow.started",
+  "workflow.unknown",
 ].sort((left, right) => left.localeCompare(right));
 
 const snakeCaseObservMeMetricName = /^observme_[a-z0-9]+(?:_[a-z0-9]+)*$/;

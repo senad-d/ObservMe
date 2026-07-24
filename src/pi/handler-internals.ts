@@ -8,6 +8,7 @@ import {
   TraceFlags,
   trace,
 } from "@opentelemetry/api";
+import { recordObsAgentWaitJoinHint } from "../commands/obs-agents-runtime.ts";
 import { recordObsSessionCost, recordObsSessionToolCall } from "../commands/obs-session.ts";
 import { recordObsStatusQueueDrop } from "../commands/obs-status.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
@@ -36,6 +37,7 @@ import type {
   ObservMeHandlerContext,
   ObservMeMetrics,
   ObservMeTelemetrySession,
+  PendingBashOperationState,
   TelemetryLogger,
   TelemetryTracer,
   ToolCallState,
@@ -43,7 +45,8 @@ import type {
 import type { AgentWaitJoinState, SubagentSpawnState } from "./subagent-types.ts";
 
 const OBSERVME_SEMCONV_VERSION = "0.1.0";
-const REDACTION_FAILURE_REASON_MAX_CHARS = 240;
+const REDACTION_FAILURE_REASON = "redaction_failed";
+const TENANT_SALT_UNAVAILABLE_REASON = "tenant_salt_unavailable";
 
 type LlmContentKind = "prompt" | "response" | "thinking";
 
@@ -256,7 +259,7 @@ export function startToolCallState(session: ObservMeTelemetrySession, event: unk
   session.spans.activeToolCalls.set(toolCallId, state);
   session.metrics.toolCalls.add(1, state.labels);
   recordObsSessionToolCall();
-  emitLifecycleLog(session.logger, LOG_EVENT_NAMES.TOOL_CALL_STARTED, attributes);
+  emitLifecycleLog(session.logger, LOG_EVENT_NAMES.TOOL_CALL_STARTED, state.completionLogAttributes);
 
   return state;
 }
@@ -308,6 +311,7 @@ export function buildTurnAttributes(
   runId: string,
   turnId: string,
   turnIndex: number,
+  imageCount: number | undefined,
 ): AttributeMap {
   const userMessage = readString(event, "userMessage") ?? readString(event, "prompt") ?? readString(event, "message");
 
@@ -319,7 +323,7 @@ export function buildTurnAttributes(
     [TURN_ATTRIBUTES.PI_TURN_BRANCH_PATH_HASH]: readString(event, "branchPath") ? hashValue(readString(event, "branchPath")!, session.config) : undefined,
     [TURN_ATTRIBUTES.PI_TURN_USER_MESSAGE_HASH]: userMessage ? hashValue(userMessage, session.config) : undefined,
     [TURN_ATTRIBUTES.PI_TURN_USER_MESSAGE_LENGTH]: userMessage?.length,
-    [TURN_ATTRIBUTES.PI_TURN_USER_MESSAGE_IMAGE_COUNT]: readInteger(event, "imageCount") ?? 0,
+    [TURN_ATTRIBUTES.PI_TURN_USER_MESSAGE_IMAGE_COUNT]: imageCount,
     [TURN_ATTRIBUTES.PI_MODEL_PROVIDER_CURRENT]: resolveSessionModelProvider(event, {}, session),
     [TURN_ATTRIBUTES.PI_MODEL_ID_CURRENT]: resolveSessionModelId(event, {}, session),
   });
@@ -726,14 +730,15 @@ export function recordRedactedSpanContent(
 }
 
 export function buildContentCaptureFailureAttributes(result: ContentCapturePolicyResult): AttributeMap {
-  return withoutUndefinedAttributes({ reason: summarizeContentCaptureErrors(result.errors) });
+  const reason = summarizeContentCaptureErrors(result.errors);
+  return withoutUndefinedAttributes({ reason, [LOG_ATTRIBUTES.ERROR_TYPE]: reason });
 }
 
 export function summarizeContentCaptureErrors(errors: readonly string[]): string | undefined {
-  const firstError = errors.find(error => error.trim().length > 0);
+  const firstError = errors.find(error => error.trim().length > 0)?.trim();
   if (!firstError) return undefined;
-  if (firstError.length <= REDACTION_FAILURE_REASON_MAX_CHARS) return firstError;
-  return `${firstError.slice(0, REDACTION_FAILURE_REASON_MAX_CHARS - 1)}…`;
+  if (firstError.startsWith("tenant salt ")) return TENANT_SALT_UNAVAILABLE_REASON;
+  return REDACTION_FAILURE_REASON;
 }
 
 export function emitCapturedContentLog(
@@ -974,21 +979,39 @@ export function evictSubagentSpawnState(state: SubagentSpawnState, target: Telem
 
 export function evictWaitJoinState(state: AgentWaitJoinState, target: TelemetryDropTarget): void {
   evictSpan(state.span, target);
+  recordObsAgentWaitJoinHint({
+    kind: state.kind,
+    id: state.id,
+    active: false,
+    spawnId: state.spawnId,
+    childAgentId: state.childAgentId,
+    childStatus: state.childStatus,
+    joinStatus: "unknown",
+    reason: state.reason,
+  });
 }
 
 export function closePendingUserBashOperation(
   session: ObservMeTelemetrySession,
-  reason: "bash_overlap_ambiguous" | "bash_session_shutdown",
+  reason: "bash_completion_observer_failed" | "bash_overlap_ambiguous" | "bash_session_shutdown",
   evicted: boolean,
 ): void {
   const pending = session.pendingUserBash;
   if (!pending) return;
 
+  cancelPendingUserBashCompletionPoll(pending);
   if (evicted) pending.span.setAttribute(COMMON_SPAN_ATTRIBUTES.OBSERVME_EVICTED, true);
   pending.span.setStatus({ code: SpanStatusCode.ERROR, message: "bash_execution_incomplete" });
   endActiveSpan(session, pending.span);
   session.pendingUserBash = undefined;
   recordTelemetryDrop(session, reason, { operation: "bash_execution" });
+}
+
+export function cancelPendingUserBashCompletionPoll(pending: PendingBashOperationState): void {
+  if (!pending.completionPollTimer) return;
+
+  clearTimeout(pending.completionPollTimer);
+  pending.completionPollTimer = undefined;
 }
 
 export function endAllActiveSpans(session: ObservMeTelemetrySession): void {
@@ -1008,6 +1031,8 @@ export function endAllActiveSpans(session: ObservMeTelemetrySession): void {
   session.spans.activeTurns.clear();
   session.spans.activeAgentRuns.clear();
   session.turnSequences.clear();
+  session.pendingUserPromptImageCount = undefined;
+  session.nextTurnImageCount = undefined;
   session.childFailureAccounting?.clear();
 }
 

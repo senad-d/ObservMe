@@ -1,9 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  classifyObservMeRunnerOutcome,
   requestObservMeIntegration,
   type ObservMeIntegrationApi,
-  type ObservMeJoinStatus,
   type ObservMeProcessEnvironment,
+  type ObservMeRunnerOutcome,
   type ObservMeSpawnReason,
   type ObservMeSpawnType,
   type ObservMeStartedSubagent,
@@ -62,43 +63,70 @@ export class ObservableSubagentRunner<Request, Handle, Value> {
     this.#transport = transport;
   }
 
-  async run(options: ObservableSubagentRunOptions<Request>): Promise<ChildRunResult<Value>> {
+  async start(options: ObservableSubagentRunOptions<Request>): Promise<ObservableSubagentExecution<Handle, Value>> {
     const observme = requestObservMeIntegration(this.#pi);
     const started = startObservMeSubagent(observme, options);
     const context = createLaunchContext(started, options.environment);
-    let handle: Handle;
 
     try {
-      handle = await this.#transport.launch(options.request, context, options.signal);
+      const handle = await this.#transport.launch(options.request, context, options.signal);
+      return new ObservableSubagentExecution(this.#transport, handle, observme, started);
     } catch (error) {
-      failObservMeLaunch(observme, started, error);
+      const outcome = classifyObservMeRunnerOutcome({ type: "error", phase: "launch", error, signal: options.signal });
+      recordObservMeLaunchError(observme, started, outcome, error);
       throw error;
     }
-
-    return this.waitForResult(observme, started, handle, options.signal);
   }
 
-  private async waitForResult(
+  async run(options: ObservableSubagentRunOptions<Request>): Promise<ChildRunResult<Value>> {
+    const execution = await this.start(options);
+    return execution.wait(options.signal);
+  }
+}
+
+/**
+ * Retains transport and ObservMe ownership after a non-terminal wait outcome.
+ * Call wait() again after a timeout or interrupted/failed result read.
+ */
+export class ObservableSubagentExecution<Handle, Value> {
+  readonly #transport: ChildWaitTransport<Handle, Value>;
+  readonly #handle: Handle;
+  readonly #observme: ObservMeIntegrationApi | undefined;
+  readonly #started: ObservMeStartedSubagent | undefined;
+  #terminalResult?: ChildRunResult<Value>;
+
+  constructor(
+    transport: ChildWaitTransport<Handle, Value>,
+    handle: Handle,
     observme: ObservMeIntegrationApi | undefined,
     started: ObservMeStartedSubagent | undefined,
-    handle: Handle,
-    signal: AbortSignal | undefined,
-  ): Promise<ChildRunResult<Value>> {
-    const wait = startObservMeWait(observme, started);
+  ) {
+    this.#transport = transport;
+    this.#handle = handle;
+    this.#observme = observme;
+    this.#started = started;
+  }
+
+  async wait(signal?: AbortSignal): Promise<ChildRunResult<Value>> {
+    if (this.#terminalResult) return this.#terminalResult;
+    const wait = startObservMeWait(this.#observme, this.#started);
 
     try {
-      const result = await this.#transport.wait(handle, signal);
-      endObservMeWait(observme, started, wait, result);
-      completeObservMeChild(observme, started, childStatus(result.status));
-      recordObservMeJoin(observme, started, result);
+      const result = await this.#transport.wait(this.#handle, signal);
+      const outcome = classifyObservMeRunnerOutcome({ type: "result", status: result.status });
+      recordObservMeWaitOutcome(this.#observme, this.#started, wait, outcome, result.failurePropagated);
+      if (outcome.terminalChildStatus) this.#terminalResult = result;
       return result;
     } catch (error) {
-      endObservMeWaitFailure(observme, started, wait);
-      completeObservMeChild(observme, started, "failed");
-      recordObservMeJoinFailure(observme, started);
+      const outcome = classifyObservMeRunnerOutcome({ type: "error", phase: "wait", error, signal });
+      recordObservMeWaitOutcome(this.#observme, this.#started, wait, outcome);
       throw error;
     }
   }
+}
+
+interface ChildWaitTransport<Handle, Value> {
+  wait(handle: Handle, signal?: AbortSignal): Promise<ChildRunResult<Value>>;
 }
 
 function startObservMeSubagent<Request>(
@@ -141,12 +169,18 @@ function completeObservMeChild(
   });
 }
 
-function failObservMeLaunch(
+function recordObservMeLaunchError(
   observme: ObservMeIntegrationApi | undefined,
   started: ObservMeStartedSubagent | undefined,
+  outcome: ObservMeRunnerOutcome,
   error: unknown,
 ): void {
   if (!observme || !started) return;
+  if (outcome.terminalChildStatus) {
+    completeObservMeChild(observme, started, outcome.terminalChildStatus);
+    return;
+  }
+  if (outcome.kind !== "launcher_failure") return;
   observme.failSubagent(started.spawnId, {
     childAgentId: started.childAgentId,
     errorClass: safeErrorClass(error),
@@ -167,95 +201,63 @@ function startObservMeWait(
   return wait.ok ? wait : undefined;
 }
 
-function endObservMeWait<Value>(
+function recordObservMeWaitOutcome(
   observme: ObservMeIntegrationApi | undefined,
   started: ObservMeStartedSubagent | undefined,
   wait: { readonly id: string } | undefined,
-  result: ChildRunResult<Value>,
+  outcome: ObservMeRunnerOutcome,
+  failurePropagated?: boolean,
+): void {
+  endObservMeWait(observme, started, wait, outcome, failurePropagated);
+  if (outcome.terminalChildStatus) completeObservMeChild(observme, started, outcome.terminalChildStatus);
+  recordObservMeJoin(observme, started, outcome, failurePropagated);
+}
+
+function endObservMeWait(
+  observme: ObservMeIntegrationApi | undefined,
+  started: ObservMeStartedSubagent | undefined,
+  wait: { readonly id: string } | undefined,
+  outcome: ObservMeRunnerOutcome,
+  failurePropagated?: boolean,
 ): void {
   if (!observme || !started || !wait) return;
   observme.endWait(wait.id, {
     spawnId: started.spawnId,
     childAgentId: started.childAgentId,
-    childStatus: childStatus(result.status),
-    joinStatus: joinStatus(result.status),
+    childStatus: outcome.childStatus,
+    joinStatus: outcome.joinStatus,
     reason: "child_running",
+    failurePropagated: resolveFailurePropagation(outcome, failurePropagated),
   });
 }
 
-function endObservMeWaitFailure(
+function recordObservMeJoin(
   observme: ObservMeIntegrationApi | undefined,
   started: ObservMeStartedSubagent | undefined,
-  wait: { readonly id: string } | undefined,
-): void {
-  if (!observme || !started || !wait) return;
-  observme.endWait(wait.id, {
-    spawnId: started.spawnId,
-    childAgentId: started.childAgentId,
-    childStatus: "failed",
-    joinStatus: "failed",
-    reason: "child_running",
-    failurePropagated: true,
-  });
-}
-
-function recordObservMeJoin<Value>(
-  observme: ObservMeIntegrationApi | undefined,
-  started: ObservMeStartedSubagent | undefined,
-  result: ChildRunResult<Value>,
+  outcome: ObservMeRunnerOutcome,
+  failurePropagated?: boolean,
 ): void {
   if (!observme || !started) return;
-  const status = joinStatus(result.status);
-  const child = childStatus(result.status);
   const join = observme.startJoin({
     spawnId: started.spawnId,
     childAgentId: started.childAgentId,
-    childStatus: child,
-    joinStatus: status,
+    childStatus: outcome.childStatus,
+    joinStatus: outcome.joinStatus,
     reason: "dependency",
   });
   if (!join.ok) return;
   observme.endJoin(join.id, {
     spawnId: started.spawnId,
     childAgentId: started.childAgentId,
-    childStatus: child,
-    joinStatus: status,
+    childStatus: outcome.childStatus,
+    joinStatus: outcome.joinStatus,
     reason: "dependency",
-    failurePropagated: result.failurePropagated ?? result.status === "failed",
+    failurePropagated: resolveFailurePropagation(outcome, failurePropagated),
   });
 }
 
-function recordObservMeJoinFailure(
-  observme: ObservMeIntegrationApi | undefined,
-  started: ObservMeStartedSubagent | undefined,
-): void {
-  if (!observme || !started) return;
-  const join = observme.startJoin({
-    spawnId: started.spawnId,
-    childAgentId: started.childAgentId,
-    childStatus: "failed",
-    joinStatus: "failed",
-    reason: "dependency",
-  });
-  if (!join.ok) return;
-  observme.endJoin(join.id, {
-    spawnId: started.spawnId,
-    childAgentId: started.childAgentId,
-    childStatus: "failed",
-    joinStatus: "failed",
-    reason: "dependency",
-    failurePropagated: true,
-  });
-}
-
-function childStatus(status: ChildRunResult<unknown>["status"]): ObservMeTerminalChildStatus {
-  if (status === "completed") return "completed";
-  if (status === "cancelled") return "cancelled";
-  return "failed";
-}
-
-function joinStatus(status: ChildRunResult<unknown>["status"]): ObservMeJoinStatus {
-  return status;
+function resolveFailurePropagation(outcome: ObservMeRunnerOutcome, failurePropagated?: boolean): boolean | undefined {
+  return failurePropagated ?? (outcome.kind === "child_failed" ? true : undefined);
 }
 
 function safeErrorClass(error: unknown): string {

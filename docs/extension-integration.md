@@ -35,7 +35,7 @@ const observme: ObservMeIntegrationApi | undefined = requestObservMeIntegration(
 
 ObservMe registers no global object and does not require another extension to import its internal telemetry session. The event bus is the runtime boundary; the package subpath provides the stable constants, types, and request helper.
 
-The API can be absent when ObservMe is not installed, disabled by package configuration, not loaded yet, incompatible, or connected through a failing/malformed event-bus provider. A method returns `{ ok: false, reason: "session_unavailable" }` when ObservMe is loaded but no telemetry session is active. Orchestration must remain functional in both cases and may run the child without ObservMe correlation after reporting a bounded local warning.
+The API can be absent when ObservMe is not installed or loaded, is incompatible, or cannot register/respond through the shared event bus. When ObservMe is loaded, the provider can still be discovered before session startup or while `enabled: false`; methods then return `{ ok: false, reason: "session_unavailable" }` because no telemetry session is active. Once session shutdown begins, discovery is unsubscribed and every method on a previously cached API returns `{ ok: false, reason: "session_closing" }` until cleanup finishes, without changing spans, agent trees, metrics, or runtime hints. Orchestration must remain functional in all cases and may run the child without ObservMe correlation after reporting a bounded local warning.
 
 A package that cannot take a runtime dependency can implement the same synchronous request directly. Keep this channel and version stable:
 
@@ -61,7 +61,20 @@ Use this order for each child process:
 4. Call `failSubagent()` only when the launcher fails before the child is running.
 5. Call `startWait()`/`endWait()` around time spent waiting for child completion.
 6. Call `completeSubagent()` once with the matching terminal `childStatus` and `outcome` (`completed`, `failed`, or `cancelled`).
-7. Call `startJoin()`/`endJoin()` when collecting the terminal child status or result.
+7. Call `startJoin()`/`endJoin()` when collecting a child status or result.
+
+Classify launcher and wait outcomes before changing child state:
+
+| Transport outcome | Child state | Join state | Required ownership |
+| --- | --- | --- | --- |
+| Launcher rejects before returning a handle | `failed` | No join | Call `failSubagent()`; no child is running. |
+| Launcher is cancelled before returning a handle | `cancelled` | No join | End the cancelled launch attempt without recording child failure. |
+| Wait returns `completed`, `failed`, or `cancelled` | Matching terminal state | Matching terminal state | Call `completeSubagent()` exactly once. |
+| Wait returns `timeout` | Keep `active` | `timeout` | Retain the handle and wait again, or explicitly cancel through the owning transport. |
+| Wait throws an abort/cancellation error | Keep `active` | `cancelled` | The caller stopped waiting; do not infer that the child stopped. |
+| Wait throws a transport/read error | Keep `active` | `unknown` | Repair/retry result delivery; do not infer child failure. |
+
+The shared `classifyObservMeRunnerOutcome()` helper implements these rules. A returned `cancelled` status is a confirmed terminal child result; a thrown `AbortError` from a wait describes the caller's wait operation and is non-terminal for the child. The packaged runner's `start()` method returns an `ObservableSubagentExecution` whose `wait()` method can be retried after timeout, abort, or transport failure. The `run()` method is a one-wait convenience; use `start()` whenever later completion must remain reachable through the adapter.
 
 ```typescript
 const observme = requestObservMeIntegration(pi);
@@ -90,12 +103,16 @@ try {
 }
 
 const result = await waitForChildPi(child);
-observme.completeSubagent(started.spawnId, {
-  childAgentId: started.childAgentId,
-  childStatus: result.status,
-  outcome: result.status,
-});
+if (result.status !== "timeout") {
+  observme.completeSubagent(started.spawnId, {
+    childAgentId: started.childAgentId,
+    childStatus: result.status,
+    outcome: result.status,
+  });
+}
 ```
+
+If the wait times out, retain `child` and the ObservMe spawn identifiers for a later wait/completion or explicitly cancel the child through the transport. Do not convert timeout, wait abort, or result-channel failure into `failed` child completion.
 
 Do not put raw tasks, prompts, command lines, environment values, child output, or private paths in `errorClass`, `spawnReason`, or other bounded fields.
 
@@ -131,6 +148,7 @@ All mutation methods return a discriminated result. Handle these reasons without
 | Reason | Meaning |
 | --- | --- |
 | `session_unavailable` | ObservMe is loaded but no telemetry session is active. |
+| `session_closing` | Session shutdown has started. Do not retry the cached API; finish orchestration without new ObservMe mutations. |
 | `invalid_request` | An identifier, enum, duration, command/argument field, or environment shape is invalid or oversized. |
 | `spawn_already_exists` / `wait_already_exists` / `join_already_exists` | The requested lifecycle identifier is already active. Generate a unique identifier or finish the active operation; do not overwrite it. |
 | `child_agent_already_exists` | The requested or generated child placeholder belongs to an active spawn or retained tree node. Generate a unique child identifier; do not reuse terminal placeholders. |
@@ -181,6 +199,33 @@ The child Pi process must:
 5. avoid `--no-extensions` unless ObservMe is explicitly loaded again with `-e`.
 
 A child that loads ObservMe without the envelope is still observable, but it appears as a separate root-like runtime. A malformed or partial envelope fails open and emits bounded orphan/propagation diagnostics.
+
+## Troubleshooting: every agent appears as its own root
+
+Pi core emits no subagent event. ObservMe cannot detect a spawn by observation; the launcher must opt in. If every agent and subagent you run shows `pi.agent.role = root` and `pi.agent.depth = 0` in its own workflow, work through this list in order:
+
+1. **The launcher never calls the integration API.** This is the most common cause. The stock Pi example subagent extension, plain `child_process.spawn`, and tmux launchers all start child Pi processes without the ObservMe envelope; each child then generates a fresh workflow and root identity. Fix: wrap the spawn with `startSubagent()` and pass the returned `env` to the child process, or use the adapter in [`../examples/integrations/subagent-runner.ts`](../examples/integrations/subagent-runner.ts).
+2. **The launcher calls the API but discards the returned `env`.** Lineage crosses the process boundary only through the returned environment. Spawning with `process.env` or a hand-built environment produces a root child even though the parent recorded a `pi.agent.spawn` span.
+3. **The envelope is incomplete, so the child rejects all of it.** When any propagation value is present, the child requires `OBSERVME_WORKFLOW_ID`, `OBSERVME_PARENT_AGENT_ID`, `OBSERVME_ROOT_AGENT_ID`, `OBSERVME_AGENT_DEPTH`, and `OBSERVME_SPAWN_ID` together — plus `traceparent` when the child's `agent.propagateTraceContext` is `true` (the default). One missing variable rejects the whole envelope: the child fails open as an orphaned root and increments `observme_trace_context_propagation_failures_total`. Hand-building the envelope instead of using the returned `env` is the usual trigger.
+4. **Parent and child load different configurations.** A child launched with a different working directory loads that project's `observme.yaml`. If the parent has `workflow.enabled: false` or `agent.propagateToSubagents: false`, no envelope is sent; if the child expects `traceparent` (`agent.propagateTraceContext: true`) and the parent did not send one, the child rejects the envelope. Renamed `*Env` variable names on one side only have the same effect.
+5. **The child does not load ObservMe at all.** A child started with `--no-extensions` (without re-adding ObservMe via `-e`) emits nothing; there is no root agent in the dashboards — the child is simply invisible.
+6. **A subagent re-used its inherited environment for a further spawn.** The envelope a subagent received stays in its `process.env`. Passing that environment directly to a grandchild attaches the grandchild as a *sibling* (same parent, same spawn id) instead of a child, with no orphan warning. Always go through `startSubagent()` again for each spawn; it clears inherited lineage keys before writing current ones.
+
+Quick verification:
+
+- In the child process, check that the `OBSERVME_*` variables and `traceparent` are present (`printenv | grep -E 'OBSERVME|traceparent'` in a Bash tool call, without logging the values elsewhere).
+- Run `/obs agents` in the parent: a wired launcher shows the child under recent children with fan-out ≥ 1.
+- Query Prometheus for `observme_subagents_spawned_total` (parent side wired) and `observme_orphan_agents_total` / `observme_trace_context_propagation_failures_total` (child received but rejected an envelope).
+- Query Loki for `event_name="agent.orphaned"` or `event_name="trace_context.propagation_failed"` with `event_category="agent-tree"`.
+
+Symptom table:
+
+| Observation | Meaning |
+| --- | --- |
+| No `pi.agent.spawn` span, child is a new root | Launcher never called `startSubagent()` (case 1). |
+| `pi.agent.spawn` span exists, child is a new root, no orphan signals | Returned `env` was not passed to the child (case 2), or the child did not load ObservMe (case 5). |
+| Child is a root **and** `pi.agent.orphaned = true` with `partial_envelope` | Child received an incomplete envelope (cases 3–4). |
+| Grandchild appears as a sibling of its parent | Inherited envelope was reused for a new spawn (case 6). |
 
 The parent-side `childAgentId` is a bounded placeholder until the child's generated agent ID is reported through the orchestrator's own RPC, status-file, or result protocol. Use `spawnId`, workflow ID, and trace context as the initial cross-process correlation. Do not propagate the placeholder as `OBSERVME_AGENT_ID`.
 

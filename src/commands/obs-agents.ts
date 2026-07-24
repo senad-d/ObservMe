@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { AgentChildStatus, AgentTreeNode, AgentTreeSummary } from "../pi/agent-tree-tracker.ts";
+import { GrafanaQueryDisabledError } from "../query/grafana-readiness.ts";
 import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../query/prometheus.ts";
 import { createPrometheusQueryClient } from "../query/prometheus.ts";
 import type { TimeRange, TraceSummary } from "../query/tempo.ts";
@@ -14,7 +15,13 @@ import {
 import { COMMON_SPAN_ATTRIBUTES } from "../semconv/attributes.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { loadObsCommandConfig, notifyObsCommand } from "./obs-command-support.ts";
-import { formatObsCommandFailure, readObsDiagnosticMessage, type ObsCommandRecoveryHint } from "./obs-diagnostics.ts";
+import {
+  formatObsCommandDiagnostic,
+  formatObsCommandFailure,
+  readObsDiagnosticMessage,
+  sanitizeObsDiagnosticText,
+  type ObsCommandRecoveryHint,
+} from "./obs-diagnostics.ts";
 import type { ObsAgentWaitJoinHint, ObsAgentsRuntimeSnapshot } from "./obs-agents-runtime.ts";
 import { getLocalObsAgentsRuntimeSnapshot } from "./obs-agents-runtime.ts";
 
@@ -50,6 +57,13 @@ export interface ObsAgentsAggregateRows {
   readonly orphaned: readonly ObsAgentAggregateRow[];
 }
 
+export type ObsAgentsEnrichmentSubsystem = "Prometheus" | "Tempo";
+
+export interface ObsAgentsEnrichmentWarning {
+  readonly subsystem: ObsAgentsEnrichmentSubsystem;
+  readonly message: string;
+}
+
 export interface ObsAgentsSnapshot {
   readonly workflowId?: string;
   readonly workflowRootAgentId?: string;
@@ -74,6 +88,7 @@ export interface ObsAgentsSnapshot {
   readonly tempoSearchAttributes: Record<string, string>;
   readonly traces: readonly TraceSummary[];
   readonly recentChildrenLimit?: number;
+  readonly enrichmentWarnings?: readonly ObsAgentsEnrichmentWarning[];
 }
 
 export type ObsAgentsConfigLoader = (options: LoadSessionConfigOptions) => Promise<ObservMeConfig>;
@@ -138,6 +153,13 @@ interface ObsAgentsQueryResults {
   readonly orphaned: QueryResult;
 }
 
+interface ObsAgentsEnrichmentResult {
+  readonly aggregateResults: ObsAgentsQueryResults;
+  readonly traces: readonly TraceSummary[];
+  readonly maxRecentChildren?: number;
+  readonly warnings: readonly ObsAgentsEnrichmentWarning[];
+}
+
 export function registerObsAgentsCommand(pi: ExtensionAPI, options: RegisterObsAgentsCommandOptions = {}): void {
   const command = new ObsAgentsCommand(options);
 
@@ -160,7 +182,8 @@ export async function handleObsAgentsCommand(
 
   try {
     const snapshot = await resolveObsAgentsSnapshot(ctx, options);
-    await notifyObsCommand(ctx, renderObsAgents(snapshot), "info");
+    const notificationType = snapshot.enrichmentWarnings?.length ? "warning" : "info";
+    await notifyObsCommand(ctx, renderObsAgents(snapshot), notificationType);
   } catch (error) {
     await notifyObsCommand(
       ctx,
@@ -179,13 +202,15 @@ export async function getObsAgentsSnapshot(
   options: ObsAgentsSnapshotOptions = {},
 ): Promise<ObsAgentsSnapshot> {
   const runtime = await resolveObsAgentsRuntime(ctx, options);
-  const config = await loadObsAgentsConfig(ctx, options);
-  const [aggregateResults, traces] = await Promise.all([
-    queryObsAgentsAggregates(config, options),
-    queryObsAgentsTempoTraces(config, runtime, options),
-  ]);
+  const enrichment = await resolveObsAgentsEnrichment(ctx, runtime, options);
 
-  return buildObsAgentsSnapshot(runtime, aggregateResults, traces, config.query.maxAgents);
+  return buildObsAgentsSnapshot(
+    runtime,
+    enrichment.aggregateResults,
+    enrichment.traces,
+    enrichment.maxRecentChildren,
+    enrichment.warnings,
+  );
 }
 
 export function renderObsAgents(snapshot: ObsAgentsSnapshot): string {
@@ -200,10 +225,15 @@ export function renderObsAgents(snapshot: ObsAgentsSnapshot): string {
   ];
 
   if (latestChild) lines.push(`Latest child: ${renderLatestChild(latestChild, snapshot.waitJoinHints)}`);
+  const prometheusWarning = findObsAgentsEnrichmentWarning(snapshot, "Prometheus");
+  const tempoWarning = findObsAgentsEnrichmentWarning(snapshot, "Tempo");
   lines.push(
     `Wait/join hints: ${renderWaitJoinHints(snapshot.waitJoinHints)}`,
-    `Aggregate agent metrics (last ${OBS_AGENTS_WINDOW}): ${renderAggregateRows(snapshot.aggregateRows)}`,
-    `Lineage drill-down: ${renderLineageDrilldown(snapshot)}`,
+    appendObsAgentsEnrichmentWarning(
+      `Aggregate agent metrics (last ${OBS_AGENTS_WINDOW}): ${renderAggregateRows(snapshot.aggregateRows)}`,
+      prometheusWarning,
+    ),
+    appendObsAgentsEnrichmentWarning(`Lineage drill-down: ${renderLineageDrilldown(snapshot)}`, tempoWarning),
   );
   return boundObsCommandOutput(lines.join("\n"));
 }
@@ -243,16 +273,81 @@ async function loadObsAgentsConfig(
   return loadObsCommandConfig(ctx, options);
 }
 
+async function resolveObsAgentsEnrichment(
+  ctx: ObsAgentsCommandContext,
+  runtime: ObsAgentsRuntimeSnapshot,
+  options: ObsAgentsSnapshotOptions,
+): Promise<ObsAgentsEnrichmentResult> {
+  let config: ObservMeConfig;
+  try {
+    config = await loadObsAgentsConfig(ctx, options);
+  } catch (error) {
+    return createUnavailableObsAgentsEnrichment(error);
+  }
+
+  if (!config.query.enabled) {
+    return createUnavailableObsAgentsEnrichment(new GrafanaQueryDisabledError(), config.query.maxAgents);
+  }
+
+  const [aggregateResult, tempoResult] = await Promise.allSettled([
+    queryObsAgentsAggregates(config, options),
+    queryObsAgentsTempoTraces(config, runtime, options),
+  ]);
+  const warnings: ObsAgentsEnrichmentWarning[] = [];
+  if (aggregateResult.status === "rejected") {
+    warnings.push(createObsAgentsEnrichmentWarning("Prometheus", aggregateResult.reason));
+  }
+  if (tempoResult.status === "rejected") {
+    warnings.push(createObsAgentsEnrichmentWarning("Tempo", tempoResult.reason));
+  }
+
+  return {
+    aggregateResults: aggregateResult.status === "fulfilled" ? aggregateResult.value : createEmptyObsAgentsQueryResults(),
+    traces: tempoResult.status === "fulfilled" ? tempoResult.value : [],
+    maxRecentChildren: config.query.maxAgents,
+    warnings,
+  };
+}
+
+function createUnavailableObsAgentsEnrichment(
+  error: unknown,
+  maxRecentChildren?: number,
+): ObsAgentsEnrichmentResult {
+  return {
+    aggregateResults: createEmptyObsAgentsQueryResults(),
+    traces: [],
+    maxRecentChildren,
+    warnings: [
+      createObsAgentsEnrichmentWarning("Prometheus", error),
+      createObsAgentsEnrichmentWarning("Tempo", error),
+    ],
+  };
+}
+
+function createEmptyObsAgentsQueryResults(): ObsAgentsQueryResults {
+  const emptyResult = { resultType: "vector", series: [] } as const satisfies QueryResult;
+  return { spawned: emptyResult, fanoutP95: emptyResult, orphaned: emptyResult };
+}
+
 async function queryObsAgentsAggregates(
   config: ObservMeConfig,
   options: ObsAgentsSnapshotOptions,
 ): Promise<ObsAgentsQueryResults> {
   const client = createPrometheusQueryClient(config, { fetch: options.fetch });
-  const spawned = await client.queryPrometheus(OBS_AGENTS_SPAWNED_PROMQL, undefined, { resultLimit: "agents" });
-  const fanoutP95 = await client.queryPrometheus(OBS_AGENTS_FANOUT_P95_PROMQL, undefined, { resultLimit: "agents" });
-  const orphaned = await client.queryPrometheus(OBS_AGENTS_ORPHAN_PROMQL, undefined, { resultLimit: "agents" });
+  const [spawnedResult, fanoutResult, orphanedResult] = await Promise.allSettled([
+    client.queryPrometheus(OBS_AGENTS_SPAWNED_PROMQL, undefined, { resultLimit: "agents" }),
+    client.queryPrometheus(OBS_AGENTS_FANOUT_P95_PROMQL, undefined, { resultLimit: "agents" }),
+    client.queryPrometheus(OBS_AGENTS_ORPHAN_PROMQL, undefined, { resultLimit: "agents" }),
+  ]);
 
-  return { spawned, fanoutP95, orphaned };
+  if (spawnedResult.status === "rejected") throw spawnedResult.reason;
+  if (fanoutResult.status === "rejected") throw fanoutResult.reason;
+  if (orphanedResult.status === "rejected") throw orphanedResult.reason;
+  return {
+    spawned: spawnedResult.value,
+    fanoutP95: fanoutResult.value,
+    orphaned: orphanedResult.value,
+  };
 }
 
 async function queryObsAgentsTempoTraces(
@@ -272,6 +367,7 @@ function buildObsAgentsSnapshot(
   aggregateResults: ObsAgentsQueryResults,
   traces: readonly TraceSummary[],
   maxRecentChildren: number | undefined,
+  enrichmentWarnings: readonly ObsAgentsEnrichmentWarning[],
 ): ObsAgentsSnapshot {
   const lineage = runtime.lineage;
   const currentAgent = runtime.currentAgent;
@@ -305,6 +401,7 @@ function buildObsAgentsSnapshot(
     tempoSearchAttributes: createTempoSearchAttributes(runtime),
     traces,
     recentChildrenLimit: normalizeRecentChildrenLimit(maxRecentChildren),
+    enrichmentWarnings,
   };
 }
 
@@ -419,6 +516,32 @@ function renderWaitJoinHint(hint: ObsAgentWaitJoinHint | undefined): string {
 
 function renderAggregateRows(rows: ObsAgentsAggregateRows): string {
   return `spawn_series=${rows.spawned.length} fanout_series=${rows.fanoutP95.length} orphan_series=${rows.orphaned.length}`;
+}
+
+function findObsAgentsEnrichmentWarning(
+  snapshot: ObsAgentsSnapshot,
+  subsystem: ObsAgentsEnrichmentSubsystem,
+): ObsAgentsEnrichmentWarning | undefined {
+  return snapshot.enrichmentWarnings?.find(warning => warning.subsystem === subsystem);
+}
+
+function appendObsAgentsEnrichmentWarning(
+  section: string,
+  warning: ObsAgentsEnrichmentWarning | undefined,
+): string {
+  if (!warning) return section;
+  return `${section}; ${warning.subsystem} unavailable: ${sanitizeObsDiagnosticText(warning.message)}`;
+}
+
+function createObsAgentsEnrichmentWarning(
+  subsystem: ObsAgentsEnrichmentSubsystem,
+  error: unknown,
+): ObsAgentsEnrichmentWarning {
+  const nextAction = subsystem === "Prometheus" ? OBS_AGENTS_PROMETHEUS_NEXT_ACTION : OBS_AGENTS_TEMPO_NEXT_ACTION;
+  return {
+    subsystem,
+    message: formatObsCommandDiagnostic(error, nextAction),
+  };
 }
 
 function renderLineageDrilldown(snapshot: ObsAgentsSnapshot): string {

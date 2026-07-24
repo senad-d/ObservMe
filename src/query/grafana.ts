@@ -3,7 +3,11 @@ import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sa
 import type { GrafanaTransportClient, GrafanaTransportOptions } from "./grafana-transport.ts";
 import { createGrafanaTransport } from "./grafana-transport.ts";
 import type { GrafanaQueryDatasourceKey } from "./grafana-readiness.ts";
-import { formatGrafanaQueryReadiness, getGrafanaQueryReadiness } from "./grafana-readiness.ts";
+import {
+  formatGrafanaQueryDisabledGuidance,
+  formatGrafanaQueryReadiness,
+  getGrafanaQueryReadiness,
+} from "./grafana-readiness.ts";
 import { buildGrafanaTraceLink } from "./trace-link.ts";
 
 export { buildGrafanaTraceLink as getGrafanaTraceLink } from "./trace-link.ts";
@@ -179,7 +183,7 @@ function resolveGrafanaPreflightResult(
 ): GrafanaHealthCheckResult | undefined {
   const readiness = getGrafanaQueryReadiness(config, datasourceKey);
   if (readiness.status === "ready") return undefined;
-  if (readiness.status === "disabled") return skippedHealthResult(label, kind, "query disabled");
+  if (readiness.status === "disabled") return skippedHealthResult(label, kind, formatGrafanaQueryDisabledGuidance());
 
   return {
     label,

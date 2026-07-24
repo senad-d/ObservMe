@@ -28,7 +28,7 @@ function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function createHarness(config) {
+function createHarness(config, options = {}) {
   const calls = {
     exporterOptions: undefined,
     batchOptions: undefined,
@@ -38,7 +38,7 @@ function createHarness(config) {
     shutdownCalls: 0,
   };
   const tracer = { name: "fake-observme-tracer" };
-  const provider = createFakeTraceProvider(calls, tracer);
+  const provider = createFakeTraceProvider(calls, tracer, options.shutdown);
   const sdk = new ObservMeTraceSdk({
     config,
     exporterFactory: options => {
@@ -58,7 +58,7 @@ function createHarness(config) {
   return { sdk, calls, tracer };
 }
 
-function createFakeTraceProvider(calls, tracer) {
+function createFakeTraceProvider(calls, tracer, shutdownAction) {
   return {
     register: () => {
       calls.registerCalls += 1;
@@ -69,6 +69,7 @@ function createFakeTraceProvider(calls, tracer) {
     },
     shutdown: () => {
       calls.shutdownCalls += 1;
+      return shutdownAction?.();
     },
   };
 }
@@ -169,6 +170,24 @@ test("trace startup failure releases a processor created before provider constru
   assert.equal(sdk.state, "shutdown");
 });
 
+test("failed trace provider shutdown remains owned and retryable", async () => {
+  const { sdk, calls } = createHarness(defaultObservMeConfig, {
+    shutdown: createRejectOnceShutdown("trace shutdown failed"),
+  });
+  await sdk.start();
+
+  await assert.rejects(() => sdk.shutdown(), /trace shutdown failed/u);
+
+  assert.equal(sdk.state, "shutdown_failed");
+  assert.equal(calls.shutdownCalls, 1);
+
+  await sdk.shutdown();
+  await sdk.shutdown();
+
+  assert.equal(sdk.state, "shutdown");
+  assert.equal(calls.shutdownCalls, 2);
+});
+
 test("disabled traces resolve to a safe no-op without exporter or provider factories", async () => {
   const config = cloneDefault({ traces: { enabled: false } });
   const { sdk, calls, tracer } = createHarness(config);
@@ -184,6 +203,14 @@ test("disabled traces resolve to a safe no-op without exporter or provider facto
   assert.equal(calls.batchOptions, undefined);
   assert.equal(calls.providerOptions, undefined);
 });
+
+function createRejectOnceShutdown(message) {
+  let attempts = 0;
+  return () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error(message);
+  };
+}
 
 test("top-level disablement keeps enabled trace settings from creating exporters or providers", async () => {
   const config = cloneDefault({ enabled: false, traces: { enabled: true } });

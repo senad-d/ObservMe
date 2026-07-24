@@ -25,7 +25,10 @@ export function registerTenantSaltEnvironment<T extends TenantSaltConfig>(
   config: T,
   env: Readonly<Record<string, string | undefined>>,
 ): T {
-  registeredTenantSaltEnvironments.set(config, env);
+  const envName = config.privacy.tenantSaltEnv;
+  const salt = env[envName];
+  const retainedEnvironment = salt === undefined ? {} : Object.freeze({ [envName]: salt });
+  registeredTenantSaltEnvironments.set(config, retainedEnvironment);
   return config;
 }
 
@@ -84,7 +87,7 @@ export function readTenantSalt(source: TenantSaltSource): string {
 export function readTenantSaltFromEnv(source: EnvTenantSaltSource): string {
   if (source.envName.length === 0) throw new Error("tenant salt env name must not be empty");
   const salt = source.env[source.envName];
-  if (salt === undefined) throw new Error(`tenant salt env var ${source.envName} is not set`);
+  if (salt === undefined) throw new Error("tenant salt environment variable is not set");
   return salt;
 }
 
