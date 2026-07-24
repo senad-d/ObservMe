@@ -117,7 +117,7 @@
 - Redacted complete supported PEM private-key blocks, including malformed/truncated input, across live and backfilled content capture.
 - Bounded all Grafana health and datasource response bodies before JSON parsing across default, custom Node, and injected fetch transports.
 - Enforced top-level ObservMe disablement across lifecycle startup, runtime state, integration availability, and all OpenTelemetry signal factories.
-- Restored clean npm dependency resolution by pinning TypeScript to the latest release supported by `typescript-eslint`.
+- Restored clean npm dependency resolution for `typescript-eslint` 8.65.0 by pinning TypeScript to the latest supported release instead of the incompatible TypeScript 7 line.
 - Integrated active-agent lease activation and deactivation with clean shutdown, duplicate/reload replacement, resume, and failed-start cleanup so final flushes cannot renew stale activity.
 - Fixed session, workflow, agent, turn, LLM, tool, Bash, histogram, active-span, failure/recovery, and session-count telemetry accuracy.
 - Fixed lifecycle serialization, duplicate session replacement, bounded shutdown/flush behavior, backfill cancellation, parallel tool correlation, and bounded agent-tree state cleanup.
