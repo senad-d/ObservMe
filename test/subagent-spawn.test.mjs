@@ -4,12 +4,14 @@ import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { clearObsAgentsRuntimeState, getLocalObsAgentsRuntimeSnapshot } from "../src/commands/obs-agents-runtime.ts";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { createObservMeMetrics, createSpanRegistry, createAgentTreeTracker } from "../src/pi/handlers.ts";
+import { BoundedMap } from "../src/util/bounded-map.ts";
 import { createAgentLineageContext } from "../src/pi/agent-lineage.ts";
 import {
   completeSubagentSpawn,
   endAgentJoin,
   endAgentWait,
   failSubagentSpawn,
+  interruptActiveSubagentOperations,
   observeTrustedSubagentLineage,
   recordAgentJoin,
   recordAgentWait,
@@ -176,10 +178,21 @@ test("subagent spawn propagates W3C trace context and ObservMe lineage without e
   assert.equal(started.env.OBSERVME_PARENT_SESSION_ID, "session-1");
   assert.equal(started.env.OBSERVME_AGENT_DEPTH, "0");
   assert.equal(started.env.OBSERVME_SPAWN_ID, "spawn-1");
+  assert.equal(started.env.OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION, undefined);
+  assert.equal(started.env.OBSERVME_AGENT_DISPLAY_NAME, undefined);
+  assert.equal(started.env.OBSERVME_AGENT_ROLE, undefined);
+  assert.equal(started.env.OBSERVME_AGENT_CAPABILITY, undefined);
   assert.equal(childLineage.workflowId, "workflow-1");
   assert.equal(childLineage.parentAgentId, "agent-parent");
   assert.equal(childLineage.rootAgentId, "agent-root");
   assert.equal(childLineage.depth, 1);
+  const spawnState = telemetry.spans.activeSubagentSpawns.get(started.spawnId);
+  const syntheticChild = telemetry.agentTree.getAgent(started.childAgentId);
+  assert.equal(spawnState.childDescriptor, undefined);
+  assert.equal(syntheticChild.childDescriptor, undefined);
+  assert.equal(syntheticChild.displayName, undefined);
+  assert.equal(syntheticChild.role, "subagent");
+  assert.equal(syntheticChild.capability, undefined);
   assert.equal(started.span.name, SPAN_NAMES.PI_AGENT_SPAWN);
   assert.equal(started.span.attributes["pi.agent.spawn.trace_context_propagated"], true);
   assert.match(started.span.attributes["pi.agent.spawn.command.hash"], /^[a-f0-9]{64}$/u);
@@ -189,6 +202,249 @@ test("subagent spawn propagates W3C trace context and ObservMe lineage without e
   assertHistogramRecorded(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_TREE_DEPTH, 1);
   assertHistogramRecorded(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_TREE_WIDTH, 1);
   assertSubagentMetricLabelsAreLowCardinality(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.SUBAGENTS_SPAWNED_TOTAL);
+});
+
+test("v2 subagent propagation uses configured keys and atomically replaces stale child identity", () => {
+  const config = structuredClone(defaultObservMeConfig);
+  config.agent.childIdentityEnvelopeVersionEnv = "CUSTOM_IDENTITY_VERSION";
+  config.agent.displayNameEnv = "CUSTOM_DISPLAY_NAME";
+  config.agent.roleEnv = "CUSTOM_ROLE";
+  config.agent.capabilityEnv = "CUSTOM_CAPABILITY";
+  const telemetry = createFakeTelemetry({
+    config,
+    lineage: makeLineage({ capability: "parent-capability" }),
+  });
+  const unrelatedEnvironment = {
+    SAFE_BINARY_LIKE: "\\u0001-literal-text",
+    SAFE_EMPTY: "",
+    SAFE_UNICODE: "preserve-😀",
+  };
+  const started = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-custom-v2-envelope",
+    childIdentity: {
+      mode: "v2",
+      descriptor: {
+        displayName: "Scout",
+        role: "helper",
+        capability: "repo.scan",
+      },
+    },
+    env: {
+      ...unrelatedEnvironment,
+      CUSTOM_IDENTITY_VERSION: "stale-version",
+      CUSTOM_DISPLAY_NAME: "Stale name",
+      CUSTOM_ROLE: "stale-role",
+      CUSTOM_CAPABILITY: "stale-capability",
+    },
+  });
+
+  assert.equal(started.env.CUSTOM_IDENTITY_VERSION, "1");
+  assert.equal(started.env.CUSTOM_DISPLAY_NAME, "Scout");
+  assert.equal(started.env.CUSTOM_ROLE, "helper");
+  assert.equal(started.env.CUSTOM_CAPABILITY, "repo.scan");
+  assert.notEqual(started.env.CUSTOM_CAPABILITY, telemetry.lineage.capability);
+  assert.deepEqual(
+    Object.fromEntries(Object.keys(unrelatedEnvironment).map(key => [key, started.env[key]])),
+    unrelatedEnvironment,
+  );
+});
+
+test("v2 parent lifecycle retains one immutable descriptor while technical child ids remain authoritative", () => {
+  const telemetry = createFakeTelemetry({ lineage: makeLineage({ capability: "parent-capability" }) });
+  const requestedDescriptor = {
+    displayName: "Shared Scout",
+    role: "worker",
+    capability: "repo.search",
+  };
+  const first = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-shared-scout-a",
+    childAgentId: "child-shared-scout-a",
+    childIdentity: { mode: "v2", descriptor: requestedDescriptor },
+  });
+  const second = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-shared-scout-b",
+    childAgentId: "child-shared-scout-b",
+    childIdentity: {
+      mode: "v2",
+      descriptor: { displayName: "Shared Scout", role: "helper", capability: "repo.review" },
+    },
+  });
+  const firstState = telemetry.spans.activeSubagentSpawns.get(first.spawnId);
+  const retainedDescriptor = firstState.childDescriptor;
+
+  assert.deepEqual(retainedDescriptor, requestedDescriptor);
+  assert.equal(Object.isFrozen(retainedDescriptor), true);
+  assert.notEqual(retainedDescriptor, requestedDescriptor);
+  assertRetainedChildDescriptor(telemetry, first.childAgentId, retainedDescriptor, "starting");
+  assert.equal(telemetry.agentTree.getAgent(first.childAgentId).displayName, "Shared Scout");
+  assert.equal(telemetry.agentTree.getAgent(second.childAgentId).displayName, "Shared Scout");
+  assert.notEqual(first.childAgentId, second.childAgentId);
+
+  requestedDescriptor.displayName = "mutated after start";
+  requestedDescriptor.role = "validator";
+  requestedDescriptor.capability = "mutated.capability";
+  assert.deepEqual(retainedDescriptor, {
+    displayName: "Shared Scout",
+    role: "worker",
+    capability: "repo.search",
+  });
+
+  const wait = startAgentWait(telemetry, {
+    id: "wait-shared-scout-a",
+    spawnId: first.spawnId,
+    childAgentId: first.childAgentId,
+    childStatus: "active",
+    joinStatus: "waiting",
+  });
+  assertRetainedChildDescriptor(telemetry, first.childAgentId, retainedDescriptor, "active");
+  assert.deepEqual(endAgentWait(telemetry, wait.id, { durationMs: 3 }), { ok: true });
+  assertRetainedChildDescriptor(telemetry, first.childAgentId, retainedDescriptor, "active");
+
+  const join = startAgentJoin(telemetry, {
+    id: "join-shared-scout-a",
+    spawnId: first.spawnId,
+    childAgentId: first.childAgentId,
+    childStatus: "active",
+    joinStatus: "waiting",
+  });
+  assertRetainedChildDescriptor(telemetry, first.childAgentId, retainedDescriptor, "active");
+  assert.deepEqual(endAgentJoin(telemetry, join.id, { durationMs: 4 }), { ok: true });
+  assertRetainedChildDescriptor(telemetry, first.childAgentId, retainedDescriptor, "active");
+
+  assert.deepEqual(
+    completeSubagentSpawn(telemetry, first.spawnId, {
+      childAgentId: first.childAgentId,
+      childStatus: "completed",
+    }),
+    { ok: true },
+  );
+  assert.equal(telemetry.spans.activeSubagentSpawns.has(first.spawnId), false);
+  assert.equal(firstState.childDescriptor, retainedDescriptor);
+  assertRetainedChildDescriptor(telemetry, first.childAgentId, retainedDescriptor, "completed");
+});
+
+test("v2 launch failure and cancellation preserve intended parent-side identity", () => {
+  const telemetry = createFakeTelemetry();
+  const failed = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-intended-failure",
+    childAgentId: "child-intended-failure",
+    childIdentity: {
+      mode: "v2",
+      descriptor: { displayName: "Failure Scout", role: "helper", capability: "launch.check" },
+    },
+  });
+  const failedState = telemetry.spans.activeSubagentSpawns.get(failed.spawnId);
+  const failedDescriptor = failedState.childDescriptor;
+
+  assert.deepEqual(
+    failSubagentSpawn(telemetry, failed.spawnId, {
+      childAgentId: failed.childAgentId,
+      errorClass: "SpawnError",
+    }),
+    { ok: true },
+  );
+  assert.equal(telemetry.spans.activeSubagentSpawns.has(failed.spawnId), false);
+  assert.equal(failedState.childDescriptor, failedDescriptor);
+  assertRetainedChildDescriptor(telemetry, failed.childAgentId, failedDescriptor, "failed");
+
+  const cancelled = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-intended-cancellation",
+    childAgentId: "child-intended-cancellation",
+    childIdentity: {
+      mode: "v2",
+      descriptor: { displayName: "Cancel Scout", role: "validator", capability: "cancel.check" },
+    },
+  });
+  const cancelledDescriptor = telemetry.spans.activeSubagentSpawns.get(cancelled.spawnId).childDescriptor;
+
+  interruptActiveSubagentOperations(telemetry);
+
+  assert.equal(telemetry.spans.activeSubagentSpawns.has(cancelled.spawnId), false);
+  assertRetainedChildDescriptor(telemetry, cancelled.childAgentId, cancelledDescriptor, "cancelled");
+});
+
+test("v2 parent spawn and terminal traces and logs emit child-prefixed identity", () => {
+  const telemetry = createFakeTelemetry();
+  const cases = [
+    {
+      status: "completed",
+      descriptor: { displayName: "Completion Scout", role: "worker", capability: "telemetry.complete" },
+      eventName: LOG_EVENT_NAMES.AGENT_SPAWN_COMPLETED,
+    },
+    {
+      status: "failed",
+      descriptor: { displayName: "Failure Scout", role: "helper", capability: "telemetry.fail" },
+      eventName: LOG_EVENT_NAMES.AGENT_SPAWN_FAILED,
+    },
+    {
+      status: "cancelled",
+      descriptor: { displayName: "Cancellation Scout", role: "validator", capability: "telemetry.cancel" },
+      eventName: LOG_EVENT_NAMES.AGENT_SPAWN_CANCELLED,
+    },
+  ];
+
+  const startedCases = cases.map(testCase => ({
+    ...testCase,
+    started: startSubagentSpawn(telemetry, {
+      spawnId: `spawn-identity-${testCase.status}`,
+      childAgentId: `child-identity-${testCase.status}`,
+      childIdentity: { mode: "v2", descriptor: testCase.descriptor },
+    }),
+  }));
+
+  completeSubagentSpawn(telemetry, startedCases[0].started.spawnId, { childStatus: "completed" });
+  failSubagentSpawn(telemetry, startedCases[1].started.spawnId, { errorClass: "SpawnError" });
+  interruptActiveSubagentOperations(telemetry);
+
+  for (const testCase of startedCases) {
+    const startEvent = testCase.started.span.events.find(event => event.name === LOG_EVENT_NAMES.AGENT_SPAWN_STARTED);
+    const terminalEvent = testCase.started.span.events.find(event => event.name === testCase.eventName);
+    const relatedLogs = telemetry.logger.records.filter(
+      record => record.attributes["pi.agent.spawn.id"] === testCase.started.spawnId,
+    );
+
+    assertParentChildIdentityAttributes(testCase.started.attributes, testCase.descriptor);
+    assertParentChildIdentityAttributes(testCase.started.span.attributes, testCase.descriptor);
+    assertParentChildIdentityAttributes(startEvent.attributes, testCase.descriptor);
+    assertParentChildIdentityAttributes(terminalEvent.attributes, testCase.descriptor);
+    assert.ok(relatedLogs.length >= 2);
+    for (const record of relatedLogs) assertParentChildIdentityAttributes(record.attributes, testCase.descriptor);
+    assert.equal(testCase.started.span.attributes["pi.agent.display_name"], undefined);
+    assert.equal(testCase.started.span.attributes["pi.agent.role"], undefined);
+    assert.equal(testCase.started.span.attributes["pi.agent.capability"], undefined);
+  }
+});
+
+test("bounded spawn eviction retains the immutable child descriptor on the evicted state", () => {
+  const telemetry = createFakeTelemetry();
+  const evictedStates = [];
+  telemetry.spans.activeSubagentSpawns = new BoundedMap({
+    maxSize: 1,
+    onEvict: eviction => evictedStates.push(eviction.value),
+  });
+  const evicted = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-bounded-identity-a",
+    childAgentId: "child-bounded-identity-a",
+    childIdentity: {
+      mode: "v2",
+      descriptor: { displayName: "Bounded Scout", role: "lead", capability: "bounded.first" },
+    },
+  });
+  const retainedDescriptor = telemetry.spans.activeSubagentSpawns.get(evicted.spawnId).childDescriptor;
+
+  startSubagentSpawn(telemetry, {
+    spawnId: "spawn-bounded-identity-b",
+    childAgentId: "child-bounded-identity-b",
+    childIdentity: {
+      mode: "v2",
+      descriptor: { displayName: "Bounded Scout", role: "worker", capability: "bounded.second" },
+    },
+  });
+
+  assert.equal(evictedStates.length, 1);
+  assert.equal(evictedStates[0].childAgentId, evicted.childAgentId);
+  assert.equal(evictedStates[0].childDescriptor, retainedDescriptor);
+  assert.equal(Object.isFrozen(evictedStates[0].childDescriptor), true);
 });
 
 test("subagent propagation uses the started spawn span context instead of an unrelated parent context", () => {
@@ -998,6 +1254,21 @@ test("bounded wait and join eviction deactivates the exact retained runtime hint
   assert.equal(telemetry.agentTree.getAgent(first.childAgentId).status, "active");
   assert.equal(telemetry.agentTree.getAgent(second.childAgentId).status, "active");
 });
+
+function assertParentChildIdentityAttributes(attributes, descriptor) {
+  assert.equal(attributes["pi.agent.child.display_name"], descriptor.displayName);
+  assert.equal(attributes["pi.agent.child.role"], descriptor.role);
+  assert.equal(attributes["pi.agent.child.capability"], descriptor.capability);
+}
+
+function assertRetainedChildDescriptor(telemetry, childAgentId, descriptor, status) {
+  const child = telemetry.agentTree.getAgent(childAgentId);
+  assert.equal(child.childDescriptor, descriptor);
+  assert.equal(child.displayName, descriptor.displayName);
+  assert.equal(child.role, descriptor.role);
+  assert.equal(child.capability, descriptor.capability);
+  assert.equal(child.status, status);
+}
 
 function assertMetricValue(records, metricName, value) {
   const record = records.find(candidate => candidate.name === metricName && candidate.value === value);

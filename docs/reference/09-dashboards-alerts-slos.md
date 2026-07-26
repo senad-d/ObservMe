@@ -55,8 +55,8 @@ Use these exact variable names and display labels when a dashboard supports the 
 | `provider` | Provider | Prometheus; Loki for LLM lifecycle/content dashboards when promoted | `provider` metric label; `gen_ai_provider_name` Loki label | LLM traffic, latency, error, token, cost, and content-log filtering. |
 | `model` | Model | Prometheus; Loki for LLM lifecycle/content dashboards when promoted | `model` metric label; `gen_ai_request_model` Loki label | Provider/model comparison; keep values provider-reported and bounded by active use. |
 | `tool_name` | Tool | Prometheus | `tool_name` metric label | Tool workload, latency, and failure panels. |
-| `agent_role` | Agent role | Prometheus; Tempo where attributes are searchable | `agent_role` metric label; `pi.agent.role` attribute if emitted | Root/subagent/orchestrator/worker/reviewer comparison. |
-| `agent_capability` | Agent capability | Prometheus only after verifying the value set is bounded; Tempo otherwise | `agent_capability` metric label; `pi.agent.capability` attribute if emitted | Capability-level aggregate panels without agent IDs. |
+| `agent_role` | Agent role | Prometheus; Tempo where attributes are searchable | `agent_role` metric label; `pi.agent.role` attribute if emitted | Exact `root`, v2 `lead`/`helper`/`worker`/`validator`, and legacy `subagent`/`orchestrator`/`reviewer`/`unknown` comparison. |
+| `agent_capability` | Agent capability | Tempo only | `pi.agent.capability` attribute if emitted | Trace search only; launcher-defined capabilities are not Prometheus labels or dashboard metric variables. |
 | `subagent_depth` | Subagent depth | Prometheus; Tempo where attributes are searchable | `subagent_depth` metric label; `pi.agent.depth` attribute if emitted | Depth/fan-out/orphan/propagation diagnostics. |
 | `spawn_reason` | Spawn reason | Prometheus | `spawn_reason` metric label | Delegation and fan-out cause analysis. |
 | `session_id` | Session ID | Loki/Tempo only | `pi_session_id` Loki label; `pi.session.id` Tempo/span attribute | Follow one session across logs and traces. Never use in PromQL. |
@@ -67,11 +67,18 @@ Use these exact variable names and display labels when a dashboard supports the 
 
 Variable scope rules:
 
-- Prometheus-primary: `provider`, `model`, `tool_name`, `spawn_reason`, and any low-cardinality `agent_capability` use; `provider` and `model` may also be Loki variables on LLM lifecycle/content dashboards when the Collector promotes bounded GenAI labels.
+- Prometheus-primary: `provider`, `model`, `tool_name`, and `spawn_reason`; `provider` and `model` may also be Loki variables on LLM lifecycle/content dashboards when the Collector promotes bounded GenAI labels.
 - Loki-only: `content_kind` and any other log-only variable whose backing label is promoted by the local Collector and used only by log panels.
-- Tempo-only: none by default; use trace attributes and row-level links instead of global trace identifiers unless a dashboard is specifically trace-search-only.
+- Tempo-only: `agent_capability` when a trace-search dashboard explicitly needs it; use trace attributes and row-level links instead of global trace identifiers unless a dashboard is specifically trace-search-only.
 - Mixed: `environment`, `agent_role`, and `subagent_depth` only when every datasource exposes bounded equivalent values.
 - Loki/Tempo-only high-cardinality drill-downs: `session_id`, `agent_id`, `agent_run_id`, and `workflow_id`; these identify individual executions and must never be used in PromQL.
+- `pi.agent.display_name`, `pi.agent.child.display_name`, `pi.agent.capability`, and `pi.agent.child.capability` are never metric labels or Prometheus variables. The local Collector deletes these resource attributes from the metrics pipeline before resource-to-label conversion while retaining them for traces and logs.
+
+### Child-identity observability asset inventory
+
+A bounded search for `agent_role`, `agent_capability`, `pi.agent.role`, `pi.agent.capability`, and `pi.agent.display_name` across `dashboards/*` and `observability-stack/config/otel/otel-collector.yaml` identifies exactly five role-aware dashboard JSON files: `observme-agents.json`, `observme-agent-node-graphs.json`, `observme-latency.json`, `observme-overview.json`, and `observme-trace-journey.json`. Their PromQL groups by the emitted `agent_role` without a role matcher or alias, so `lead`, `helper`, `worker`, and `validator` remain separate and `root`, `subagent`, `orchestrator`, `reviewer`, and `unknown` remain visible during migration. The alert and SLO YAML files contain no role, capability, or display-name predicate. Grafana JSON properties named `displayName` are field-rendering metadata, not ObservMe child identity.
+
+Because Prometheus resource conversion is enabled in the local Collector, its metrics-only resource processor explicitly deletes the own-agent and child-specific display-name and capability attributes. It intentionally retains the bounded role. Dashboard and cardinality tests lock this inventory so unrelated dashboards and panels do not require edits.
 
 ### Standard row names
 

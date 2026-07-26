@@ -4,6 +4,7 @@ import { relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  AGENT_SPAWN_ATTRIBUTES,
   ALL_ATTRIBUTE_KEYS,
   COMMON_SPAN_ATTRIBUTES,
   RESOURCE_ATTRIBUTES,
@@ -68,11 +69,15 @@ const documentedAttributeKeys = [
   "observme.truncated",
   "observme.version",
   "pi.agent.capability",
+  "pi.agent.child.capability",
   "pi.agent.child.count",
+  "pi.agent.child.display_name",
   "pi.agent.child.id",
+  "pi.agent.child.role",
   "pi.agent.child.status",
   "pi.agent.children.active",
   "pi.agent.depth",
+  "pi.agent.display_name",
   "pi.agent.failure.propagated",
   "pi.agent.id",
   "pi.agent.join.status",
@@ -230,6 +235,10 @@ test("exports every attribute key documented in semantic convention sections 2-1
 
 test("exports required resource and operational attributes", () => {
   assert.equal(RESOURCE_ATTRIBUTES.OBSERVME_TENANT_ID, "observme.tenant.id");
+  assert.equal(RESOURCE_ATTRIBUTES.PI_AGENT_DISPLAY_NAME, "pi.agent.display_name");
+  assert.equal(AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILD_DISPLAY_NAME, "pi.agent.child.display_name");
+  assert.equal(AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILD_ROLE, "pi.agent.child.role");
+  assert.equal(AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILD_CAPABILITY, "pi.agent.child.capability");
   assert.equal(COMMON_SPAN_ATTRIBUTES.OBSERVME_REPLAYED, "observme.replayed");
   assert.equal(COMMON_SPAN_ATTRIBUTES.OBSERVME_EVICTED, "observme.evicted");
   assert.equal(COMMON_SPAN_ATTRIBUTES.OBSERVME_TRUNCATED, "observme.truncated");

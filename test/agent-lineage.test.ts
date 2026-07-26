@@ -13,7 +13,12 @@ import {
   startAgentWait,
   startSubagentSpawn,
 } from "../src/pi/subagent-spawn.ts";
-import { AGENT_SPAWN_ATTRIBUTES, AGENT_WAIT_JOIN_ATTRIBUTES } from "../src/semconv/attributes.ts";
+import {
+  AGENT_LINEAGE_ATTRIBUTES,
+  AGENT_SPAWN_ATTRIBUTES,
+  AGENT_WAIT_JOIN_ATTRIBUTES,
+  RESOURCE_ATTRIBUTES,
+} from "../src/semconv/attributes.ts";
 import {
   OBSERVME_COUNTER_METRIC_NAMES,
   OBSERVME_GAUGE_METRIC_NAMES,
@@ -39,6 +44,11 @@ const sensitiveIdentityInputs = [
 const forbiddenMetricLabelValues = ["workflow-unit", "agent-root", "agent-parent", "agent-child", "spawn-unit"];
 const staleTraceparent = "00-cccccccccccccccccccccccccccccccc-dddddddddddddddd-01";
 const expectedTraceparent = `00-${validSpanContext.traceId}-${validSpanContext.spanId}-01`;
+const requestedChildDescriptor = Object.freeze({
+  displayName: "Scout 😀",
+  role: "worker" as const,
+  capability: "code-search",
+});
 
 function cloneConfig(overrides: Record<string, unknown> = {}) {
   return mergeConfig(structuredClone(defaultObservMeConfig), overrides);
@@ -272,12 +282,30 @@ function stalePropagationEnvironment(): NodeJS.ProcessEnv {
     OBSERVME_PARENT_SPAN_ID: "dddddddddddddddd",
     OBSERVME_AGENT_DEPTH: "41",
     OBSERVME_SPAWN_ID: "spawn-stale",
+    OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION: "99",
+    OBSERVME_AGENT_DISPLAY_NAME: "Stale parent",
+    OBSERVME_AGENT_ROLE: "reviewer",
     OBSERVME_AGENT_CAPABILITY: "capability-stale",
     traceparent: staleTraceparent,
     tracestate: "stale=state",
     TRACEPARENT: staleTraceparent,
     TRACESTATE: "upper=stale",
     SAFE_ENV: "kept",
+  };
+}
+
+function completeChildIdentityEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    OBSERVME_WORKFLOW_ID: "workflow-child-identity",
+    OBSERVME_PARENT_AGENT_ID: "agent-interactive-root",
+    OBSERVME_ROOT_AGENT_ID: "agent-interactive-root",
+    OBSERVME_AGENT_DEPTH: "0",
+    OBSERVME_SPAWN_ID: "spawn-child-identity",
+    OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION: "1",
+    OBSERVME_AGENT_DISPLAY_NAME: requestedChildDescriptor.displayName,
+    OBSERVME_AGENT_ROLE: requestedChildDescriptor.role,
+    OBSERVME_AGENT_CAPABILITY: requestedChildDescriptor.capability,
+    ...overrides,
   };
 }
 
@@ -347,6 +375,10 @@ test("subagent propagation clears stale ObservMe and W3C context when trace prop
   assert.equal(started.env.OBSERVME_PARENT_SESSION_ID, "session-lineage-unit");
   assert.equal(started.env.OBSERVME_SPAWN_ID, "spawn-current-disabled-context");
   assert.equal(started.env.OBSERVME_AGENT_ID, undefined);
+  assert.equal(started.env.OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION, undefined);
+  assert.equal(started.env.OBSERVME_AGENT_DISPLAY_NAME, undefined);
+  assert.equal(started.env.OBSERVME_AGENT_ROLE, undefined);
+  assert.equal(started.env.OBSERVME_AGENT_CAPABILITY, undefined);
   assert.equal(started.env.OBSERVME_PARENT_TRACE_ID, undefined);
   assert.equal(started.env.OBSERVME_PARENT_SPAN_ID, undefined);
   assert.equal(started.env.traceparent, undefined);
@@ -361,6 +393,188 @@ test("subagent propagation clears stale ObservMe and W3C context when trace prop
   assert.equal(observedLineage.parentSpanId, undefined);
   assert.equal(observed?.agentId, observedLineage.agentId);
   assertNoUnsafeMetricLabels(session.metricRecords);
+});
+
+test("v2 subagent propagation replaces stale identity with one complete versioned envelope", () => {
+  const session = createSubagentSession({
+    lineage: makeRootLineage({
+      role: "root",
+      capability: "parent-capability",
+    }),
+  });
+  const started = startSubagentSpawn(session, {
+    spawnId: "spawn-v2-identity",
+    childIdentity: { mode: "v2", descriptor: requestedChildDescriptor },
+    env: {
+      ...stalePropagationEnvironment(),
+      UNRELATED_EMPTY: "",
+      UNRELATED_UNICODE: "unchanged-😀",
+    },
+  });
+
+  assert.equal(started.env.OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION, "1");
+  assert.equal(started.env.OBSERVME_AGENT_DISPLAY_NAME, requestedChildDescriptor.displayName);
+  assert.equal(started.env.OBSERVME_AGENT_ROLE, requestedChildDescriptor.role);
+  assert.equal(started.env.OBSERVME_AGENT_CAPABILITY, requestedChildDescriptor.capability);
+  assert.notEqual(started.env.OBSERVME_AGENT_CAPABILITY, "parent-capability");
+  assert.equal(started.env.SAFE_ENV, "kept");
+  assert.equal(started.env.UNRELATED_EMPTY, "");
+  assert.equal(started.env.UNRELATED_UNICODE, "unchanged-😀");
+
+  const hydrated = createAgentLineageContext({
+    config: session.config,
+    env: started.env,
+    trustedParentContext: true,
+    requireCompletePropagationEnvelope: true,
+    failOpenInvalidPropagation: true,
+    generateId: () => "v2-child",
+  });
+  assert.equal(hydrated.displayName, "Scout 😀");
+  assert.equal(hydrated.role, "worker");
+  assert.equal(hydrated.capability, "code-search");
+  assert.equal(hydrated.depth, 1);
+  assert.equal(hydrated.propagationFailure, undefined);
+
+  const attributes = buildLineageAttributes(hydrated);
+  const boundedChildIdentityReport = {
+    [RESOURCE_ATTRIBUTES.PI_AGENT_DISPLAY_NAME]: attributes[RESOURCE_ATTRIBUTES.PI_AGENT_DISPLAY_NAME],
+    [RESOURCE_ATTRIBUTES.PI_AGENT_ROLE]: attributes[RESOURCE_ATTRIBUTES.PI_AGENT_ROLE],
+    [AGENT_LINEAGE_ATTRIBUTES.PI_AGENT_CAPABILITY]: attributes[AGENT_LINEAGE_ATTRIBUTES.PI_AGENT_CAPABILITY],
+  };
+  assert.deepEqual(boundedChildIdentityReport, {
+    "pi.agent.display_name": requestedChildDescriptor.displayName,
+    "pi.agent.role": requestedChildDescriptor.role,
+    "pi.agent.capability": requestedChildDescriptor.capability,
+  });
+  assert.equal(JSON.stringify(boundedChildIdentityReport).includes("Stale parent"), false);
+  assert.equal(JSON.stringify(boundedChildIdentityReport).includes("reviewer"), false);
+  assert.equal(JSON.stringify(boundedChildIdentityReport).includes("capability-stale"), false);
+});
+
+test("OrcMe managed role and depth remain separate from ObservMe lineage depth", () => {
+  const lineage = createAgentLineageContext({
+    config: defaultObservMeConfig,
+    env: completeChildIdentityEnvironment({
+      OBSERVME_AGENT_DISPLAY_NAME: "Coordinator",
+      OBSERVME_AGENT_ROLE: "lead",
+      OBSERVME_AGENT_CAPABILITY: "task-routing",
+    }),
+    trustedParentContext: true,
+    requireCompletePropagationEnvelope: true,
+    failOpenInvalidPropagation: true,
+    generateId: () => "lead-child",
+  });
+
+  assert.equal(lineage.displayName, "Coordinator");
+  assert.equal(lineage.role, "lead");
+  assert.equal(lineage.depth, 1, "an OrcMe-managed depth-0 lead is still a child in ObservMe lineage");
+  assert.equal(lineage.parentAgentId, "agent-interactive-root");
+});
+
+test("trusted runtime identity options take precedence over a validated propagated descriptor", () => {
+  const lineage = createAgentLineageContext({
+    config: defaultObservMeConfig,
+    env: completeChildIdentityEnvironment(),
+    trustedParentContext: true,
+    requireCompletePropagationEnvelope: true,
+    failOpenInvalidPropagation: true,
+    displayName: "Trusted runtime name",
+    role: "reviewer",
+    capability: "trusted-runtime",
+    generateId: () => "trusted-child",
+  });
+
+  assert.equal(lineage.displayName, "Trusted runtime name");
+  assert.equal(lineage.role, "reviewer");
+  assert.equal(lineage.capability, "trusted-runtime");
+});
+
+test("unknown child identity versions fail open before descriptor fields are read", () => {
+  let identityFieldReads = 0;
+  const protectedFields = new Set([
+    defaultObservMeConfig.agent.displayNameEnv,
+    defaultObservMeConfig.agent.roleEnv,
+    defaultObservMeConfig.agent.capabilityEnv,
+  ]);
+  const env = new Proxy(completeChildIdentityEnvironment({
+    OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION: "99",
+  }), {
+    get(target, property, receiver) {
+      if (typeof property === "string" && protectedFields.has(property)) {
+        identityFieldReads += 1;
+        throw new Error("unsupported identity fields must not be read");
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const lineage = createAgentLineageContext({
+    config: defaultObservMeConfig,
+    env,
+    trustedParentContext: true,
+    requireCompletePropagationEnvelope: true,
+    failOpenInvalidPropagation: true,
+    generateId: () => "unsupported-version",
+  });
+
+  assert.equal(identityFieldReads, 0);
+  assert.equal(lineage.role, "root");
+  assert.equal(lineage.displayName, undefined);
+  assert.equal(lineage.capability, undefined);
+  assert.equal(lineage.propagationFailure, "unsupported_identity_envelope");
+  assert.equal(lineage.orphaned, true);
+});
+
+test("partial and malformed child identity fail open atomically while v1 remains metadata-free", () => {
+  const invalidCases = [
+    {
+      expected: "partial_envelope",
+      env: completeChildIdentityEnvironment({ OBSERVME_AGENT_DISPLAY_NAME: undefined }),
+    },
+    {
+      expected: "malformed_envelope",
+      env: completeChildIdentityEnvironment({ OBSERVME_AGENT_CAPABILITY: "private capability" }),
+    },
+    {
+      expected: "partial_envelope",
+      env: completeChildIdentityEnvironment({ OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION: undefined }),
+    },
+  ] as const;
+
+  for (const invalidCase of invalidCases) {
+    const lineage = createAgentLineageContext({
+      config: defaultObservMeConfig,
+      env: invalidCase.env,
+      trustedParentContext: true,
+      requireCompletePropagationEnvelope: true,
+      failOpenInvalidPropagation: true,
+      generateId: () => "invalid-identity",
+    });
+
+    assert.equal(lineage.role, "root");
+    assert.equal(lineage.displayName, undefined);
+    assert.equal(lineage.capability, undefined);
+    assert.equal(lineage.parentAgentId, undefined);
+    assert.equal(lineage.propagationFailure, invalidCase.expected);
+  }
+
+  const v1Lineage = createAgentLineageContext({
+    config: defaultObservMeConfig,
+    env: {
+      OBSERVME_WORKFLOW_ID: "workflow-v1-child",
+      OBSERVME_PARENT_AGENT_ID: "agent-v1-parent",
+      OBSERVME_ROOT_AGENT_ID: "agent-v1-root",
+      OBSERVME_AGENT_DEPTH: "0",
+      OBSERVME_SPAWN_ID: "spawn-v1-child",
+    },
+    trustedParentContext: true,
+    requireCompletePropagationEnvelope: true,
+    failOpenInvalidPropagation: true,
+    generateId: () => "v1-child",
+  });
+  assert.equal(v1Lineage.role, "subagent");
+  assert.equal(v1Lineage.displayName, undefined);
+  assert.equal(v1Lineage.capability, undefined);
+  assert.equal(v1Lineage.propagationFailure, undefined);
 });
 
 test("nested subagent propagation replaces stale inherited context with current lineage", () => {
@@ -383,6 +597,10 @@ test("nested subagent propagation replaces stale inherited context with current 
   });
 
   assert.equal(childStarted.env.OBSERVME_AGENT_ID, undefined);
+  assert.equal(childStarted.env.OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION, undefined);
+  assert.equal(childStarted.env.OBSERVME_AGENT_DISPLAY_NAME, undefined);
+  assert.equal(childStarted.env.OBSERVME_AGENT_ROLE, undefined);
+  assert.equal(childStarted.env.OBSERVME_AGENT_CAPABILITY, undefined);
   assert.equal(childStarted.env.traceparent, expectedTraceparent);
   assert.equal(childStarted.env.TRACEPARENT, undefined);
   assert.equal(childLineage.agentId, "agent-child-generated");

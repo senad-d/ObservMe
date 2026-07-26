@@ -645,7 +645,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Agent-run rate grouped only by the low-cardinality agent_role label.",
+      "description": "Agent-run rate grouped only by the low-cardinality agent_role label. Role series retain emitted values exactly: v2 lead, helper, worker, and validator remain separate; root and the legacy subagent, orchestrator, reviewer, and unknown values remain visible during migration.",
       "fieldConfig": {
         "defaults": {
           "color": {

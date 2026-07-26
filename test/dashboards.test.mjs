@@ -46,6 +46,24 @@ const errorsDashboardFile = "dashboards/observme-errors.json";
 const exportHealthDashboardFile = "dashboards/observme-export-health.json";
 const sloHealthDashboardFile = "dashboards/observme-slo-health.json";
 const localCollectorConfigFile = "observability-stack/config/otel/otel-collector.yaml";
+const exactAgentRoleValues = [
+  "root",
+  "lead",
+  "helper",
+  "worker",
+  "validator",
+  "subagent",
+  "orchestrator",
+  "reviewer",
+  "unknown",
+];
+const roleAwareDashboardInventory = new Map([
+  [agentDashboardFile, 13],
+  [nodeGraphDashboardFile, 4],
+  [latencyDashboardFile, 3],
+  [overviewDashboardFile, 1],
+  [traceJourneyDashboardFile, 1],
+]);
 const datasourceInputVariablePattern = /\$\{DS_[A-Z_]+\}/u;
 const lokiAttributePattern = /\b(?:event\.name|event\.category|pi\.session\.id|pi\.workflow\.id|pi\.agent\.id)\b/u;
 const metricNamePattern = /\bobservme_[a-z0-9_]+(?:_(?:bucket|sum|count))?\b/gu;
@@ -1562,6 +1580,40 @@ async function errorsDashboardUsesParsedLogTablesAndTraceLinks() {
   }
 }
 
+async function dashboardRoleQueriesPreserveExactCurrentAndLegacyValues() {
+  const discoveredInventory = new Map();
+  const fixedRoleAliasPattern = new RegExp(`"agent_role",\\s*"(?:${exactAgentRoleValues.join("|")})"`, "u");
+
+  for (const path of dashboardFiles) {
+    const dashboard = await readJsonFile(path);
+    const expressions = prometheusTargetsForDashboard(dashboard)
+      .map(({ target }) => target.expr ?? "")
+      .filter(expression => expression.includes("agent_role"));
+    if (expressions.length === 0) continue;
+
+    discoveredInventory.set(path, expressions.length);
+    const descriptions = dashboard.panels.map(panel => panel.description ?? "").join("\n");
+    for (const role of exactAgentRoleValues) {
+      assert.ok(descriptions.includes(role), `${path}: role-aware panels must document the exact ${role} value`);
+    }
+    for (const expression of expressions) {
+      assert.match(expression, /\bby\s*\([^)]*\bagent_role\b[^)]*\)/u, `${path}: role query must preserve agent_role grouping`);
+      assert.doesNotMatch(
+        expression,
+        /\{[^}]*\bagent_role\s*(?:=~|!~|!=|=)/u,
+        `${path}: role query must not filter out exact current or legacy role values`,
+      );
+      assert.doesNotMatch(expression, fixedRoleAliasPattern, `${path}: role query must not alias agent_role to another role`);
+    }
+  }
+
+  assert.deepEqual(
+    [...discoveredInventory.entries()].sort(),
+    [...roleAwareDashboardInventory.entries()].sort(),
+    "bounded role-query inventory changed; review only newly role-aware dashboard assets",
+  );
+}
+
 async function repairedLifecycleMetricsMatchDashboardNamesAndGroupingLabels() {
   const agentDashboard = await readJsonFile(agentDashboardFile);
   const errorsDashboard = await readJsonFile(errorsDashboardFile);
@@ -1692,6 +1744,7 @@ test(
   agentDashboardShowsLineageRatiosThresholdsAndDrilldowns,
 );
 test("node graph dashboard uses counts and health signals", nodeGraphDashboardUsesCountsAndHealthSignals);
+test("dashboard role queries preserve exact current and legacy values", dashboardRoleQueriesPreserveExactCurrentAndLegacyValues);
 test("trace journey agent panels show thresholds and agent links", traceJourneyAgentPanelsShowThresholdsAndAgentLinks);
 test("LLM cost and model dashboards expose cost, token, cache, and stop-reason insights", llmCostModelDashboardsExposeCostAndTokenInsights);
 test("model and thinking change annotations are surfaced on cost, latency, and model dashboards", modelThinkingChangeAnnotationsAreSurfacedOnCostLatencyAndModels);

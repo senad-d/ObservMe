@@ -40,7 +40,7 @@ import {
 } from "../../semconv/attributes.ts";
 import { LOG_EVENT_NAMES } from "../../semconv/metrics.ts";
 import { SPAN_NAMES } from "../../semconv/spans.ts";
-import { createAgentLineageContext } from "../agent-lineage.ts";
+import { createAgentLineageContext, normalizeAgentRoleMetricLabel } from "../agent-lineage.ts";
 import {
   buildCommonSessionSpanAttributes,
   buildLineageMetricSafeLogAttributes,
@@ -208,6 +208,7 @@ async function handleSessionStart(
     config,
     env: buildRecoveryLineageEnv(config, recoveryCorrelation, options.env),
     trustedParentContext: options.trustedParentContext === true || recoveryCorrelation !== undefined,
+    capability: recoveryCorrelation?.capability,
     requireCompletePropagationEnvelope:
       options.requireCompleteParentEnvelope ?? (options.trustedParentContext === true && recoveryCorrelation === undefined),
     failOpenInvalidPropagation: true,
@@ -334,7 +335,6 @@ function buildRecoveryLineageEnv(
     ...definedEnvValue(config.agent.parentSessionIdEnv, correlation.parentSessionId),
     ...definedEnvValue(config.agent.depthEnv, recoveryPropagationDepth(correlation)),
     ...definedEnvValue(config.agent.spawnIdEnv, correlation.spawnId),
-    ...definedEnvValue(config.agent.capabilityEnv, correlation.capability),
   };
 }
 
@@ -482,11 +482,7 @@ function ignorePendingCleanupDiagnosticError(): undefined {
 
 function buildDuplicateSessionStartAttributes(session: ObservMeTelemetrySession): AttributeMap {
   return withoutUndefinedAttributes({
-    [LOG_ATTRIBUTES.PI_SESSION_ID]: readString(session.sessionAttributes, SESSION_ATTRIBUTES.PI_SESSION_ID),
-    [LOG_ATTRIBUTES.PI_WORKFLOW_ID]: session.lineage.workflowId,
-    [LOG_ATTRIBUTES.PI_WORKFLOW_ROOT_AGENT_ID]: session.lineage.workflowRootAgentId,
-    [LOG_ATTRIBUTES.PI_AGENT_ID]: session.lineage.agentId,
-    [LOG_ATTRIBUTES.PI_AGENT_ROOT_ID]: session.lineage.rootAgentId,
+    ...buildLineageMetricSafeLogAttributes(session),
     reason: "active_session_replaced_before_new_start",
   });
 }
@@ -712,18 +708,16 @@ function recordSessionTracePropagationFailure(
 
   const linkedContext = resolution.links?.[0]?.context;
   const attributes = withoutUndefinedAttributes({
+    ...buildLineageMetricSafeLogAttributes(session),
     [LOG_ATTRIBUTES.EVENT_NAME]: LOG_EVENT_NAMES.TRACE_CONTEXT_PROPAGATION_FAILED,
     [LOG_ATTRIBUTES.EVENT_CATEGORY]: "agent-tree",
-    [LOG_ATTRIBUTES.PI_WORKFLOW_ID]: session.lineage.workflowId,
-    [LOG_ATTRIBUTES.PI_AGENT_ID]: session.lineage.agentId,
-    [LOG_ATTRIBUTES.PI_AGENT_ROOT_ID]: session.lineage.rootAgentId,
     [AGENT_LINEAGE_ATTRIBUTES.PI_AGENT_ORPHANED]: session.lineage.orphaned ? true : undefined,
     [LOG_ATTRIBUTES.TRACE_ID]: linkedContext?.traceId,
     [LOG_ATTRIBUTES.SPAN_ID]: linkedContext?.spanId,
     [LOG_ATTRIBUTES.ERROR_TYPE]: resolution.failureReason,
   });
   const labels = {
-    agent_role: session.lineage.role,
+    agent_role: normalizeAgentRoleMetricLabel(session.lineage.role),
     subagent_depth: String(Math.max(0, Math.min(session.lineage.depth, session.config.workflow.maxDepthWarning))),
     reason: "trace_context_fallback",
   };
@@ -861,11 +855,7 @@ function buildShutdownAttributes(
   outcome: TerminalOutcome,
 ): AttributeMap {
   const attributes = withoutUndefinedAttributes({
-    [LOG_ATTRIBUTES.PI_SESSION_ID]: readString(session.sessionAttributes, SESSION_ATTRIBUTES.PI_SESSION_ID),
-    [LOG_ATTRIBUTES.PI_WORKFLOW_ID]: session.lineage.workflowId,
-    [LOG_ATTRIBUTES.PI_WORKFLOW_ROOT_AGENT_ID]: session.lineage.workflowRootAgentId,
-    [LOG_ATTRIBUTES.PI_AGENT_ID]: session.lineage.agentId,
-    [LOG_ATTRIBUTES.PI_AGENT_ROOT_ID]: session.lineage.rootAgentId,
+    ...buildLineageMetricSafeLogAttributes(session),
     [WORKFLOW_ATTRIBUTES.PI_WORKFLOW_DURATION_MS]: resolveWorkflowDurationMs(session),
     [WORKFLOW_ATTRIBUTES.PI_WORKFLOW_STATUS]: outcome,
     reason: event.reason,

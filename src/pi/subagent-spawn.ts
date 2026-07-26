@@ -8,6 +8,7 @@ import {
 import type { ObservMeConfig } from "../config/schema.ts";
 import {
   classifyObservMeRunnerOutcome,
+  type ObservMeChildDescriptor,
   type ObservMeRunnerOutcome,
   type ObservMeRunnerPhase,
   type ObservMeRunnerResultStatus,
@@ -30,9 +31,19 @@ import {
 } from "../semconv/values.ts";
 import { BoundedMap } from "../util/bounded-map.ts";
 import type { AgentChildStatus, AgentTreeNode, AgentTreeSummary } from "./agent-tree-tracker.ts";
-import { AgentTreeTracker, isAgentStatusTransitionAllowed } from "./agent-tree-tracker.ts";
-import type { AgentLineageContext, AgentRole } from "./agent-lineage.ts";
-import { createAgentLineageContext, createPropagationEnvironment, sanitizePropagationEnvironment } from "./agent-lineage.ts";
+import {
+  AgentTreeTracker,
+  assertNoHighCardinalityMetricLabels,
+  isAgentStatusTransitionAllowed,
+} from "./agent-tree-tracker.ts";
+import type { AgentLineageContext, AgentRole, ChildIdentityPropagation } from "./agent-lineage.ts";
+import {
+  createAgentLineageContext,
+  createPropagationEnvironment,
+  normalizeAgentRoleMetricLabel,
+  sanitizePropagationEnvironment,
+  validateChildIdentityPropagation,
+} from "./agent-lineage.ts";
 import { recordActiveSpanEnd, recordActiveSpanStart } from "./handler-internals.ts";
 import type { TelemetryLogger, TelemetryTracer } from "./handler-types.ts";
 import type {
@@ -99,6 +110,7 @@ export interface SubagentTelemetrySession {
 export interface BuildSubagentPropagationEnvironmentOptions {
   readonly config: ObservMeConfig;
   readonly lineage: AgentLineageContext;
+  readonly childIdentity: ChildIdentityPropagation;
   readonly spawnId: string;
   readonly parentSessionId?: string;
   readonly spanContext?: SpanContext;
@@ -116,6 +128,7 @@ export interface SubagentPropagationEnvironment {
 
 export interface StartSubagentSpawnOptions {
   readonly spawnId?: string;
+  readonly childIdentity?: ChildIdentityPropagation;
   readonly command?: string;
   readonly args?: readonly string[];
   readonly childAgentId?: string;
@@ -310,21 +323,31 @@ export function startSubagentSpawn(
   session: SubagentTelemetrySession,
   options: StartSubagentSpawnOptions = {},
 ): StartedSubagentSpawn {
+  const childIdentity = validateChildIdentityPropagation(options.childIdentity ?? { mode: "v1" });
+  const childDescriptor = childIdentity.mode === "v2" ? childIdentity.descriptor : undefined;
   const { spawnId, childAgentId } = resolveSubagentSpawnIdentity(options);
   const spawnReason = normalizeSpawnReason(options.spawnReason);
   const labels = subagentSpawnMetricLabels(session, options, spawnReason);
   const parentSpan = resolveSubagentParentSpan(session);
-  const initialAttributes = buildSubagentSpawnAttributes(session, spawnId, childAgentId, options, spawnReason);
+  const initialAttributes = buildSubagentSpawnAttributes(
+    session,
+    spawnId,
+    childAgentId,
+    childDescriptor,
+    options,
+    spawnReason,
+  );
   const span = startActiveSubagentSpan(session, SPAN_NAMES.PI_AGENT_SPAWN, parentSpan, initialAttributes, "subagent_spawn");
   const propagation = buildSubagentPropagationEnvironment({
     config: session.config,
     lineage: session.lineage,
+    childIdentity,
     spawnId,
     parentSessionId: resolveCurrentSessionId(session),
     spanContext: readSpanContext(span),
     env: options.env,
   });
-  const treeSummary = recordAgentTreeSpawn(session, childAgentId);
+  const treeSummary = recordAgentTreeSpawn(session, childAgentId, childDescriptor);
   const attributes = {
     ...initialAttributes,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_TRACE_CONTEXT_PROPAGATED]: propagation.traceContextPropagated,
@@ -336,6 +359,7 @@ export function startSubagentSpawn(
   session.spans.activeSubagentSpawns.set(spawnId, {
     span,
     childAgentId,
+    childDescriptor,
     startedAtMs: now(options),
     labels,
     spawnReason,
@@ -388,7 +412,14 @@ export function failSubagentSpawn(
   updateChildStatus(session, childAgentId, "failed");
   recordObsAgentsTreeState(session);
   const attributes = {
-    ...buildSubagentCompletionAttributes(session, spawnId, childAgentId, "failed", state.spawnReason),
+    ...buildSubagentCompletionAttributes(
+      session,
+      spawnId,
+      childAgentId,
+      state.childDescriptor,
+      "failed",
+      state.spawnReason,
+    ),
     [LOG_ATTRIBUTES.ERROR_TYPE]: normalizeMetricLabel(options.errorClass ?? "subagent_spawn_error", "subagent_spawn_error"),
   };
 
@@ -433,7 +464,7 @@ export function buildSubagentPropagationEnvironment(
   const propagatedParentSpanId = traceparent ? parentSpanId : undefined;
   const env = sanitizeTraceContextEnvironment(
     {
-      ...createPropagationEnvironment(options.lineage, options.config, sanitizedBaseEnv),
+      ...createPropagationEnvironment(options.lineage, options.config, sanitizedBaseEnv, options.childIdentity),
       ...definedEnvValue(options.config.agent.parentSessionIdEnv, options.parentSessionId),
       ...definedEnvValue(options.config.agent.parentTraceIdEnv, propagatedParentTraceId),
       ...definedEnvValue(options.config.agent.parentSpanIdEnv, propagatedParentSpanId),
@@ -545,7 +576,14 @@ function recordSubagentSpawnTerminal(
   updateChildStatus(session, childAgentId, status);
   recordChildFailureCompletion(session, childAgentId, status);
   recordObsAgentsTreeState(session);
-  const attributes = buildSubagentCompletionAttributes(session, spawnId, childAgentId, status, state.spawnReason);
+  const attributes = buildSubagentCompletionAttributes(
+    session,
+    spawnId,
+    childAgentId,
+    state.childDescriptor,
+    status,
+    state.spawnReason,
+  );
   const eventName = terminalSpawnEventName(status);
   const severityText = status === "completed" ? "INFO" : "ERROR";
 
@@ -808,10 +846,10 @@ function ensureChildFailureAccounting(
 }
 
 function childFailureMetricLabels(session: SubagentTelemetrySession): Record<string, string> {
-  return {
-    agent_role: session.lineage.role,
+  return auditedSubagentMetricLabels({
+    agent_role: normalizeAgentRoleMetricLabel(session.lineage.role),
     subagent_depth: subagentDepthLabel(session),
-  };
+  });
 }
 
 function buildWaitJoinAttributes(
@@ -840,12 +878,12 @@ function waitJoinMetricLabels(
   options: AgentWaitJoinOptions,
   reason: AgentWaitReason,
 ): Record<string, string> {
-  return {
-    agent_role: session.lineage.role,
+  return auditedSubagentMetricLabels({
+    agent_role: normalizeAgentRoleMetricLabel(session.lineage.role),
     subagent_depth: subagentDepthLabel(session),
     status: normalizeWaitJoinStatus(options.joinStatus ?? options.childStatus ?? "waiting"),
     reason,
-  };
+  });
 }
 
 function waitJoinErrorStatus(options: AgentWaitJoinOptions): string | undefined {
@@ -865,6 +903,7 @@ function buildSubagentSpawnAttributes(
   session: SubagentTelemetrySession,
   spawnId: string,
   childAgentId: string,
+  childDescriptor: ObservMeChildDescriptor | undefined,
   options: StartSubagentSpawnOptions,
   spawnReason: SubagentSpawnReason,
 ): AttributeMap {
@@ -875,6 +914,7 @@ function buildSubagentSpawnAttributes(
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_TOOL_CALL_ID]: options.toolCallId,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_COMMAND_HASH]: hashCommand(options.command, options.args, session.config),
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILD_ID]: childAgentId,
+    ...buildSubagentChildIdentityAttributes(childDescriptor),
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_PARENT_ID]: session.lineage.agentId,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_ROOT_ID]: session.lineage.rootAgentId,
     [AGENT_SPAWN_ATTRIBUTES.PI_WORKFLOW_ID]: session.lineage.workflowId,
@@ -961,6 +1001,7 @@ function buildSubagentCompletionAttributes(
   session: SubagentTelemetrySession,
   spawnId: string,
   childAgentId: string,
+  childDescriptor: ObservMeChildDescriptor | undefined,
   outcome: AgentTerminalStatus,
   spawnReason: SubagentSpawnReason,
 ): AttributeMap {
@@ -969,6 +1010,7 @@ function buildSubagentCompletionAttributes(
   return withoutUndefinedAttributes({
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_ID]: spawnId,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILD_ID]: childAgentId,
+    ...buildSubagentChildIdentityAttributes(childDescriptor),
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_REASON]: spawnReason,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_SPAWN_OUTCOME]: outcome,
     [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILDREN_ACTIVE]: summary.activeChildren,
@@ -979,9 +1021,25 @@ function buildSubagentCompletionAttributes(
   });
 }
 
-function recordAgentTreeSpawn(session: SubagentTelemetrySession, childAgentId: string): AgentTreeSummary {
+function buildSubagentChildIdentityAttributes(
+  childDescriptor: ObservMeChildDescriptor | undefined,
+): AttributeMap {
+  if (!childDescriptor) return {};
+
+  return {
+    [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILD_DISPLAY_NAME]: childDescriptor.displayName,
+    [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILD_ROLE]: childDescriptor.role,
+    [AGENT_SPAWN_ATTRIBUTES.PI_AGENT_CHILD_CAPABILITY]: childDescriptor.capability,
+  };
+}
+
+function recordAgentTreeSpawn(
+  session: SubagentTelemetrySession,
+  childAgentId: string,
+  childDescriptor?: ObservMeChildDescriptor,
+): AgentTreeSummary {
   const tree = ensureAgentTree(session);
-  tree.registerAgent(createSyntheticChildLineage(session, childAgentId), "starting");
+  tree.registerAgent(createSyntheticChildLineage(session, childAgentId, childDescriptor), "starting", childDescriptor);
   return tree.summarize(session.lineage.rootAgentId);
 }
 
@@ -1026,7 +1084,11 @@ function ensureAgentTree(session: SubagentTelemetrySession): AgentTreeTracker {
   return session.agentTree;
 }
 
-function createSyntheticChildLineage(session: SubagentTelemetrySession, childAgentId: string): AgentLineageContext {
+function createSyntheticChildLineage(
+  session: SubagentTelemetrySession,
+  childAgentId: string,
+  childDescriptor?: ObservMeChildDescriptor,
+): AgentLineageContext {
   return {
     workflowId: session.lineage.workflowId,
     workflowRootAgentId: session.lineage.workflowRootAgentId,
@@ -1034,8 +1096,9 @@ function createSyntheticChildLineage(session: SubagentTelemetrySession, childAge
     parentAgentId: session.lineage.agentId,
     rootAgentId: session.lineage.rootAgentId,
     depth: session.lineage.depth + 1,
-    role: "subagent",
-    capability: session.lineage.capability,
+    role: childDescriptor?.role ?? "subagent",
+    displayName: childDescriptor?.displayName,
+    capability: childDescriptor?.capability,
     parentSessionId: resolveCurrentSessionId(session),
     parentTraceId: session.lineage.parentTraceId,
     parentSpanId: session.lineage.parentSpanId,
@@ -1104,11 +1167,11 @@ function recordTraceContextFallbackWhenMissing(
 }
 
 function traceContextFailureMetricLabels(session: SubagentTelemetrySession): Record<string, string> {
-  return {
-    agent_role: session.lineage.role,
+  return auditedSubagentMetricLabels({
+    agent_role: normalizeAgentRoleMetricLabel(session.lineage.role),
     subagent_depth: subagentDepthLabel(session),
     reason: "trace_context_fallback",
-  };
+  });
 }
 
 function subagentSpawnMetricLabels(
@@ -1116,19 +1179,24 @@ function subagentSpawnMetricLabels(
   options: StartSubagentSpawnOptions,
   spawnReason: SubagentSpawnReason,
 ): Record<string, string> {
-  return {
-    agent_role: session.lineage.role,
+  return auditedSubagentMetricLabels({
+    agent_role: normalizeAgentRoleMetricLabel(session.lineage.role),
     subagent_depth: subagentDepthLabel(session),
     spawn_type: normalizeSpawnType(options.spawnType),
     spawn_reason: spawnReason,
-  };
+  });
 }
 
 function subagentFailureMetricLabels(labels: Record<string, string>, attributes: AttributeMap): Record<string, string> {
-  return {
+  return auditedSubagentMetricLabels({
     spawn_type: labels.spawn_type ?? "unknown",
     error_class: String(attributes[LOG_ATTRIBUTES.ERROR_TYPE] ?? "subagent_spawn_error"),
-  };
+  });
+}
+
+function auditedSubagentMetricLabels(labels: Record<string, string>): Record<string, string> {
+  assertNoHighCardinalityMetricLabels(labels);
+  return labels;
 }
 
 function subagentDepthLabel(session: SubagentTelemetrySession): string {

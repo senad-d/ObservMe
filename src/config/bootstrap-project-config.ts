@@ -93,6 +93,9 @@ export const PROJECT_OBSERVME_YAML_TEMPLATE = `observme:
     spawnIdEnv: OBSERVME_SPAWN_ID
     propagateTraceContext: true
     propagateToSubagents: true
+    childIdentityEnvelopeVersionEnv: OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION
+    displayNameEnv: OBSERVME_AGENT_DISPLAY_NAME
+    roleEnv: OBSERVME_AGENT_ROLE
     capabilityEnv: OBSERVME_AGENT_CAPABILITY
     # Opt in to one validated, branch-local custom entry for reload/resume recovery.
     # This entry never participates in LLM context.

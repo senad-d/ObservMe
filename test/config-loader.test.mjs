@@ -32,6 +32,9 @@ observme:
   workflow:
     idEnv: GLOBAL_WORKFLOW_ID
   agent:
+    childIdentityEnvelopeVersionEnv: GLOBAL_CHILD_IDENTITY_ENVELOPE_VERSION
+    displayNameEnv: GLOBAL_AGENT_DISPLAY_NAME
+    roleEnv: GLOBAL_AGENT_ROLE
     capabilityEnv: GLOBAL_AGENT_CAPABILITY
   metrics:
     activeAgentLeaseDurationMillis: 40000
@@ -49,6 +52,9 @@ observme:
   workflow:
     idEnv: PROJECT_WORKFLOW_ID
   agent:
+    childIdentityEnvelopeVersionEnv: PROJECT_CHILD_IDENTITY_ENVELOPE_VERSION
+    displayNameEnv: PROJECT_AGENT_DISPLAY_NAME
+    roleEnv: PROJECT_AGENT_ROLE
     capabilityEnv: PROJECT_AGENT_CAPABILITY
   metrics:
     activeAgentLeaseDurationMillis: 45000
@@ -801,6 +807,9 @@ test("session loader applies defaults, global config, project config, env, then 
         idEnv: "RUNTIME_WORKFLOW_ID",
       },
       agent: {
+        childIdentityEnvelopeVersionEnv: "RUNTIME_CHILD_IDENTITY_ENVELOPE_VERSION",
+        displayNameEnv: "RUNTIME_AGENT_DISPLAY_NAME",
+        roleEnv: "RUNTIME_AGENT_ROLE",
         capabilityEnv: "RUNTIME_AGENT_CAPABILITY",
       },
     },
@@ -817,6 +826,13 @@ test("session loader applies defaults, global config, project config, env, then 
   );
   assert.equal(config.otlp.timeoutMs, 9000, "runtime options are the highest-precedence layer");
   assert.equal(config.workflow.idEnv, "RUNTIME_WORKFLOW_ID", "workflow id env key round-trips through loader");
+  assert.equal(
+    config.agent.childIdentityEnvelopeVersionEnv,
+    "RUNTIME_CHILD_IDENTITY_ENVELOPE_VERSION",
+    "child identity envelope version env key round-trips through loader",
+  );
+  assert.equal(config.agent.displayNameEnv, "RUNTIME_AGENT_DISPLAY_NAME", "display-name env key round-trips through loader");
+  assert.equal(config.agent.roleEnv, "RUNTIME_AGENT_ROLE", "role env key round-trips through loader");
   assert.equal(config.agent.capabilityEnv, "RUNTIME_AGENT_CAPABILITY", "agent capability env key round-trips through loader");
 });
 
@@ -837,6 +853,9 @@ test("project config overrides global config when no env/runtime layer overrides
   assert.equal(config.resource.attributes["observme.tenant.id"], "project-resource-tenant");
   assert.equal(config.resource.attributes["deployment.environment.name"], "project-environment");
   assert.equal(config.workflow.idEnv, "PROJECT_WORKFLOW_ID");
+  assert.equal(config.agent.childIdentityEnvelopeVersionEnv, "PROJECT_CHILD_IDENTITY_ENVELOPE_VERSION");
+  assert.equal(config.agent.displayNameEnv, "PROJECT_AGENT_DISPLAY_NAME");
+  assert.equal(config.agent.roleEnv, "PROJECT_AGENT_ROLE");
   assert.equal(config.agent.capabilityEnv, "PROJECT_AGENT_CAPABILITY");
   assert.equal(config.metrics.activeAgentLeaseDurationMillis, 45000);
 });
@@ -1093,6 +1112,9 @@ test("factory-safe loader excludes project config and still applies global/env/r
   assert.equal(config.tenant, "factory-env-tenant");
   assert.equal(config.resource.attributes["observme.tenant.id"], "factory-env-tenant");
   assert.equal(config.workflow.idEnv, "GLOBAL_WORKFLOW_ID");
+  assert.equal(config.agent.childIdentityEnvelopeVersionEnv, "GLOBAL_CHILD_IDENTITY_ENVELOPE_VERSION");
+  assert.equal(config.agent.displayNameEnv, "GLOBAL_AGENT_DISPLAY_NAME");
+  assert.equal(config.agent.roleEnv, "GLOBAL_AGENT_ROLE");
   assert.equal(config.metrics.activeAgentLeaseDurationMillis, 40000);
 });
 
@@ -1140,12 +1162,20 @@ observme:
   workflow:
     idEnv: OBSERVME_WORKFLOW_ID
   agent:
+    childIdentityEnvelopeVersionEnv: CUSTOM_CHILD_IDENTITY_ENVELOPE_VERSION
+    displayNameEnv: CUSTOM_AGENT_DISPLAY_NAME
+    roleEnv: CUSTOM_AGENT_ROLE
     capabilityEnv: OBSERVME_AGENT_CAPABILITY
 `);
 
   assert.deepEqual(parsed, {
     workflow: { idEnv: "OBSERVME_WORKFLOW_ID" },
-    agent: { capabilityEnv: "OBSERVME_AGENT_CAPABILITY" },
+    agent: {
+      childIdentityEnvelopeVersionEnv: "CUSTOM_CHILD_IDENTITY_ENVELOPE_VERSION",
+      displayNameEnv: "CUSTOM_AGENT_DISPLAY_NAME",
+      roleEnv: "CUSTOM_AGENT_ROLE",
+      capabilityEnv: "OBSERVME_AGENT_CAPABILITY",
+    },
   });
 });
 
@@ -1165,6 +1195,20 @@ test("generated project starter parses with privacy-preserving capture defaults"
   assert.equal(parsed.privacy.redactionEnabled, true);
   assert.equal(parsed.privacy.allowUnsafeCapture, false);
   assert.equal(parsed.metrics.activeAgentLeaseDurationMillis, 60000);
+  assert.deepEqual(
+    {
+      childIdentityEnvelopeVersionEnv: parsed.agent.childIdentityEnvelopeVersionEnv,
+      displayNameEnv: parsed.agent.displayNameEnv,
+      roleEnv: parsed.agent.roleEnv,
+      capabilityEnv: parsed.agent.capabilityEnv,
+    },
+    {
+      childIdentityEnvelopeVersionEnv: "OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION",
+      displayNameEnv: "OBSERVME_AGENT_DISPLAY_NAME",
+      roleEnv: "OBSERVME_AGENT_ROLE",
+      capabilityEnv: "OBSERVME_AGENT_CAPABILITY",
+    },
+  );
 });
 
 test("generated project starter supports redacted explicit content-capture opt-in", () => {

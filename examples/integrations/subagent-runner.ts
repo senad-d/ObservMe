@@ -1,8 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   classifyObservMeRunnerOutcome,
-  requestObservMeIntegration,
-  type ObservMeIntegrationApi,
+  requestObservMeIntegrationV2,
+  type ObservMeChildDescriptor,
+  type ObservMeIntegrationApiV2,
   type ObservMeProcessEnvironment,
   type ObservMeRunnerOutcome,
   type ObservMeSpawnReason,
@@ -38,6 +39,7 @@ export interface ChildTransport<Request, Handle, Value> {
 
 export interface ObservableSubagentRunOptions<Request> {
   readonly request: Request;
+  readonly child: ObservMeChildDescriptor;
   readonly command?: string;
   readonly args?: readonly string[];
   readonly spawnType?: ObservMeSpawnType;
@@ -51,8 +53,10 @@ export interface ObservableSubagentRunOptions<Request> {
  * Generic adapter that adds ObservMe lifecycle reporting to any child transport.
  *
  * The transport owns process control and result delivery. ObservMe owns only
- * spawn/wait/join telemetry and propagation context. When ObservMe is absent or
- * inactive, the transport still runs with the supplied base environment.
+ * spawn/wait/join telemetry and propagation context. Each launch, including a
+ * nested launch, must provide its own child descriptor. When ObservMe v2 is
+ * absent or inactive, the transport still runs with the supplied base
+ * environment; the runner never falls back to a v1 lifecycle.
  */
 export class ObservableSubagentRunner<Request, Handle, Value> {
   readonly #pi: ExtensionAPI;
@@ -64,7 +68,7 @@ export class ObservableSubagentRunner<Request, Handle, Value> {
   }
 
   async start(options: ObservableSubagentRunOptions<Request>): Promise<ObservableSubagentExecution<Handle, Value>> {
-    const observme = requestObservMeIntegration(this.#pi);
+    const observme = requestObservMeIntegrationV2(this.#pi);
     const started = startObservMeSubagent(observme, options);
     const context = createLaunchContext(started, options.environment);
 
@@ -91,14 +95,14 @@ export class ObservableSubagentRunner<Request, Handle, Value> {
 export class ObservableSubagentExecution<Handle, Value> {
   readonly #transport: ChildWaitTransport<Handle, Value>;
   readonly #handle: Handle;
-  readonly #observme: ObservMeIntegrationApi | undefined;
+  readonly #observme: ObservMeIntegrationApiV2 | undefined;
   readonly #started: ObservMeStartedSubagent | undefined;
   #terminalResult?: ChildRunResult<Value>;
 
   constructor(
     transport: ChildWaitTransport<Handle, Value>,
     handle: Handle,
-    observme: ObservMeIntegrationApi | undefined,
+    observme: ObservMeIntegrationApiV2 | undefined,
     started: ObservMeStartedSubagent | undefined,
   ) {
     this.#transport = transport;
@@ -130,10 +134,11 @@ interface ChildWaitTransport<Handle, Value> {
 }
 
 function startObservMeSubagent<Request>(
-  observme: ObservMeIntegrationApi | undefined,
+  observme: ObservMeIntegrationApiV2 | undefined,
   options: ObservableSubagentRunOptions<Request>,
 ): ObservMeStartedSubagent | undefined {
   const result = observme?.startSubagent({
+    child: options.child,
     command: options.command,
     args: options.args,
     spawnType: options.spawnType ?? "extension",
@@ -157,7 +162,7 @@ function createLaunchContext(
 }
 
 function completeObservMeChild(
-  observme: ObservMeIntegrationApi | undefined,
+  observme: ObservMeIntegrationApiV2 | undefined,
   started: ObservMeStartedSubagent | undefined,
   status: ObservMeTerminalChildStatus,
 ): void {
@@ -170,7 +175,7 @@ function completeObservMeChild(
 }
 
 function recordObservMeLaunchError(
-  observme: ObservMeIntegrationApi | undefined,
+  observme: ObservMeIntegrationApiV2 | undefined,
   started: ObservMeStartedSubagent | undefined,
   outcome: ObservMeRunnerOutcome,
   error: unknown,
@@ -188,7 +193,7 @@ function recordObservMeLaunchError(
 }
 
 function startObservMeWait(
-  observme: ObservMeIntegrationApi | undefined,
+  observme: ObservMeIntegrationApiV2 | undefined,
   started: ObservMeStartedSubagent | undefined,
 ) {
   if (!observme || !started) return undefined;
@@ -202,7 +207,7 @@ function startObservMeWait(
 }
 
 function recordObservMeWaitOutcome(
-  observme: ObservMeIntegrationApi | undefined,
+  observme: ObservMeIntegrationApiV2 | undefined,
   started: ObservMeStartedSubagent | undefined,
   wait: { readonly id: string } | undefined,
   outcome: ObservMeRunnerOutcome,
@@ -214,7 +219,7 @@ function recordObservMeWaitOutcome(
 }
 
 function endObservMeWait(
-  observme: ObservMeIntegrationApi | undefined,
+  observme: ObservMeIntegrationApiV2 | undefined,
   started: ObservMeStartedSubagent | undefined,
   wait: { readonly id: string } | undefined,
   outcome: ObservMeRunnerOutcome,
@@ -232,7 +237,7 @@ function endObservMeWait(
 }
 
 function recordObservMeJoin(
-  observme: ObservMeIntegrationApi | undefined,
+  observme: ObservMeIntegrationApiV2 | undefined,
   started: ObservMeStartedSubagent | undefined,
   outcome: ObservMeRunnerOutcome,
   failurePropagated?: boolean,

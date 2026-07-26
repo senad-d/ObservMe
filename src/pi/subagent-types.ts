@@ -1,4 +1,5 @@
 import type { Span } from "@opentelemetry/api";
+import type { ObservMeChildDescriptor } from "../integration.ts";
 import type { AgentWaitReason, SubagentSpawnReason } from "../semconv/values.ts";
 import type { AgentChildStatus } from "./agent-tree-tracker.ts";
 
@@ -14,6 +15,7 @@ export type TestableSpan = Span & {
 export interface SubagentSpawnState {
   readonly span: TestableSpan;
   readonly childAgentId: string;
+  readonly childDescriptor?: ObservMeChildDescriptor;
   readonly startedAtMs: number;
   readonly labels: Record<string, string>;
   readonly spawnReason: SubagentSpawnReason;

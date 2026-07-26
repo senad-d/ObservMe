@@ -36,6 +36,7 @@ export interface ObsAgentsCommandContext {
 export interface ObsAgentChildRow {
   readonly agentId: string;
   readonly parentAgentId?: string;
+  readonly displayName?: string;
   readonly depth: number;
   readonly role: string;
   readonly capability?: string;
@@ -70,6 +71,7 @@ export interface ObsAgentsSnapshot {
   readonly agentId?: string;
   readonly parentAgentId?: string;
   readonly rootAgentId?: string;
+  readonly displayName?: string;
   readonly role: string;
   readonly capability?: string;
   readonly depth: number;
@@ -217,7 +219,7 @@ export function renderObsAgents(snapshot: ObsAgentsSnapshot): string {
   const latestChild = readLatestChild(snapshot.children);
   const lines = [
     `Workflow: ${formatUnknown(snapshot.workflowId)} root=${formatUnknown(snapshot.workflowRootAgentId ?? snapshot.rootAgentId)}`,
-    `Agent: ${formatUnknown(snapshot.agentId)} (${formatUnknown(snapshot.role)} depth=${snapshot.depth})`,
+    `Agent: ${formatUnknown(snapshot.agentId)} name=${formatUnknown(snapshot.displayName)} role=${formatUnknown(snapshot.role)} capability=${formatUnknown(snapshot.capability)} depth=${snapshot.depth}`,
     `Session: ${formatUnknown(snapshot.sessionId)}`,
     `Subagents spawned in current trace: ${snapshot.fanoutCount}`,
     `Current tree: depth=${snapshot.treeDepth} width=${snapshot.treeWidth} active=${snapshot.activeChildren} orphaned=${snapshot.orphanCount}`,
@@ -379,6 +381,7 @@ function buildObsAgentsSnapshot(
     agentId: lineage?.agentId ?? currentAgent?.agentId,
     parentAgentId: lineage?.parentAgentId ?? currentAgent?.parentAgentId,
     rootAgentId: lineage?.rootAgentId ?? currentAgent?.rootAgentId,
+    displayName: lineage?.displayName ?? currentAgent?.displayName,
     role: lineage?.role ?? currentAgent?.role ?? "unknown",
     capability: lineage?.capability ?? currentAgent?.capability,
     depth: normalizeCount(lineage?.depth ?? currentAgent?.depth),
@@ -409,6 +412,7 @@ function toObsAgentChildRow(node: AgentTreeNode): ObsAgentChildRow {
   return {
     agentId: node.agentId,
     parentAgentId: node.parentAgentId,
+    displayName: node.displayName,
     depth: normalizeCount(node.depth),
     role: node.role,
     capability: node.capability,
@@ -481,12 +485,12 @@ function selectRecentChildrenForRender(
 
 function renderRecentChild(child: ObsAgentChildRow): string {
   const orphan = child.orphaned ? " orphaned" : "";
-  return `${formatUnknown(child.agentId)} status=${formatUnknown(child.status)} depth=${child.depth}${orphan}`;
+  return `${formatUnknown(child.agentId)} name=${formatUnknown(child.displayName)} role=${formatUnknown(child.role)} capability=${formatUnknown(child.capability)} status=${formatUnknown(child.status)} depth=${child.depth}${orphan}`;
 }
 
 function renderLatestChild(child: ObsAgentChildRow, hints: readonly ObsAgentWaitJoinHint[]): string {
   const joinHint = readLatestHintForChild(child.agentId, hints, "join");
-  return `${formatUnknown(child.agentId)} status=${formatUnknown(child.status)} active=${child.activeChildren} join=${formatDuration(joinHint?.durationMs)}`;
+  return `${formatUnknown(child.agentId)} name=${formatUnknown(child.displayName)} role=${formatUnknown(child.role)} capability=${formatUnknown(child.capability)} status=${formatUnknown(child.status)} active=${child.activeChildren} join=${formatDuration(joinHint?.durationMs)}`;
 }
 
 function readLatestHintForChild(

@@ -1005,7 +1005,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Aggregate fleet shape over time, not per-workflow truth: the leased-active role series is canonical current activity, while tree histograms summarize all matching telemetry without workflow or agent IDs as metric labels. Clean shutdown removes leased activity after export/scrape propagation; after an ungraceful exit, leased activity converges to zero within the default 60-second lease plus one Prometheus scrape while raw claims may remain cached. /obs agents is local current-process child state. Constant lines mirror the depth=5 and fan-out=20 alert thresholds.",
+      "description": "Aggregate fleet shape over time, not per-workflow truth: the leased-active role series is canonical current activity and preserves exact v2 lead, helper, worker, and validator values plus separate root and legacy subagent, orchestrator, reviewer, and unknown values. Tree histograms summarize all matching telemetry without workflow or agent IDs as metric labels. Clean shutdown removes leased activity after export/scrape propagation; after an ungraceful exit, leased activity converges to zero within the default 60-second lease plus one Prometheus scrape while raw claims may remain cached. /obs agents is local current-process child state. Constant lines mirror the depth=5 and fan-out=20 alert thresholds.",
       "fieldConfig": {
         "defaults": {
           "color": {

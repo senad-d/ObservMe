@@ -232,8 +232,13 @@ pi.on("tool_execution_end", async (event, ctx) => {
 There is no dedicated Pi event for "subagent spawned", and ObservMe does not launch child processes itself. An orchestrator requests the public versioned API and calls it around its own transport:
 
 ```typescript
-const observme = requestObservMeIntegration(pi);
+const observme = requestObservMeIntegrationV2(pi);
 const started = observme?.startSubagent({
+  child: {
+    displayName: "Scout",
+    role: "worker",
+    capability: "code-search",
+  },
   command: "pi",
   spawnType: "extension",
   spawnReason: "delegated_task",
@@ -245,7 +250,7 @@ if (started?.ok) {
 }
 ```
 
-The returned environment contains the validated ObservMe lineage fields and W3C `traceparent`/`tracestate` when enabled. The launcher must pass it unchanged and must not log command lines or environment values. Launcher failure uses `failSubagent()`; terminal child completion uses `completeSubagent()`. See [`../extension-integration.md`](../extension-integration.md) for the complete transition contract.
+The returned environment contains validated ObservMe lineage, complete child-identity envelope version 1, and W3C `traceparent`/`tracestate` when enabled. The launcher must pass it unchanged and must not log command lines or environment values. Display name and capability are resource/span/log/UI attributes, never metric labels; role is descriptive and grants no authority. Launcher failure uses `failSubagent()`; terminal child completion uses `completeSubagent()`. See [`../extension-integration.md`](../extension-integration.md) for the complete transition contract.
 
 When the parent waits for a child or receives child results, create `pi.agent.wait` and `pi.agent.join` spans/events with child status, propagated-failure status, active-child count, and join status. These spans make the critical path visible in orchestrator traces.
 
@@ -362,11 +367,15 @@ Rules:
 
 ## 13. Inter-extension integration
 
-Other Pi extensions must not import ObservMe's private telemetry session or `src/pi/subagent-spawn.ts` directly. ObservMe exposes a versioned request/response API through Pi's shared `pi.events` bus and the `@senad-d/observme/integration` package export.
+Other Pi extensions must not import ObservMe's private telemetry session or `src/pi/subagent-spawn.ts` directly. ObservMe exposes a versioned request/response API through Pi's shared synchronous `pi.events` bus and the `@senad-d/observme/integration` package export.
 
-The public API covers current context plus subagent start, launcher failure, terminal child completion, wait, and join transitions. `startSubagent()` returns the sanitized process environment that the launcher passes to the child. Runtime negotiation lets an orchestrator remain optional when ObservMe is absent or inactive.
+The stable channel is `observme:integration:request`. Unsuffixed exports remain v1 and metadata-free. V2 clients advertise `[2, 1]`, validate a frozen role catalog exactly equal to `lead`, `helper`, `worker`, `validator`, validate identity envelope version `1`, collect responses only until `emit()` returns, and select the highest structural version with first-in-load-order as a same-version tie-breaker. `requestObservMeIntegrationV2()` returns only v2; a v1-only provider means identity-aware integration is unavailable.
 
-See [`../extension-integration.md`](../extension-integration.md) for the public contract and [`../../examples/integrations/subagent-runner.ts`](../../examples/integrations/subagent-runner.ts) for a transport-agnostic consumer example.
+The public API covers current context plus subagent start, launcher failure, terminal child completion, wait, and join transitions. `startSubagent()` returns the sanitized process environment that the launcher passes to the child. Runtime negotiation lets an orchestrator remain optional when ObservMe is absent or inactive. A package with a real ObservMe dependency should use the helper. An intentionally decoupled package may mirror the request/response and lifecycle unions locally because separately installed packages cannot assume shared module roots, constructors, or `instanceof` identity.
+
+Root negotiation and child compatibility are independent. Identity envelope version 1 requires an explicitly loaded child `@senad-d/observme` 0.1.8 or later; a launcher using `--no-extensions` must pin and add that child extension explicitly. V1 remains available for older metadata-free launchers and writes no v2 identity marker or fields.
+
+See [`../extension-integration.md`](../extension-integration.md) for the public wire, validation, identity, OrcMe implemented-versus-planned, and lifecycle contract. See [`../../examples/integrations/subagent-runner.ts`](../../examples/integrations/subagent-runner.ts) for a transport-agnostic v2 helper consumer.
 
 ## 14. Versioning
 

@@ -63,6 +63,7 @@ function makeLineage(overrides = {}) {
     rootAgentId: "agent-root",
     depth: 0,
     role: "orchestrator",
+    displayName: "Coordinator",
     capability: "planning",
     orphaned: false,
     ...overrides,
@@ -78,6 +79,7 @@ function createRuntimeSnapshot() {
       rootAgentId: "agent-root",
       depth: 0,
       role: "orchestrator",
+      displayName: "Coordinator",
       capability: "planning",
       orphaned: false,
       childIds: ["agent-child-a", "agent-child-b"],
@@ -108,6 +110,8 @@ function createRuntimeSnapshot() {
         parentAgentId: "agent-root",
         depth: 1,
         role: "worker",
+        displayName: "Scout",
+        capability: "code-search",
         orphaned: false,
         childIds: [],
         activeChildren: 0,
@@ -121,6 +125,8 @@ function createRuntimeSnapshot() {
         parentAgentId: "agent-root",
         depth: 1,
         role: "reviewer",
+        displayName: "Scout",
+        capability: "review",
         orphaned: false,
         childIds: [],
         activeChildren: 0,
@@ -207,6 +213,8 @@ function createChildRows(count) {
     parentAgentId: "agent-root",
     depth: 1 + (index % 3),
     role: index % 2 === 0 ? "worker" : "reviewer",
+    displayName: `Agent ${index % 3}`,
+    capability: index % 2 === 0 ? "code-search" : "review",
     orphaned: index % 11 === 0,
     childIds: [],
     activeChildren: index === count - 1 ? 1 : 0,
@@ -222,6 +230,7 @@ function createRenderSnapshot(children, recentChildrenLimit = 4) {
     workflowRootAgentId: "agent-root",
     agentId: "agent-root",
     rootAgentId: "agent-root",
+    displayName: "Coordinator",
     role: "orchestrator",
     capability: "planning",
     depth: 0,
@@ -261,6 +270,7 @@ test("renderObsAgents reports current lineage, child relationships, and wait/joi
     workflowRootAgentId: "agent-root",
     agentId: "agent-root",
     rootAgentId: "agent-root",
+    displayName: "Coordinator",
     role: "orchestrator",
     capability: "planning",
     depth: 0,
@@ -288,17 +298,27 @@ test("renderObsAgents reports current lineage, child relationships, and wait/joi
     output,
     [
       "Workflow: workflow-1 root=agent-root",
-      "Agent: agent-root (orchestrator depth=0)",
+      "Agent: agent-root name=Coordinator role=orchestrator capability=planning depth=0",
       "Session: session-1",
       "Subagents spawned in current trace: 2",
       "Current tree: depth=2 width=4 active=1 orphaned=0",
-      "Recent children: agent-child-a status=active depth=1; agent-child-b status=completed depth=1",
-      "Latest child: agent-child-b status=completed active=0 join=1.2s",
+      "Recent children: agent-child-a name=Scout role=worker capability=code-search status=active depth=1; agent-child-b name=Scout role=reviewer capability=review status=completed depth=1",
+      "Latest child: agent-child-b name=Scout role=reviewer capability=review status=completed active=0 join=1.2s",
       "Wait/join hints: active_waits=0 active_joins=0 latest=join:agent-child-b status=completed duration=1.2s",
       "Aggregate agent metrics (last 1h): spawn_series=1 fanout_series=1 orphan_series=0",
       `Lineage drill-down: Tempo attributes pi.agent.id, pi.workflow.id traces=1 latest_trace=${remoteTraceId}`,
     ].join("\n"),
   );
+});
+
+test("renderObsAgents keeps duplicate display names separate by technical agent ID", () => {
+  const output = renderObsAgents(createRenderSnapshot(createRuntimeSnapshot().children, 4));
+
+  assert.match(
+    output,
+    /Recent children: agent-child-a name=Scout role=worker capability=code-search.*agent-child-b name=Scout role=reviewer capability=review/u,
+  );
+  assert.match(output, /Latest child: agent-child-b name=Scout/u);
 });
 
 test("renderObsAgents bounds recent child rows while preserving useful agent fields", () => {
@@ -310,16 +330,16 @@ test("renderObsAgents bounds recent child rows while preserving useful agent fie
 
   assert.match(zeroOutput, /Recent children: none/u);
   assert.doesNotMatch(fewerOutput, /omitted/u);
-  assert.match(fewerOutput, /agent-child-01 status=completed depth=1/u);
-  assert.match(fewerOutput, /agent-child-03 status=active depth=3/u);
+  assert.match(fewerOutput, /agent-child-01 name=Agent 0 role=worker capability=code-search status=completed depth=1/u);
+  assert.match(fewerOutput, /agent-child-03 name=Agent 2 role=worker capability=code-search status=active depth=3/u);
   assert.doesNotMatch(exactOutput, /omitted/u);
-  assert.match(exactOutput, /agent-child-04 status=active depth=1/u);
+  assert.match(exactOutput, /agent-child-04 name=Agent 0 role=reviewer capability=review status=active depth=1/u);
 
   assert.match(greaterOutput, /Recent children: .*agent-child-01.*agent-child-02.*agent-child-06.*agent-child-07/u);
   assert.match(greaterOutput, /omitted 3 child row\(s\)/u);
   assert.doesNotMatch(greaterOutput, /agent-child-03/u);
   assert.doesNotMatch(greaterOutput, /agent-child-05/u);
-  assert.match(greaterOutput, /Latest child: agent-child-07 status=active active=1 join=1\.2s/u);
+  assert.match(greaterOutput, /Latest child: agent-child-07 name=Agent 0 role=worker capability=code-search status=active active=1 join=1\.2s/u);
 
   assert.ok(largeOutput.length < 1200);
   assert.match(largeOutput, /Workflow: workflow-1 root=agent-root/u);
@@ -334,9 +354,13 @@ test("renderObsAgents bounds injected display fields and strips label controls",
   const children = createChildRows(60).map((child, index) => ({
     ...child,
     agentId: `agent\n${index}-${"🙂".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`,
+    displayName: `Scout\n${index}-${"🙂".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`,
+    capability: `code\n${index}-${"x".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`,
   }));
   const snapshot = createRenderSnapshot(children, 10);
   snapshot.workflowId = `workflow\u0000-${"w".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`;
+  snapshot.displayName = `Coordinator\u0000-${"c".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`;
+  snapshot.capability = `planning\u2028${"p".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`;
   snapshot.tempoSearchAttributes = {
     [`pi.agent\n${"x".repeat(OBS_BACKEND_LABEL_MAX_CHARS)}`]: "agent-root",
   };
@@ -346,7 +370,7 @@ test("renderObsAgents bounds injected display fields and strips label controls",
 
   assert.ok(output.length <= OBS_COMMAND_OUTPUT_MAX_CHARS);
   assert.match(output, /Workflow: workflow -w+… root=agent-root/u);
-  assert.match(output, /Recent children: agent 0-.*… status=/u);
+  assert.match(output, /Recent children: agent 0-.*… name=Scout 0-.*… role=worker capability=code 0-.*… status=/u);
   assert.match(output, /omitted 50 child row\(s\)/u);
   assert.match(output, /latest_trace=trace .*…/u);
   assert.doesNotMatch(output, /agent\n0/u);
@@ -595,6 +619,9 @@ test("local agents runtime snapshots current tree state without importing query 
   assert.equal(snapshot.currentAgent.fanoutCount, 1);
   assert.equal(snapshot.summary.activeChildren, 1);
   assert.equal(snapshot.children[0].agentId, "agent-child");
+  assert.equal(snapshot.children[0].displayName, "Coordinator");
+  assert.equal(snapshot.children[0].role, "worker");
+  assert.equal(snapshot.children[0].capability, "planning");
   assert.equal(snapshot.waitJoinHints[0].active, true);
 });
 

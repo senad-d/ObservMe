@@ -1,3 +1,4 @@
+import type { ObservMeChildDescriptor } from "../integration.ts";
 import { BoundedMap } from "../util/bounded-map.ts";
 import type { AgentLineageContext, AgentRole } from "./agent-lineage.ts";
 import { isHighCardinalityLineageKey } from "./agent-lineage.ts";
@@ -11,7 +12,9 @@ export interface AgentTreeNode {
   readonly parentAgentId?: string;
   readonly depth: number;
   readonly role: AgentRole;
+  readonly displayName?: string;
   readonly capability?: string;
+  readonly childDescriptor?: ObservMeChildDescriptor;
   readonly orphaned: boolean;
   readonly childIds: readonly string[];
   readonly activeChildren: number;
@@ -40,7 +43,9 @@ interface MutableAgentTreeNode {
   parentAgentId?: string;
   depth: number;
   role: AgentRole;
+  displayName?: string;
   capability?: string;
+  childDescriptor?: ObservMeChildDescriptor;
   orphaned: boolean;
   childIds: Set<string>;
   fanoutCount: number;
@@ -68,13 +73,18 @@ export class AgentTreeTracker {
     return this.#nodes.size;
   }
 
-  registerAgent(lineage: AgentLineageContext, status: AgentChildStatus = "active"): AgentTreeNode {
+  registerAgent(
+    lineage: AgentLineageContext,
+    status: AgentChildStatus = "active",
+    childDescriptor?: ObservMeChildDescriptor,
+  ): AgentTreeNode {
     const existingNode = this.#nodes.get(lineage.agentId);
     if (existingNode && !isAgentStatusTransitionAllowed(existingNode.status, status)) {
       return snapshotNode(existingNode, this.#nodes);
     }
 
-    const node = createMutableNode(lineage, status, this.isOrphan(lineage));
+    const retainedDescriptor = childDescriptor ?? existingNode?.childDescriptor;
+    const node = createMutableNode(lineage, status, this.isOrphan(lineage), retainedDescriptor);
     this.retainParentForInsertion(node.parentAgentId);
     this.#nodes.set(lineage.agentId, node);
     this.linkParentToChild(node);
@@ -199,6 +209,7 @@ function createMutableNode(
   lineage: AgentLineageContext,
   status: AgentChildStatus,
   orphaned: boolean,
+  childDescriptor?: ObservMeChildDescriptor,
 ): MutableAgentTreeNode {
   return {
     agentId: lineage.agentId,
@@ -206,8 +217,10 @@ function createMutableNode(
     rootAgentId: lineage.rootAgentId,
     parentAgentId: lineage.parentAgentId,
     depth: lineage.depth,
-    role: lineage.role,
-    capability: lineage.capability,
+    role: childDescriptor?.role ?? lineage.role,
+    displayName: childDescriptor?.displayName ?? lineage.displayName,
+    capability: childDescriptor?.capability ?? lineage.capability,
+    childDescriptor,
     orphaned,
     childIds: new Set(),
     fanoutCount: 0,
@@ -225,7 +238,9 @@ function snapshotNode(node: MutableAgentTreeNode, nodes?: BoundedMap<string, Mut
     parentAgentId: node.parentAgentId,
     depth: node.depth,
     role: node.role,
+    displayName: node.displayName,
     capability: node.capability,
+    childDescriptor: node.childDescriptor,
     orphaned: node.orphaned,
     childIds,
     activeChildren: countActiveChildren(childIds, nodes),

@@ -49,6 +49,9 @@ observme:
     spawnIdEnv: OBSERVME_SPAWN_ID
     propagateTraceContext: true
     propagateToSubagents: true
+    childIdentityEnvelopeVersionEnv: OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION
+    displayNameEnv: OBSERVME_AGENT_DISPLAY_NAME
+    roleEnv: OBSERVME_AGENT_ROLE
     capabilityEnv: OBSERVME_AGENT_CAPABILITY
     writeCorrelationEntry: false
 
@@ -210,9 +213,9 @@ OBSERVME_ALLOW_INSECURE_TRANSPORT
 
 `OBSERVME_HASH_SALT` is not a config-field override. It is the default secure salt input selected by `privacy.tenantSaltEnv` and is required when the redaction pipeline hashes captured content.
 
-### 2.2 Launcher-only lineage envelope
+### 2.2 Launcher-only propagation envelope
 
-These names are read only from the Pi process environment at the trusted parent/child boundary, not from project `.env` configuration:
+These names belong to the trusted parent/child process boundary, not to project `.env` configuration values:
 
 ```text
 OBSERVME_WORKFLOW_ID
@@ -224,12 +227,15 @@ OBSERVME_PARENT_TRACE_ID
 OBSERVME_PARENT_SPAN_ID
 OBSERVME_AGENT_DEPTH
 OBSERVME_SPAWN_ID
+OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION
+OBSERVME_AGENT_DISPLAY_NAME
+OBSERVME_AGENT_ROLE
 OBSERVME_AGENT_CAPABILITY
 traceparent
 tracestate
 ```
 
-An ObservMe-aware launcher should pass the environment returned by `startSubagent()` rather than setting these values itself. In particular, a child envelope must not inherit `OBSERVME_AGENT_ID`; the child generates its own agent ID. `OBSERVME_AGENT_ID` is retained as an internal configurable environment-name contract for validated recovery/runtime contexts.
+An ObservMe-aware launcher should pass the environment returned by `startSubagent()` rather than setting these values itself. In particular, a child envelope must not inherit `OBSERVME_AGENT_ID`; the child generates its own agent ID. `OBSERVME_AGENT_ID` is retained as an internal configurable environment-name contract for validated recovery/runtime contexts. Configuring the three new child-identity key names does not by itself emit an identity marker, display name, or role.
 
 ### 2.3 Active-agent lease configuration
 
@@ -245,6 +251,17 @@ Do not tune this field by shortening Collector `metric_expiration`. The recommen
 ## 3. Workflow and Agent Lineage Configuration
 
 The `workflow:` and `agent:` config blocks control generated workflow identity, generated agent identity, and parent/child propagation. `pi.workflow.id`, `pi.agent.id`, `pi.agent.parent_id`, and related values are high-cardinality identifiers for traces/logs only; they must not be metric labels by default.
+
+Child-identity environment-key settings use these defaults and may be customized through the same global YAML, trusted project YAML, or explicit runtime-option layers as other `agent` fields:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `agent.childIdentityEnvelopeVersionEnv` | `OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION` | Version marker for one complete child-identity envelope. |
+| `agent.displayNameEnv` | `OBSERVME_AGENT_DISPLAY_NAME` | Child display-name value. |
+| `agent.roleEnv` | `OBSERVME_AGENT_ROLE` | Child role value. |
+| `agent.capabilityEnv` | `OBSERVME_AGENT_CAPABILITY` | Child capability value; this existing key remains the capability contract. |
+
+All configured workflow, lineage, trace-context, and child-identity environment names must be safe and case-insensitively unique. They also must not collide with fixed `traceparent` or `tracestate` names. Collision diagnostics are bounded and never render the rejected configured name.
 
 Rules:
 
@@ -403,6 +420,7 @@ Reject config when:
 - Project-local config is read while `ctx.isProjectTrusted()` is false.
 - A project config, project `.env`, or starter-config path escapes the canonical project root, changes identity during I/O, or cannot be verified safely.
 - Propagated workflow or agent lineage values are malformed, too long, or contain unsafe characters.
+- Configured workflow, lineage, trace-context, or child-identity environment names are malformed, duplicate another propagation key case-insensitively, or collide with `traceparent` / `tracestate`.
 - Queue sizes exceed configured memory guardrails.
 
 ## 10. Minimal Config

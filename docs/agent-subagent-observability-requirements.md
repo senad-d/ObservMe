@@ -77,6 +77,14 @@ The future orchestration extension should provide the complete control plane for
 
 Current state: ObservMe already has lineage, agent-tree, spawn, wait/join, dashboard, and `/obs agents` building blocks, but subagent dashboards are not fully automatic for arbitrary child Pi processes or tmux sessions. Full dashboard behavior requires an ObservMe-aware orchestration launcher.
 
+### Published v2 boundary and OrcMe adoption status
+
+ObservMe 0.1.8 defines integration API v2 and child-identity envelope version 1. A v2 launcher supplies one complete descriptor: a 1–128-code-point control-free Unicode display name, one exact role (`lead`, `helper`, `worker`, or `validator`), and a 1–64-character capability matching `[A-Za-z0-9][A-Za-z0-9._:-]*`. Display name is presentation, role is descriptive telemetry, capability is a stable machine value, and technical lifecycle IDs remain correlation keys. Display name and capability are forbidden metric labels.
+
+The stable runtime boundary is the synchronous `observme:integration:request` channel. A package with an ObservMe dependency should use `requestObservMeIntegrationV2()`; a package intentionally decoupled from ObservMe may mirror the structural wire contract locally. Separately installed Pi packages must not assume shared Node module roots, constructors, or `instanceof` identity. Root API v2 compatibility also does not prove that an explicitly loaded child extension can read envelope version 1; a child launched with `--no-extensions` must explicitly load and pin ObservMe 0.1.8 or later.
+
+The reviewed OrcMe implementation remains API v1 today: it mirrors the v1 shape locally, advertises `[1]`, and does not send the v2 child descriptor. Its approved downstream role chain is `lead` (coordinates), `helper` (scoped assistance), `worker` (executes assigned work), then `validator` (independently checks). Future adoption maps durable display identity, manifest role, and pinned definition name to ObservMe display name, role, and capability exactly. ObservMe telemetry remains supplementary, grants no OrcMe authority, and never replaces OrcMe's authoritative durable task state. See [`extension-integration.md`](extension-integration.md#orcme-interoperability-profile-shipped-v1-versus-planned-v2) for the direct-RPC environment bridge, policy, pinning, and lifecycle contract.
+
 ## 1. Terminology
 
 ### Pi agent runtime
@@ -123,7 +131,7 @@ In ObservMe, a subagent is a separate Pi runtime that has trusted parent lineage
 - `pi.agent.root_id` is inherited from the original root agent.
 - `pi.workflow.id` is inherited from the original workflow.
 - `pi.agent.depth` is parent depth plus one.
-- `pi.agent.role` is usually `subagent` unless explicitly set to a bounded role such as `worker` or `reviewer`.
+- An envelope-free v1 child uses the legacy `subagent` role. A complete supported child-identity envelope uses the launcher's exact v2 role: `lead`, `helper`, `worker`, or `validator`. Role never determines ObservMe lineage depth.
 
 ### Pi subagent agent definitions
 
@@ -134,13 +142,9 @@ The Pi subagent example uses markdown agent definitions such as:
 
 Each definition has frontmatter like `name`, `description`, `tools`, and `model`, plus a system prompt body.
 
-These markdown agent names are not automatically the same thing as ObservMe `pi.agent.id` or `pi.agent.role`. For observability they should be treated as safe capability/role metadata only if mapped intentionally, for example:
+These markdown agent names are not automatically the same thing as ObservMe `pi.agent.id`, display name, role, or capability. A v2-aware launcher must supply all three child-identity fields explicitly; ObservMe does not infer any field from a markdown definition, command, prompt, or depth. The internal role model keeps the ObservMe topology role `root`, exact v2 child roles (`lead`, `helper`, `worker`, `validator`), and retained legacy/historical roles (`subagent`, `orchestrator`, `reviewer`, `unknown`) distinct.
 
-- `OBSERVME_AGENT_CAPABILITY=scout`
-- `agent_capability="scout"`
-- `agent_role="worker"` or `agent_role="reviewer"`
-
-Do not use markdown agent names as high-cardinality identifiers.
+Do not use markdown agent names as high-cardinality identifiers or metric labels.
 
 ### Tmux-managed subagent
 
@@ -210,15 +214,16 @@ Expected behavior:
 
 The shipped extension registers session handlers with `trustedParentContext: true`, making the Pi process environment eligible for launcher-provided lineage. Trusted project `.env` values are loaded into ObservMe configuration but are not copied into this lineage input, so a project file cannot establish parent provenance.
 
-Eligibility is not blind acceptance. When any propagation value is present, `src/pi/agent-lineage.ts` requires a complete validated workflow, parent agent, root agent, parent depth, and spawn envelope. A `traceparent` that is present must be valid W3C; a missing `traceparent` does not invalidate the envelope — lineage connects and trace continuity degrades to the bounded `trace_context.propagation_failed` fallback. Optional `tracestate` and duplicate parent trace/span metadata must validate and agree. A stale inherited child agent id is rejected. Partial, malformed, oversized, or stale envelopes fail open to root/orphan lineage with bounded diagnostics that never include raw inherited values.
+Eligibility is not blind acceptance. When any propagation value is present, `src/pi/agent-lineage.ts` requires a complete validated workflow, parent agent, root agent, parent depth, and spawn envelope. Child identity is read only after its version marker: marker version `1` must be accompanied by a complete descriptor whose display name, role, and capability pass the shared API validator. Identity fields without a marker, incomplete or malformed descriptors, stale contradictions, and unknown versions discard the whole propagated envelope and fail open to root/orphan lineage. Unknown versions are not partially interpreted. A `traceparent` that is present must be valid W3C; a missing `traceparent` does not invalidate the envelope — lineage connects and trace continuity degrades to the bounded `trace_context.propagation_failed` fallback. Optional `tracestate` and duplicate parent trace/span metadata must validate and agree. A stale inherited child agent id is rejected. Diagnostics are bounded and never include raw inherited values.
 
-ObservMe validates the process envelope but does not cryptographically authenticate the launcher. An ObservMe-aware launcher remains responsible for constructing the envelope immediately before child startup and clearing stale propagation variables. Explicit runtime lineage options remain available to tests and embedders.
+ObservMe validates the process envelope but does not cryptographically authenticate the launcher. An ObservMe-aware launcher remains responsible for constructing the envelope immediately before child startup and clearing stale propagation variables. Explicit trusted runtime lineage options remain available to tests and embedders and take precedence over validated propagated display name, role, and capability. Validated active-branch recovery metadata likewise takes precedence over process capability.
 
 For tmux orchestration this is the critical distinction:
 
 - **Child Pi with ObservMe but no propagation envelope:** telemetry exists and the child starts as a root-like runtime.
-- **Child Pi with a complete validated process envelope:** telemetry joins the parent workflow and continues the propagated W3C trace.
-- **Child Pi with a partial/broken/stale envelope:** Pi keeps running with root/orphan fallback and one bounded propagation-failure signal.
+- **Child Pi with a complete validated v1 lineage envelope and no identity marker:** telemetry joins the parent workflow with legacy `subagent` behavior and no child capability.
+- **Child Pi with a complete validated lineage envelope plus supported identity envelope:** telemetry joins the parent workflow with the exact display name, v2 role, and capability supplied by the launcher.
+- **Child Pi with a partial, malformed, contradictory, stale, or unknown-version envelope:** Pi keeps running with root/orphan fallback and one bounded value-free propagation-failure signal.
 
 ## 3. What ObservMe must do at a subagent spawn point
 
@@ -239,7 +244,8 @@ The required parent-side flow is:
 
 External extensions use the versioned API documented in [`extension-integration.md`](extension-integration.md):
 
-- `requestObservMeIntegration(pi)`
+- `requestObservMeIntegration(pi)` for legacy metadata-free v1;
+- `requestObservMeIntegrationV2(pi)` for required v2 child identity;
 - `startSubagent(...)`
 - `completeSubagent(...)`
 - `failSubagent(...)`
@@ -281,6 +287,9 @@ OBSERVME_PARENT_TRACE_ID
 OBSERVME_PARENT_SPAN_ID
 OBSERVME_AGENT_DEPTH
 OBSERVME_SPAWN_ID
+OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION
+OBSERVME_AGENT_DISPLAY_NAME
+OBSERVME_AGENT_ROLE
 OBSERVME_AGENT_CAPABILITY
 traceparent
 tracestate
@@ -289,7 +298,9 @@ tracestate
 Important details:
 
 - `OBSERVME_AGENT_ID` is not normally propagated from parent to child; the child should generate its own `pi.agent.id`.
-- Inherited ObservMe and W3C propagation variables are cleared before current child lineage is written, so stale agent IDs, spawn IDs, parent trace/span IDs, `traceparent`, or `tracestate` never leak into a new child environment.
+- V2 identity uses marker `OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION=1` plus all three display-name, role, and capability values. V1 propagation omits all four identity values and does not inherit parent capability.
+- The child parses the marker before any identity field. Unknown versions, marker-free identity fields, and partial or invalid descriptors invalidate propagation atomically; no partial identity reaches lineage.
+- Inherited ObservMe and W3C propagation variables are cleared before current child lineage is written, so stale identity, agent IDs, spawn IDs, parent trace/span IDs, `traceparent`, or `tracestate` never leak into a new child environment.
 - This sanitization only happens on the ObservMe spawn path. A subagent process that launches a further child by passing its own `process.env` directly hands down the envelope *it received*: the grandchild then validates successfully but attaches as a **sibling** of its parent (same parent agent id, same spawn id, same depth) with no orphan signal. Every spawn must go through `startSubagent()` (or otherwise rebuild the envelope) — never reuse an inherited envelope.
 - `OBSERVME_AGENT_DEPTH` carries the parent depth. The child increments it when creating its own lineage.
 - `traceparent` and `tracestate` let the child continue the same distributed trace when possible.
@@ -312,6 +323,8 @@ agent:
 Validation gates:
 
 - Workflow, parent-agent, root-agent, depth, and spawn values must be present together when any propagated value is supplied.
+- A child-identity marker must be exactly version `1`; all three descriptor fields must be present and pass the shared child-descriptor validator. Identity fields without the marker are a partial envelope.
+- Display name is 1–128 Unicode scalar values with no control characters; role is exactly `lead`, `helper`, `worker`, or `validator`; capability is 1–64 ASCII characters matching `[A-Za-z0-9][A-Za-z0-9._:-]*`.
 - Lineage env values must be short and match the safe character pattern.
 - A supplied `traceparent` must be valid W3C; a missing `traceparent` degrades trace continuity without invalidating the lineage envelope. Optional `tracestate` is bounded, structurally validated, and requires `traceparent`.
 - Parent trace id must be 32 hex characters and parent span id must be 16 hex characters when duplicate metadata is supplied; both must match `traceparent`.
@@ -377,23 +390,25 @@ For all modes, ObservMe lineage propagation is mandatory.
 Each manageable agent should have a bounded definition:
 
 ```yaml
-name: scout
-role: worker              # root|subagent|orchestrator|worker|reviewer|unknown
-capability: scout         # bounded low-cardinality value
+name: scout                 # launcher definition name; not inferred by ObservMe
+displayName: Scout          # durable presentation identity
+role: worker                # lead|helper|worker|validator
+capability: code-search     # stable machine value
 description: Fast codebase recon
 model: claude-haiku-4-5
 tools: read, grep, find, ls, bash
-mode: tmux-print-json     # tmux-interactive|tmux-print-json|tmux-rpc
-cwdPolicy: parent         # parent|explicit|project-root
+mode: tmux-print-json       # tmux-interactive|tmux-print-json|tmux-rpc
+cwdPolicy: parent           # parent|explicit|project-root
 maxRuntimeMs: 1800000
 maxConcurrent: 4
 ```
 
 Rules:
 
-- `name`, `role`, and `capability` must be normalized to bounded safe strings before use in telemetry.
-- `name` may be shown in UI and tmux names, but it must not replace `pi.agent.id`.
-- `role` and `capability` may become metric labels only if bounded by config validation.
+- The launcher validates and supplies a complete descriptor; ObservMe does not trim, normalize, infer, or rewrite it.
+- `displayName` may be shown in UI and tmux names, but it must not replace `pi.agent.id` or any task/spawn/attempt/instance ID.
+- `role` is one of the four frozen v2 values and may be used only where a metric already has documented bounded role semantics.
+- `displayName` and `capability` remain UI/resource/span/log attributes and must not become metric labels without a later explicit bounded allowlist contract.
 - Project-local agent definitions require project trust and, in interactive mode, confirmation before execution.
 
 ### Child Pi command requirements
@@ -433,7 +448,7 @@ spawn_id
 workflow_id
 parent_agent_id
 child_agent_id when known
-agent_name
+agent_display_name
 agent_role
 agent_capability
 tmux_session_name
@@ -446,7 +461,7 @@ last_status_at
 Telemetry rules:
 
 - `spawn_id`, `workflow_id`, `parent_agent_id`, `child_agent_id`, and session ids are span/log attributes only.
-- `agent_role`, `agent_capability`, `subagent_depth`, `spawn_type`, `spawn_reason`, `status`, and `reason` may be metric labels when bounded.
+- `agent_role`, `subagent_depth`, `spawn_type`, `spawn_reason`, `status`, and `reason` may be metric labels only where their bounded semantics are documented. `agent_display_name` and `agent_capability` remain local/trace/log metadata.
 - Tmux pane ids and raw session names should be treated as operational metadata; prefer span/log attributes or hashed values, not metric labels.
 
 Lifecycle operations:
@@ -729,11 +744,10 @@ sum(rate(observme_parent_recovered_from_child_failure_total[$__rate_interval])) 
 
 ### Allowed metric labels
 
-Low-cardinality labels allowed for aggregates:
+Low-cardinality labels allowed for aggregates when the owning instrument documents them:
 
 ```text
 agent_role
-agent_capability
 subagent_depth
 spawn_type
 spawn_reason
@@ -770,9 +784,11 @@ raw_command
 raw_prompt
 raw_path
 raw_error_message
+agent_display_name
+agent_capability
 ```
 
-The production Collector config reinforces this by deleting high-cardinality metric resource attributes such as `pi.workflow.id`, `pi.agent.id`, `pi.agent.parent_id`, `pi.agent.root_id`, `pi.agent.spawn.id`, `pi.agent.child.id`, and `pi.session.id` from the metrics pipeline.
+Display name and capability are permitted as bounded resource/span/log/UI attributes, but not as Prometheus labels under the v2 contract. The production Collector config reinforces this by deleting `pi.agent.display_name`, `pi.agent.capability`, and high-cardinality metric resource attributes such as `pi.workflow.id`, `pi.agent.id`, `pi.agent.parent_id`, `pi.agent.root_id`, `pi.agent.spawn.id`, `pi.agent.child.id`, and `pi.session.id` from the metrics pipeline.
 
 ## 9. What `/obs agents` needs
 
@@ -829,10 +845,10 @@ By default, the example spawn call does not request ObservMe's integration API o
 
 Therefore, to use that style of subagent and still populate ObservMe dashboards, an ObservMe-aware adapter must wrap the child process spawn and pass the returned env to the child process.
 
-Minimum adapter behavior:
+Minimum identity-aware adapter behavior:
 
-1. Request the API with `requestObservMeIntegration(pi)`.
-2. Before spawning child Pi, call `startSubagent` with spawn type/reason and safe command metadata.
+1. Request API v2 with `requestObservMeIntegrationV2(pi)`; do not fall back to v1 when child identity is required.
+2. Before spawning child Pi, call `startSubagent` with a complete fresh descriptor, spawn type/reason, and safe command metadata.
 3. Pass the returned `env` into `child_process.spawn`.
 4. On launcher error before the child runs, call `failSubagent`.
 5. Around blocking waits, call `startWait` and `endWait`.
@@ -872,7 +888,8 @@ Use this checklist before expecting subagents to appear correctly in Grafana.
 - [ ] Parent has a current `pi.workflow.id` and `pi.agent.id`.
 - [ ] `workflow.enabled=true`.
 - [ ] `agent.propagateToSubagents=true`.
-- [ ] Parent subagent launcher uses ObservMe spawn helpers.
+- [ ] Parent subagent launcher uses the explicit v2 helper when identity is required.
+- [ ] Every v2 launch supplies one fresh complete child descriptor.
 - [ ] Parent passes returned env into the child Pi process.
 - [ ] In tmux mode, parent injects env explicitly into the tmux child command and does not rely on stale tmux server env.
 - [ ] Parent records tmux session/pane status in a bounded local registry.
@@ -881,9 +898,10 @@ Use this checklist before expecting subagents to appear correctly in Grafana.
 
 ### Child process
 
-- [ ] Child Pi process loads ObservMe.
-- [ ] Child command does not use `--no-extensions` unless ObservMe is explicitly re-added.
+- [ ] Child Pi process loads ObservMe 0.1.8 or later when identity envelope version 1 is used.
+- [ ] Child command does not use `--no-extensions` unless the pinned compatible ObservMe extension is explicitly re-added.
 - [ ] Child receives `OBSERVME_WORKFLOW_ID`, `OBSERVME_PARENT_AGENT_ID`, `OBSERVME_ROOT_AGENT_ID`, `OBSERVME_AGENT_DEPTH`, and `OBSERVME_SPAWN_ID`.
+- [ ] A v2 child also receives marker version `1` and the complete display-name, role, and capability fields.
 - [ ] Child receives `traceparent` when trace propagation is enabled and possible.
 - [ ] Child accepts propagated ObservMe env as trusted parent context.
 - [ ] Child exports OTLP to the configured Collector/backend.
@@ -939,7 +957,7 @@ High-cardinality identifiers remain log/trace filters only. Prometheus panels sh
 
 The Agents and Agent Node Graphs dashboards now surface the main operator questions directly: spawn failure ratio, orphan pressure, trace-context propagation failure ratio, child recovery ratio, depth/fan-out alert references, slow/failing/orphan/high-fan-out top tables, and Loki handoff rows with Trace Journey/Tempo drill-down links. The node graphs also include red health nodes/edges for failed spawns, orphan lineage, and propagation failures alongside selected-range counts.
 
-`agent_capability` remains deliberately absent from dashboard filters until a launcher emits a bounded capability label consistently. Keep capability detail in Loki/Tempo or orchestration-local state unless the launcher maps names into a documented low-cardinality enum.
+`agent_capability` remains deliberately absent from dashboard filters. Keep capability detail in Loki/Tempo or orchestration-local state; v2 does not permit capability as a Prometheus label without a later explicit bounded allowlist contract.
 
 ## 12. Current implementation checkpoints and gaps
 
@@ -972,8 +990,9 @@ These checkpoints reflect the current code and dashboards after source-review re
    - Orphan signals from the tracker and session-propagation paths share the `{status, reason}` label keys but use different bounded values per path.
    - The agent-tree depth/width/fan-out histograms are recorded from two paths with disjoint label sets (`agent_role`/`subagent_depth`/`spawn_type`/`spawn_reason` from spawns vs `status`/`reason` from lineage observations); dashboards grouping on spawn-path labels filter with `subagent_depth!=""` to exclude blank-label lineage samples.
 
-3. **Agent capability is not automatically derived from Pi markdown agent definitions.**
-   - If dashboards should show `agent_capability`, the subagent launcher must map agent names/capabilities into a documented bounded enum before metrics use them.
+3. **External launcher adoption remains explicit.**
+   - V2 resolves descriptor ownership and validation: the launcher supplies display name, exact role, and capability without ObservMe inference. Individual launchers, including OrcMe, still need downstream adoption before their managed definitions emit that descriptor.
+   - Capability remains trace/log/resource/UI metadata and is not a dashboard metric label under this contract.
 
 4. **Tmux management state does not exist yet.**
    - ObservMe has bounded in-memory telemetry agent-tree state, but not a tmux orchestration registry for session names, panes, attach commands, stop/cleanup state, or result collection.
@@ -989,7 +1008,7 @@ Required decisions:
 2. **Tmux control model:** decide supported modes (`tmux-interactive`, `tmux-print-json`, `tmux-rpc`), session naming, attach/detach behavior, status detection, and cleanup policy.
 3. **Trust model:** use the implemented complete process-envelope boundary; decide whether a future orchestrator also needs cryptographic signing against same-user processes.
 4. **Child ObservMe loading:** decide whether child Pi commands rely on installed ObservMe packages or receive explicit `-e` extension loading.
-5. **Capability mapping:** decide whether Pi markdown agent names map to `agent_capability`, `agent_role`, both, or neither.
+5. **Descriptor ownership:** require each v2 launcher to supply display name, exact role, and capability explicitly; do not infer them from Pi markdown definitions, commands, prompts, tools, or depth.
 6. **Metric label contract:** align the remaining active-agent, spawn-failure, and orphan dashboard dimensions while keeping high-cardinality ids out of labels.
 7. **Duration/failure accounting:** use the implemented elapsed spawn duration and deduplicated child failure/recovery counters at completion/join transitions.
 8. **Packaging:** ensure both parent and child Pi processes load ObservMe and share compatible config/export endpoints.
@@ -997,6 +1016,7 @@ Required decisions:
 
 Once those decisions are implemented, root agents and subagents can be distinguished as follows:
 
-- Root agent: no parent id, depth `0`, role `root` or `orchestrator`.
-- Subagent: has parent id, inherited workflow/root id, depth `1+`, role `subagent` or a bounded worker role.
+- Root agent: no parent id, depth `0`, topology role `root` (with `orchestrator` retained only as a historical value).
+- V1 subagent: has parent id, inherited workflow/root id, depth `1+`, legacy role `subagent`, and no child display name/capability.
+- V2 subagent: has parent id, inherited workflow/root id, depth `1+`, and exactly the launcher-supplied `lead`, `helper`, `worker`, or `validator` role; role never determines depth or authority.
 - Orphan: has incomplete/broken parent lineage or parent cannot be linked, with orphan logs/metrics emitted.

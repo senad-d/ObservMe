@@ -151,10 +151,15 @@ The package also includes the `observme-docs` skill. Pi can load it automaticall
 Orchestrators, subagent runners, process managers, remote executors, and other Pi extensions can request ObservMe's versioned integration API through `pi.events`. The API records parent-side spawn/wait/join telemetry and returns the sanitized environment that must be passed to each child Pi process for workflow, agent-lineage, and W3C trace propagation.
 
 ```typescript
-import { requestObservMeIntegration } from "@senad-d/observme/integration";
+import { requestObservMeIntegrationV2 } from "@senad-d/observme/integration";
 
-const observme = requestObservMeIntegration(pi);
+const observme = requestObservMeIntegrationV2(pi);
 const started = observme?.startSubagent({
+  child: {
+    displayName: "Scout",
+    role: "worker",
+    capability: "code-search",
+  },
   command: "pi",
   spawnType: "extension",
   spawnReason: "delegated_task",
@@ -183,9 +188,13 @@ if (started?.ok) {
 }
 ```
 
-The discovery helper fails open when the event bus or a provider is malformed. API methods also reject unsafe/oversized requests, duplicate active lifecycle IDs, and active or retained child-placeholder collisions without replacing existing telemetry state. Handle every discriminated failure result locally and keep orchestration functional.
+The v2 descriptor is explicit: display name is a 1–128-code-point control-free presentation label, role is exactly `lead`, `helper`, `worker`, or `validator`, and capability is a 1–64-character machine value matching `[A-Za-z0-9][A-Za-z0-9._:-]*`. These values never replace technical lifecycle IDs. Display name and capability remain resource/span/log/UI attributes and are not Prometheus labels; role telemetry grants no orchestration authority.
 
-Use [`docs/extension-integration.md`](docs/extension-integration.md) for the complete lifecycle, validation limits, and failure contract. The shipped [`examples/integrations/subagent-runner.ts`](examples/integrations/subagent-runner.ts) wraps a generic child transport, while [`docs/agent-subagent-observability-requirements.md`](docs/agent-subagent-observability-requirements.md) covers the larger orchestration design.
+The discovery helper fails open when the event bus or a provider is malformed. API methods also reject unsafe/oversized requests, duplicate active lifecycle IDs, and active or retained child-placeholder collisions without replacing existing telemetry state. Handle every discriminated failure result locally and keep orchestration functional. Unsuffixed exports and `requestObservMeIntegration()` remain metadata-free API v1. V2 advertises `[2, 1]`, selects the highest synchronous structural response, and returns `undefined` for a v1-only result.
+
+Separately installed Pi packages may not share a Node module root. Packages with an ObservMe dependency should use the helper; intentionally decoupled packages may mirror the documented `observme:integration:request` wire shape locally without `instanceof` or shared-constructor checks. Root API v2 negotiation does not prove child support: identity envelope version 1 requires an explicitly loaded child `@senad-d/observme` 0.1.8 or later, including when the launcher uses `--no-extensions`.
+
+Use [`docs/extension-integration.md`](docs/extension-integration.md) for the complete wire, helper/decoupled, lifecycle, validation, OrcMe implemented-versus-planned, and compatibility contract. The shipped [`examples/integrations/subagent-runner.ts`](examples/integrations/subagent-runner.ts) wraps a generic child transport, while [`docs/agent-subagent-observability-requirements.md`](docs/agent-subagent-observability-requirements.md) covers the larger orchestration design.
 
 ## Commands
 

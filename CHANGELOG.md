@@ -4,128 +4,52 @@
 
 ### Added
 
-- Added a bounded GitHub-hosted Linux CI job for active-agent lease contracts and cancellation-oriented Docker integration coverage, with resource-labeled unconditional cleanup.
-- Added Docker-backed active-agent lease integration coverage for clean shutdown, `SIGTERM`, and `SIGKILL`, proving cached raw claims outlive lease-aware activity without a Collector restart.
-- Added a session-scoped active-agent lease controller that renews from the SDK metric collection cycle with an injectable wall clock and deterministic disposal.
-- Added the `observme_agent_lease_expires_unixtime_seconds` asynchronous gauge contract with unit metadata and deterministic observable callback test support.
-- Added bounded `metrics.activeAgentLeaseDurationMillis` configuration with layered `OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS` loading, fail-safe validation, and generated/example configuration coverage.
-- Added a production-readiness task plan for lease-based active-agent accounting that remains accurate after crashes, forced termination, and cancelled GitHub Actions jobs.
-- Added a packaged `observme-docs` Pi skill that routes natural-language ObservMe questions to focused user, operator, reference, example, and contributor documentation through Pi's normal skill discovery, without an ObservMe system-prompt hook.
-- Added a versioned `@senad-d/observme/integration` event-bus API and transport-agnostic child-runner example for parent-side spawn/wait/join telemetry and child process lineage propagation.
-- Added README tables cataloging available metrics, trace spans, and structured log events, including opt-in and reserved signals.
-- Expanded the Grafana suite with SLO Health, Trace Journey, Agent Node Graphs, and LLM Conversations dashboards, plus richer multi-agent, cost, latency, tool, model, log, and export-health views.
-- Added correlated, content-safe telemetry for tool results, agent runs, workflows, subagent lifecycle events, interactive Bash executions, and configuration failures.
-- Added W3C trace continuation for launcher-propagated parent contexts, with sanitized lineage validation and fail-safe span-link/log fallbacks.
-- Added deterministic Pi runtime, Collector, Grafana-stack, dashboard, lifecycle, packaging, and configuration validation coverage.
-- Added SonarQube-compatible LCOV output and focused tests for partial Pi runtimes, lifecycle races, fallback paths, privacy controls, and telemetry contracts.
+- Added a one-tarball packaged parent/child compatibility smoke that negotiates API v2 from an isolated parent install and explicitly loads the same release in a real child process to verify envelope-version-1 identity without exposing environment contents.
+- Extended the dependency-free future OrcMe fixture with direct Pi RPC environment tombstones, one-shot technical-ID retry, nested identity propagation, and exactly-once lifecycle-order contracts.
+- Added a dependency-free structural fixture for planned future OrcMe v2 negotiation, exact four-role identity mapping, and unchanged definition-name capabilities without claiming current OrcMe v2 support.
+- Added consistent v2 child identity semantic attributes across parent spawn/terminal traces and logs plus child runtime resources, spans, and logs, while preserving explicit v1 and historical roles.
+- Added deterministic synchronous multi-provider package negotiation with highest-version selection, Pi load-order tie-breaking, late-response fencing, and structural v2 guards.
+- Added explicit frozen v1 and v2 session-backed integration provider adapters with highest-mutual-version response selection and atomic v2 child-descriptor validation.
+- Added configurable, collision-validated environment key names for child-identity envelope version, display name, role, and the existing capability contract.
+- Added one atomic, observability-free child descriptor validator with bounded value-free failures and exact display-name, role, and capability checks.
+- Added source-compatible v2 integration API types for explicit child display names, fixed roles, capabilities, and identity-envelope metadata while retaining every v1 export unchanged.
+- Added a 17-step, session-sized implementation plan for a versioned ObservMe child display-name, capability, and four-role contract, aligned with OrcMe's implemented API-v1 behavior, planned `lead`/`helper`/`worker`/`validator` model, and package-decoupled compatibility requirements.
+- Lease-based active-agent accounting: a session-scoped lease controller renewed from the SDK metric cycle, the `observme_agent_lease_expires_unixtime_seconds` gauge, bounded `metrics.activeAgentLeaseDurationMillis` / `OBSERVME_ACTIVE_AGENT_LEASE_DURATION_MS` configuration, and Docker-backed CI coverage for clean shutdown, `SIGTERM`, and `SIGKILL`.
+- Versioned `@senad-d/observme/integration` event-bus API and a transport-agnostic child-runner example for parent-side spawn/wait/join telemetry and child process lineage propagation.
+- Packaged `observme-docs` Pi skill that routes natural-language ObservMe questions to focused documentation, resolves references from its installed package root, and verifies answers against the current implementation.
+- W3C trace continuation for launcher-propagated parent contexts, with sanitized lineage validation and fail-safe span-link/log fallbacks.
+- Correlated, content-safe telemetry for tool results, agent runs, workflows, subagent lifecycle events, interactive Bash executions, and configuration failures.
+- New Grafana dashboards (SLO Health, Trace Journey, Agent Node Graphs, LLM Conversations) plus richer multi-agent, cost, latency, tool, model, log, and export-health views.
+- README tables cataloging available metrics, trace spans, and structured log events, including opt-in and reserved signals.
 
 ### Changed
 
-- Raised the release-tested Pi and exact compatibility CI target to 0.82.0, updating the shrinkwrapped `protobufjs` dependency to 7.6.5 and resolving GHSA-j3f2-48v5-ccww.
-- Accepted a complete propagated lineage envelope without `traceparent` instead of failing open to an orphaned root: the child now joins the parent workflow at the correct depth, starts a new trace with the bounded `trace_context.propagation_failed` fallback, and still rejects present-but-malformed W3C context.
-- Added a "Troubleshooting: every agent appears as its own root" guide to the extension-integration documentation, with ranked causes, verification queries, a symptom table, and skill/index routing.
-- Made the packaged `observme-docs` skill implementation-aware: exact answers now verify the smallest owning source slice, code wins over stale design notes, and current backfill, path-capture, PII, reserved-telemetry, and subagent limitations are explicit.
-- Reconciled user, operator, security, architecture, telemetry, command, integration, and contributor documentation with the current command registry, config loader, event handlers, recording points, and privacy pipeline.
-- Aligned the generated starter, local example, validation script, environment examples, and local-stack guide on the Compose-backed `http://localhost` Nginx/Grafana profile with no TLS bypass or forced IPv4.
-- Raised the release-tested Pi and exact compatibility CI target to 0.81.1 while retaining 0.80.5 as the earliest validated target.
-- Made the 0.1.5 hardening patch self-contained with explicit review units, all imported production modules included, and unrelated specification history preserved.
-- Established a typed Pi event registration contract, removed non-event legacy registrations, pinned the release-tested Pi API for validation, and added capability-based pre-registration diagnostics.
-- Centralized embedded-credential Grafana URL diagnostics so configuration validation, readiness checks, URL construction, and transports share one safe failure class and operator guidance.
-- Documented credential-free Grafana base URLs and the fail-closed canonical project-file boundary across configuration, security, query, and troubleshooting guidance.
-- Completed production active-agent lease documentation, raw-query migration guidance, GitHub Actions/self-hosted clock and cleanup runbooks, missing/expired-lease troubleshooting, Collector restart semantics, and sanitized release-validation evidence.
-- Reframed the Collector's five-minute Prometheus `metric_expiration` as exporter-wide stale-series/cardinality cleanup, longer than the default active-agent lease and independent of leased liveness.
-- Migrated active-agent dashboard totals, bounded breakdowns, aggregate topology inputs, and stuck-high alerts to leased activity, with raw/expired-claim diagnostics and a deployment-tunable stale-claim alert.
-- Defined and enforced canonical lease-aware active-agent PromQL for totals, bounded breakdowns, topology inputs, and alerts, including replica deduplication, future-lease rejection, and zero-safe idle states.
-- Documented the production active-agent lease, clock, convergence, instance-join, failure-mode, and backward-compatibility contract used by upcoming runtime and dashboard integration.
-- Moved the detailed technical reference into `docs/reference/` and updated package, documentation, examples, dashboards, tests, and skill routes to use the new location.
-- Made the packaged `observme-docs` skill resolve routed references from its installed package root instead of the caller's working directory or a repository checkout.
-- Reorganized documentation around `docs/README.md`, a categorized technical-reference index, and an example guide with explicit usage and safety notes.
-- Split Pi event handling into focused lifecycle, agent/turn, LLM, tool/Bash, and session modules while preserving the `registerHandlers()` facade.
-- Centralized telemetry conventions, content-capture policy, sensitive-value rejection, diagnostic sanitization, Grafana transport, `/obs` command plumbing, and trusted-project configuration bootstrap.
-- Improved all dashboards with emitted-label-safe queries, selected-range calculations, zero/no-data states, bounded tables, canonical SLO formulas, and time-preserving Loki/Tempo drill-downs.
-- Updated the Cost dashboard to aggregate spend across providers and models, preserve token totals from short-lived sessions, and display sub-cent values accurately.
-- Updated README, dashboard, integration, and operator documentation to match the current command surface, package contents, privacy defaults, and validation workflows.
-- Made strict TypeScript checks, offline coverage, deterministic fixtures, and Docker-backed integration validation more reliable in CI.
+- Published the integration API v2 wire and compatibility contract for helper-based and package-decoupled consumers, including the 0.1.8 child-envelope minimum, the unchanged metadata-free v1 path for legacy launchers and older children, and an explicit distinction between OrcMe's shipped API-v1 behavior and planned v2 adoption. Display identity and role remain non-authoritative supplementary telemetry, while raw prompts, commands, credentials, and environment contents retain the existing privacy boundaries.
+- The transport-neutral subagent runner now requires a complete child descriptor, negotiates only the explicit v2 integration helper, preserves returned environment objects and tombstones unchanged, and remains transport-functional without falling back to v1 lifecycle calls.
+- Role-aware dashboards now preserve exact v2 and legacy agent-role series, while the local Collector explicitly removes display-name and capability resource attributes before Prometheus label promotion.
+- `/obs agents` now shows retained display names, exact roles, capabilities, and technical IDs in local rows while metric builders exclude display name and capability and bound role labels to the v2 catalog plus explicit legacy values.
+- Parent-side v2 spawn state and synthetic child tree nodes now retain one immutable descriptor through lifecycle transitions and bounded eviction, while v1 synthetic children remain metadata-free.
+- Child runtimes now hydrate display name, exact v2 role, and capability only from complete supported identity envelopes; malformed, partial, contradictory, or unknown-version identity fails open atomically with bounded value-free diagnostics, while v1 remains metadata-free.
+- Child process propagation now scrubs all configured identity keys, writes complete version-1 envelopes only for explicit v2 children, and keeps v1 launches metadata-free without inheriting parent capability.
+- Raised the release-tested Pi compatibility target to 0.82.0 (earliest validated remains 0.80.5) and updated `protobufjs` to 7.6.5, resolving GHSA-j3f2-48v5-ccww.
+- A complete propagated lineage envelope without `traceparent` no longer fails open to an orphaned root: the child joins the parent workflow at the correct depth and starts a new trace with a bounded `trace_context.propagation_failed` fallback.
+- Migrated active-agent dashboard totals, topology inputs, and alerts to lease-aware activity with canonical PromQL (replica deduplication, future-lease rejection, zero-safe idle states) plus raw/expired-claim diagnostics and runbooks.
+- Reorganized documentation around `docs/README.md` and `docs/reference/`, reconciled all guidance with the current command registry, config loader, event handlers, and privacy pipeline, and added an "every agent appears as its own root" troubleshooting guide.
+- Split Pi event handling into focused lifecycle, agent/turn, LLM, tool/Bash, and session modules behind the `registerHandlers()` facade, and centralized telemetry conventions, content-capture policy, Grafana transport, and `/obs` command plumbing.
+- Improved all dashboards with emitted-label-safe queries, zero/no-data states, bounded tables, canonical SLO formulas, accurate cross-provider cost aggregation, and time-preserving Loki/Tempo drill-downs.
+- Removed Pi version gating from extension startup; essential ExtensionAPI capabilities are checked before registration and optional APIs remain feature-detected.
 
 ### Fixed
 
-- Replaced the anchored-create helper's immediately invoked async initializer with top-level await while retaining startup failure handling.
-- Combined consecutive custom-redaction chunk appends while preserving replacement order and output-budget enforcement.
-- Applied property-level defaults to custom-redaction work state while preserving cumulative match-budget enforcement.
-- Iterated directly over active subagent spawns, waits, and joins during shutdown cancellation instead of allocating intermediate entries arrays.
-- Removed the nonexistent `reason="lineage_missing"` matcher from the Agent Lineage SLO, burn-rate panels, Overview lineage-health stat, and documentation so subagent spawn failures actually count against lineage health instead of silently matching no series.
-- Guarded the SLO specification indicators against empty-vector arithmetic and clamped their bounds so healthy zero-failure states read as attainment instead of no data, and made the instrumentation-overhead check return 0/1 instead of an empty vector on breach.
-- Removed pending durations from the five any-failure alerts (spawn, drop, redaction, orphan, propagation) whose `for:` equaled the rate window and therefore could never fire on isolated events; documented the rationale and the previously undocumented expired-claims alert.
-- Renamed the node-graph value fields to the multi-query `Value #nodes`/`Value #edges` form and unified `subTitle` casing so both agent node-graph panels display their counts and subtitles.
-- Filtered agent-tree depth/width/fan-out histogram panels and `/obs agents` queries to the spawn-path label variant, and grouped orphan-agent queries by their emitted `status`/`reason` labels instead of labels the metric never carries.
-- Dropped the dead `error_class` grouping from the export-health handler-error panel, emitted `trace_id`/`span_id` on `branch.created`/`compaction.created` logs so their dashboard Tempo links resolve, and promoted `pi.agent.child.id` to a local-stack Loki label so parent/child handoff tables populate the child column.
-- Combined consecutive backfill cancellation entries and all five core delivery summaries into multi-value array appends while preserving notification output.
-- Cancelled Collector health response bodies after status inspection so success, HTTP failure, and repeated stalled-body checks release network resources without changing bounded health output.
-- Ran independent `/obs tools` and `/obs agents` enrichment queries concurrently within one configured request-timeout window while preserving deterministic results and subsystem warnings.
-- Anchored exclusive project-config creation to a verified canonical parent directory so ancestor swaps cannot create outside files, with fail-closed cleanup diagnostics.
-- Retained only the selected tenant-salt value in config-associated state after applying project/process environment precedence, excluding unrelated credentials from extension-long retention.
-- Rolled back the public integration listener when Pi event-handler registration fails, while preserving the original initialization error and idempotent shutdown cleanup.
-- Rejected NUL-containing, ambiguous, or oversized child environment keys before integration telemetry mutation, and verified accepted sanitized environments launch unchanged through Node.
-- Rejected contradictory persisted session-correlation topology, including non-root children that identify themselves as the workflow root, while preserving fail-open recovery.
-- Derived turn image counts from Pi's preceding user-prompt event and omitted the attribute when no correlated source exists, preventing fabricated zeros and stale carry-over.
-- Bounded global/project configuration and trusted project `.env` reads by opened-file byte size before content allocation, with fixed path-free oversized-source diagnostics.
-- Bounded custom-redaction names, cumulative matches, replacement size, and intermediate output so broad patterns fail closed before unbounded hashing or allocation.
-- Constrained tenant-salt environment names and made live and backfill redaction-failure reporting use only fixed, secret-free diagnostics.
-- Excluded trusted project `.env` lineage-looking values from provenance validation while preserving process-envelope validation, override precedence, and tenant-salt loading.
-- Preserved runner distinctions between launcher failure, terminal child results, timeout, caller cancellation, and transport-read failure, allowing timed-out children to complete later exactly once.
-- Bound wait/join completion to each handle's original spawn and child identity, synchronized child activation, and deactivated evicted `/obs agents` hints.
-- Fenced cached integration APIs as soon as session shutdown begins and cancelled active spawn/wait/join telemetry exactly once before exporter cleanup.
-- Distinguished `query.enabled=false` from legitimate empty Grafana backend results across adapters, query-backed `/obs` commands, status, and health without issuing Grafana requests.
-- Preserved `/obs agents` local workflow and child state when Prometheus or Tempo enrichment is disabled, unavailable, or failing, with bounded subsystem warnings and independent partial results.
-- Normalized malformed Tempo, Loki, and Prometheus datasource responses through one bounded JSON boundary, with strict body-free schema errors and preserved empty-result guidance.
-- Reported `/obs backfill` delivery as confirmed only after flush, with explicit attempted, queued, unknown, and not-attempted counts plus duplicate-safe retry guidance.
-- Kept failed OpenTelemetry signal shutdowns retryable by retaining failed provider ownership and skipping already-closed siblings on composite retries.
-- Reconciled tool argument hashes, sizes, labels, and opt-in redacted capture with Pi's final post-middleware input while preserving parallel tool isolation.
-- Derived turn, agent-run, and root-workflow outcomes from Pi's typed assistant/tool terminal payloads, preserving failed, cancelled, and unknown span/log states through reason-only session shutdown.
-- Preserved valid session-entry occurrence timestamps in `/obs backfill` OTEL logs, with malformed or missing timestamps safely falling back to replay time.
-- Completed Pi's zero-based first turn so `turnIndex: 0` closes the matching span and records completion telemetry without disturbing legacy missing-index fallback.
-- Completed interactive `!`/`!!` Bash telemetry from Pi's recorded `BashExecutionMessage`, preserving later `user_bash` extensions and clearing ordinary completions before shutdown.
-- Corrected documentation that overstated direct file-path capture and live PII detection, treated log-only backfill as full telemetry replay, listed unsupported wait/join status values, or presented reserved metrics/events/spans as live.
-- Removed stale repository-only stack guidance for HTTPS, nonexistent online/gateway assets, and direct Grafana port assumptions; the stack guide now documents only checked-in Compose services/endpoints and the generated local secrets directory is ignored.
-- Removed Pi version gating from extension startup entirely; tested versions are evidence only, essential ExtensionAPI capabilities are checked before registration, and optional APIs remain feature-detected.
-- Made missing project-path component reversal explicit.
-- Applied one control-safe 64-row/8,192-character policy to every `/obs` notification and capped query result counts at configuration and runtime boundaries.
-- Coupled canonical project config, `.env`, and starter-config I/O to identity-verified file handles so concurrent symlink and ancestor swaps fail closed without exposing external paths.
-- Rejected credentials embedded in Grafana base URLs during config validation, query readiness, and transport preflight without exposing their values.
-- Rejected active and retained child-agent identifier collisions before creating integration spans, tree state, metrics, or propagation envelopes.
-- Retained process-scoped ownership of timed-out OpenTelemetry flushes and shutdowns across extension re-registration, observing late success or retryable failure while bounding never-settling cleanup to one diagnostic.
-- Replaced custom-redaction regex heuristics with bounded structural validation that rejects nested, ambiguous-alternative, and overlapping sequential repetition while preserving safe disjoint quantified alternatives.
-- Used concise word-character syntax for single-brace unresolved trace-link placeholders.
-- Used concise word-character syntax for dollar-brace unresolved trace-link placeholders.
-- Used concise word-character syntax for double-brace unresolved trace-link placeholders.
-- Split unresolved trace-link placeholder validation into simple per-syntax patterns while preserving rejection behavior.
-- Documented why best-effort Grafana stream cancellation failures are intentionally ignored.
-- Removed redundant explicit `undefined` support from the optional lifecycle model context property.
-- Simplified lifecycle recovery header selection by replacing a nested conditional expression with explicit branches.
-- Removed redundant awaiting of Pi's synchronous lifecycle status update.
-- Replaced deprecated proxy tracer construction with an isolated always-off provider for disabled and shutdown trace states.
-- Validated OTLP endpoints as secret-free absolute HTTP(S) URLs and constructed signal exporter paths with deterministic URL pathname semantics.
-- Implemented opt-in, versioned, active-branch correlation persistence with bounded validation and idempotent reload recovery, and removed unsupported automatic replay configuration and synthetic duplicate startup telemetry.
-- Bound live telemetry, query commands, and backfill correlation to Pi's typed session manager, preserved identity across reload, adopted replacement-session identity, and refreshed active metadata on session rename.
-- Bounded and sanitized backend-derived `/obs cost`, `/obs tools`, and `/obs agents` labels, rows, and notification output with visible Unicode-safe truncation.
-- Unified `/obs session`, `/obs trace`, and `/obs link` on one validated trace-link builder with canonical placeholders, structured Grafana fallback URLs, and bounded configuration diagnostics.
-- Made multi-signal OpenTelemetry startup transactional with bounded rollback, a terminal failed controller state, sanitized Pi diagnostics, and clean later-session recovery.
-- Preserved malformed environment and file configuration as bounded rejection diagnostics, with source-specific `/obs status` reporting and strict trusted `.env` parsing.
-- Enforced coherent terminal subagent transitions across the integration API, agent tree, spans, events, metrics, runtime state, waits, and joins.
-- Enforced production acknowledgement for Grafana and OTLP certificate-verification bypasses, wired retained OTLP TLS behavior into every exporter, and exposed effective transport security in `/obs status` and `/obs health`.
-- Kept live-session and backfill OpenTelemetry providers scoped to ObservMe instead of replacing process-global providers.
-- Redacted complete supported PEM private-key blocks, including malformed/truncated input, across live and backfilled content capture.
-- Bounded all Grafana health and datasource response bodies before JSON parsing across default, custom Node, and injected fetch transports.
-- Enforced top-level ObservMe disablement across lifecycle startup, runtime state, integration availability, and all OpenTelemetry signal factories.
-- Restored clean npm dependency resolution for `typescript-eslint` 8.65.0 by pinning TypeScript to the latest supported release instead of the incompatible TypeScript 7 line.
-- Integrated active-agent lease activation and deactivation with clean shutdown, duplicate/reload replacement, resume, and failed-start cleanup so final flushes cannot renew stale activity.
-- Fixed session, workflow, agent, turn, LLM, tool, Bash, histogram, active-span, failure/recovery, and session-count telemetry accuracy.
-- Fixed lifecycle serialization, duplicate session replacement, bounded shutdown/flush behavior, backfill cancellation, parallel tool correlation, and bounded agent-tree state cleanup.
-- Hardened configuration validation, project-root path confinement, endpoint security, custom redaction patterns, tenant-salted hashing, and environment propagation.
-- Hardened integration discovery and lifecycle mutations against malformed providers, unsafe or oversized runtime inputs, and duplicate active spawn/wait/join identifiers.
-- Restored trusted-project redacted LLM capture and OpenAI Responses-style prompt capture while keeping capture disabled and redaction enabled by default.
-- Remediated SonarQube maintainability and security findings across parsing, regexes, fallback handling, diagnostics, and default assignment.
-- Fixed npm/CI dependency installation, package contents, README command drift, Grafana/Loki schema handling, and dashboard provisioning/query validation.
+- Fixed dashboard and alert queries: removed a nonexistent lineage SLO matcher, guarded SLO indicators against empty-vector arithmetic, removed `for:` durations that prevented any-failure alerts from ever firing, and corrected node-graph value fields and label groupings.
+- Made multi-signal OpenTelemetry startup transactional with bounded rollback and clean recovery, kept failed signal shutdowns and timed-out flushes retryable, and integrated lease activation/deactivation with shutdown, reload, resume, and failed-start cleanup.
+- Hardened configuration and file I/O: bounded config/`.env` reads, symlink- and ancestor-swap-safe project file handling, rejection of credentials embedded in Grafana base URLs, and secret-free OTLP endpoint validation.
+- Bounded custom redaction names, matches, replacement size, and output so broad patterns fail closed, replaced regex heuristics with structural validation, and redacted complete PEM private-key blocks across live and backfilled capture.
+- Corrected telemetry accuracy for sessions, workflows, agents, turns (including `turnIndex: 0`), LLM requests, tools, interactive Bash, histograms, and failure/cancellation outcomes derived from Pi's typed terminal payloads.
+- Hardened the integration API: bound wait/join completion to the original spawn and child identity, rejected identifier collisions and malformed or oversized runtime inputs, enforced coherent terminal subagent transitions, and cancelled active spawn/wait/join telemetry exactly once at shutdown.
+- Made `/obs` commands robust with bounded notification output, partial results when Grafana backends are disabled or failing, accurate `/obs backfill` delivery reporting, and one validated trace-link builder for `/obs session`, `/obs trace`, and `/obs link`.
+- Corrected documentation that overstated file-path capture, live PII detection, or backfill scope, presented reserved telemetry as live, and removed stale repository-only local-stack guidance.
+- Restored clean npm dependency resolution for `typescript-eslint` 8.65.0 by pinning TypeScript to the latest supported release.
 
 ## 0.1.0 - 2026-07-07
 

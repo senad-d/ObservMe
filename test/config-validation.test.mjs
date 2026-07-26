@@ -42,6 +42,26 @@ function isPlainObject(value) {
 
 const documentedEnvironmentValues = ["production", "development", "test"];
 const documentedPathModeValues = ["hash", "basename", "full", "drop"];
+const childIdentityEnvironmentFields = [
+  "childIdentityEnvelopeVersionEnv",
+  "displayNameEnv",
+  "roleEnv",
+];
+const configuredPropagationEnvironmentDefaults = [
+  ["workflow", "idEnv", defaultObservMeConfig.workflow.idEnv],
+  ["agent", "idEnv", defaultObservMeConfig.agent.idEnv],
+  ["agent", "parentIdEnv", defaultObservMeConfig.agent.parentIdEnv],
+  ["agent", "rootIdEnv", defaultObservMeConfig.agent.rootIdEnv],
+  ["agent", "parentSessionIdEnv", defaultObservMeConfig.agent.parentSessionIdEnv],
+  ["agent", "parentTraceIdEnv", defaultObservMeConfig.agent.parentTraceIdEnv],
+  ["agent", "parentSpanIdEnv", defaultObservMeConfig.agent.parentSpanIdEnv],
+  ["agent", "depthEnv", defaultObservMeConfig.agent.depthEnv],
+  ["agent", "spawnIdEnv", defaultObservMeConfig.agent.spawnIdEnv],
+  ["agent", "childIdentityEnvelopeVersionEnv", defaultObservMeConfig.agent.childIdentityEnvelopeVersionEnv],
+  ["agent", "displayNameEnv", defaultObservMeConfig.agent.displayNameEnv],
+  ["agent", "roleEnv", defaultObservMeConfig.agent.roleEnv],
+  ["agent", "capabilityEnv", defaultObservMeConfig.agent.capabilityEnv],
+];
 
 function assertValid(config, options) {
   assert.deepEqual(validateObservMeConfig(config, options), { valid: true, issues: [] });
@@ -588,7 +608,7 @@ test("validation rejects malformed propagated workflow and agent lineage values"
   assertInvalid(defaultObservMeConfig, "malformed_lineage_value", { env: { ...env, OBSERVME_AGENT_CAPABILITY: "x".repeat(129) } });
 });
 
-test("validation rejects malformed, duplicate, and W3C-reserved lineage environment names", () => {
+test("validation rejects malformed, duplicate, and W3C-reserved propagation environment names", () => {
   assertInvalid(cloneDefault({ workflow: { idEnv: "NOT SAFE" } }), "malformed_lineage_value", { env: {} });
   assertInvalid(
     cloneDefault({ agent: { parentIdEnv: defaultObservMeConfig.agent.rootIdEnv } }),
@@ -596,6 +616,51 @@ test("validation rejects malformed, duplicate, and W3C-reserved lineage environm
     { env: {} },
   );
   assertInvalid(cloneDefault({ workflow: { idEnv: "traceparent" } }), "malformed_lineage_value", { env: {} });
+
+  for (const childIdentityField of childIdentityEnvironmentFields) {
+    for (const [section, field, environmentName] of configuredPropagationEnvironmentDefaults) {
+      if (section === "agent" && field === childIdentityField) continue;
+      assertInvalid(
+        cloneDefault({ agent: { [childIdentityField]: environmentName } }),
+        "malformed_lineage_value",
+        { env: {} },
+      );
+    }
+
+    assertInvalid(cloneDefault({ agent: { [childIdentityField]: "traceparent" } }), "malformed_lineage_value", { env: {} });
+    assertInvalid(cloneDefault({ agent: { [childIdentityField]: "TRACESTATE" } }), "malformed_lineage_value", { env: {} });
+  }
+
+  assertInvalid(
+    cloneDefault({ agent: { roleEnv: defaultObservMeConfig.agent.displayNameEnv.toLowerCase() } }),
+    "malformed_lineage_value",
+    { env: {} },
+  );
+});
+
+test("propagation environment-name collision diagnostics are bounded and value-free", () => {
+  const privateCollisionName = "PRIVATE_CHILD_IDENTITY_COLLISION_SECRET";
+  const result = validateObservMeConfig(
+    cloneDefault({
+      agent: {
+        childIdentityEnvelopeVersionEnv: privateCollisionName,
+        displayNameEnv: privateCollisionName,
+      },
+    }),
+    { env: {} },
+  );
+
+  assert.deepEqual(result, {
+    valid: false,
+    issues: [
+      {
+        code: "malformed_lineage_value",
+        message:
+          "Configured propagation environment variable names must be unique, safe, and distinct from W3C trace headers.",
+      },
+    ],
+  });
+  assert.equal(JSON.stringify(result).includes(privateCollisionName), false);
 });
 
 test("validation rejects queue sizes that exceed memory guardrails", () => {

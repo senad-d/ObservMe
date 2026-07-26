@@ -2,19 +2,33 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { ObservableSubagentRunner } from "../examples/integrations/subagent-runner.ts";
-import { OBSERVME_INTEGRATION_CHANNEL } from "../src/integration.ts";
+import {
+  OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION,
+  OBSERVME_CHILD_ROLES,
+  OBSERVME_INTEGRATION_CHANNEL,
+} from "../src/integration.ts";
 
-function createIntegrationApi(calls) {
+function createChildDescriptor(overrides = {}) {
+  return { displayName: "Example child", role: "worker", capability: "example.worker", ...overrides };
+}
+
+function createIntegrationApi(calls, environments = [{ CHILD_ENV: "propagated" }]) {
+  let startIndex = 0;
   return {
-    version: 1,
+    version: 2,
+    childRoles: OBSERVME_CHILD_ROLES,
+    childIdentityEnvelopeVersion: OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION,
     getContext: () => ({ ok: false, reason: "session_unavailable" }),
     startSubagent(options) {
       calls.push(["startSubagent", options]);
+      const suffix = startIndex === 0 ? "" : `-${startIndex + 1}`;
+      const environment = environments[startIndex] ?? environments.at(-1);
+      startIndex += 1;
       return {
         ok: true,
-        spawnId: "spawn-example",
-        childAgentId: "child-example",
-        env: { CHILD_ENV: "propagated" },
+        spawnId: `spawn-example${suffix}`,
+        childAgentId: `child-example${suffix}`,
+        env: environment,
         traceContextPropagated: true,
       };
     },
@@ -49,10 +63,12 @@ function registerIntegration(events, api) {
   events.on(OBSERVME_INTEGRATION_CHANNEL, request => request.respond(api));
 }
 
-test("generic subagent runner wraps any transport with ObservMe lifecycle", async () => {
+test("generic subagent runner forwards child identity and returned environment unchanged", async () => {
   const calls = [];
   const events = createEventBus();
-  registerIntegration(events, createIntegrationApi(calls));
+  const child = createChildDescriptor();
+  const returnedEnvironment = { CHILD_ENV: "propagated", REMOVED_PARENT_VALUE: undefined };
+  registerIntegration(events, createIntegrationApi(calls, [returnedEnvironment]));
   const transport = {
     async launch(request, context) {
       calls.push(["launch", request, context]);
@@ -67,6 +83,7 @@ test("generic subagent runner wraps any transport with ObservMe lifecycle", asyn
 
   const result = await runner.run({
     request: { task: "delegated work" },
+    child,
     command: "pi",
     spawnType: "extension",
     spawnReason: "delegated_task",
@@ -84,8 +101,10 @@ test("generic subagent runner wraps any transport with ObservMe lifecycle", asyn
     "startJoin",
     "endJoin",
   ]);
+  assert.equal(calls[0][1].child, child);
+  assert.equal(calls[1][2].environment, returnedEnvironment);
   assert.deepEqual(calls[1][2], {
-    environment: { CHILD_ENV: "propagated" },
+    environment: returnedEnvironment,
     spawnId: "spawn-example",
     childAgentId: "child-example",
     traceContextPropagated: true,
@@ -95,6 +114,91 @@ test("generic subagent runner wraps any transport with ObservMe lifecycle", asyn
     "spawn-example",
     { childAgentId: "child-example", childStatus: "completed", outcome: "completed" },
   ]);
+});
+
+test("nested launches use fresh descriptors and the immediate parent environment", async () => {
+  const calls = [];
+  const events = createEventBus();
+  const parentEnvironment = { OBSERVME_AGENT_CAPABILITY: "parent.helper", STALE_IDENTITY: undefined };
+  const childEnvironment = { OBSERVME_AGENT_CAPABILITY: "child.validator", STALE_IDENTITY: undefined };
+  registerIntegration(events, createIntegrationApi(calls, [parentEnvironment, childEnvironment]));
+
+  const parentChild = createChildDescriptor({
+    displayName: "Duplicate friendly name",
+    role: "helper",
+    capability: "parent.helper",
+  });
+  const nestedChild = createChildDescriptor({
+    displayName: "Duplicate friendly name",
+    role: "validator",
+    capability: "child.validator",
+  });
+  let parentLaunchContext;
+  let nestedLaunchContext;
+  const nestedRunner = new ObservableSubagentRunner({ events }, {
+    async launch(_request, context) {
+      nestedLaunchContext = context;
+      return "nested-handle";
+    },
+    async wait() {
+      return { status: "completed" };
+    },
+  });
+  const parentRunner = new ObservableSubagentRunner({ events }, {
+    async launch(_request, context) {
+      parentLaunchContext = context;
+      await nestedRunner.run({ request: "nested work", child: nestedChild, environment: context.environment });
+      return "parent-handle";
+    },
+    async wait() {
+      return { status: "completed" };
+    },
+  });
+
+  await parentRunner.run({ request: "parent work", child: parentChild });
+
+  const startCalls = calls.filter(call => call[0] === "startSubagent");
+  assert.equal(startCalls.length, 2);
+  assert.equal(startCalls[0][1].child, parentChild);
+  assert.equal(startCalls[1][1].child, nestedChild);
+  assert.notEqual(startCalls[0][1].child, startCalls[1][1].child);
+  assert.equal(startCalls[1][1].env, parentEnvironment);
+  assert.equal(parentLaunchContext.environment, parentEnvironment);
+  assert.equal(nestedLaunchContext.environment, childEnvironment);
+  assert.equal(parentLaunchContext.spawnId, "spawn-example");
+  assert.equal(nestedLaunchContext.spawnId, "spawn-example-2");
+  assert.equal(parentChild.displayName, nestedChild.displayName);
+  assert.notEqual(parentChild.capability, nestedChild.capability);
+});
+
+test("v2-unavailable runner stays fail-open without invoking a v1 lifecycle", async () => {
+  const v1Calls = [];
+  const events = createEventBus();
+  const v1Api = { ...createIntegrationApi(v1Calls), version: 1 };
+  registerIntegration(events, v1Api);
+  const baseEnvironment = { BASE_ENV: "present", REMOVED_VALUE: undefined };
+  let launchContext;
+  const runner = new ObservableSubagentRunner({ events }, {
+    async launch(_request, context) {
+      launchContext = context;
+      return "handle";
+    },
+    async wait() {
+      return { status: "completed", value: "without-observme" };
+    },
+  });
+
+  const result = await runner.run({
+    request: "work",
+    child: createChildDescriptor(),
+    environment: baseEnvironment,
+  });
+
+  assert.deepEqual(result, { status: "completed", value: "without-observme" });
+  assert.equal(launchContext.environment, baseEnvironment);
+  assert.equal(launchContext.spawnId, undefined);
+  assert.equal(launchContext.traceContextPropagated, false);
+  assert.deepEqual(v1Calls, []);
 });
 
 test("generic subagent runner preserves returned child failure, cancellation, and timeout distinctions", async () => {
@@ -118,7 +222,9 @@ test("generic subagent runner preserves returned child failure, cancellation, an
     };
     const runner = new ObservableSubagentRunner({ events }, transport);
 
-    assert.deepEqual(await runner.run({ request: "work" }), { status: resultCase.status });
+    assert.deepEqual(await runner.run({ request: "work", child: createChildDescriptor() }), {
+      status: resultCase.status,
+    });
     const endWait = calls.find(call => call[0] === "endWait");
     const endJoin = calls.find(call => call[0] === "endJoin");
     assert.equal(endWait[2].childStatus, resultCase.childStatus);
@@ -149,7 +255,7 @@ test("generic subagent runner keeps the child active after wait abort and transp
     };
     const runner = new ObservableSubagentRunner({ events }, transport);
 
-    await assert.rejects(runner.run({ request: "work" }), errorCase.error);
+    await assert.rejects(runner.run({ request: "work", child: createChildDescriptor() }), errorCase.error);
     const endWait = calls.find(call => call[0] === "endWait");
     const endJoin = calls.find(call => call[0] === "endJoin");
     assert.equal(endWait[2].childStatus, "active");
@@ -177,7 +283,7 @@ test("generic subagent execution can complete once after a timeout", async () =>
     },
   };
   const runner = new ObservableSubagentRunner({ events }, transport);
-  const execution = await runner.start({ request: "work" });
+  const execution = await runner.start({ request: "work", child: createChildDescriptor() });
 
   assert.deepEqual(await execution.wait(), { status: "timeout" });
   assert.deepEqual(await execution.wait(), { status: "completed", value: "late-result" });
@@ -210,7 +316,7 @@ test("generic subagent runner separates launcher failure from launch cancellatio
     };
     const runner = new ObservableSubagentRunner({ events }, transport);
 
-    await assert.rejects(runner.run({ request: "work" }), launchCase.error);
+    await assert.rejects(runner.run({ request: "work", child: createChildDescriptor() }), launchCase.error);
     const outcomeCall = calls.find(call => call[0] === launchCase.expectedMethod);
     assert.ok(outcomeCall);
     if (launchCase.expectedStatus) assert.equal(outcomeCall[2].childStatus, launchCase.expectedStatus);
@@ -231,7 +337,11 @@ test("generic subagent runner remains transport-functional when ObservMe is abse
     },
   };
   const runner = new ObservableSubagentRunner({ events }, transport);
-  const result = await runner.run({ request: "work", environment: { BASE_ENV: "present" } });
+  const result = await runner.run({
+    request: "work",
+    child: createChildDescriptor(),
+    environment: { BASE_ENV: "present" },
+  });
 
   assert.deepEqual(result, { status: "completed", value: 42 });
   assert.deepEqual(launchContext, {

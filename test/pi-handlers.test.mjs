@@ -75,6 +75,13 @@ import {
   readLatestSessionCorrelation,
 } from "../src/pi/session-correlation.ts";
 import {
+  createFutureOrcMeManagedBaseEnvironment,
+  mapFutureOrcMeChildDescriptor,
+  requestFutureOrcMeObservMeV2,
+  simulateFutureOrcMePiRpcOverlay,
+  startFutureOrcMePiRpcDelegation,
+} from "./fixtures/orcme-integration-consumer.mjs";
+import {
   emitUnrelatedGlobalTelemetry,
   installSentinelGlobalProviders,
   resetGlobalProviders,
@@ -102,6 +109,27 @@ function createFakePi(events) {
 function registerFakePiHandler(handlers, eventName, handler) {
   const previous = handlers.get(eventName);
   handlers.set(eventName, previous ? runFakePiHandlers.bind(undefined, previous, handler) : handler);
+}
+
+function collectIntegrationProviderResponses(events, supportedVersions) {
+  const responses = [];
+  events.emit(OBSERVME_INTEGRATION_CHANNEL, {
+    supportedVersions,
+    respond: responses.push.bind(responses),
+  });
+  return responses;
+}
+
+class FutureOrcMeStartTrackingApi {
+  constructor(delegate) {
+    this.delegate = delegate;
+    this.startCalls = [];
+  }
+
+  startSubagent(options) {
+    this.startCalls.push(options);
+    return this.delegate.startSubagent(options);
+  }
 }
 
 function createTrackedEventBus(unsubscribeError) {
@@ -806,9 +834,12 @@ test("telemetry session resource attributes include a unique instance id without
     workflowId: "workflow-resource-test",
     workflowRootAgentId: "agent-root-resource-test",
     agentId: "agent-resource-test",
+    parentAgentId: "agent-root-resource-test",
     rootAgentId: "agent-root-resource-test",
-    depth: 0,
-    role: "root",
+    depth: 1,
+    displayName: "Resource Scout",
+    role: "worker",
+    capability: "resource.scan",
     orphaned: false,
   };
 
@@ -819,6 +850,9 @@ test("telemetry session resource attributes include a unique instance id without
   assert.equal(merged.resource.attributes["service.instance.id"], "session-instance-test");
   assert.equal(merged.resource.attributes["observme.instance.id"], "session-instance-test");
   assert.equal(merged.resource.attributes["pi.agent.id"], "agent-resource-test");
+  assert.equal(merged.resource.attributes["pi.agent.display_name"], "Resource Scout");
+  assert.equal(merged.resource.attributes["pi.agent.role"], "worker");
+  assert.equal(merged.resource.attributes["pi.agent.capability"], "resource.scan");
 });
 
 test("telemetry session resource config preserves trusted .env tenant salt across cloning", () => {
@@ -1529,6 +1563,159 @@ test("child pi.session continues the validated parent spawn context with an in-m
   assert.equal(metricTotal(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TRACE_CONTEXT_PROPAGATION_FAILURES_TOTAL), 0);
 });
 
+test("v2 child session traces, logs, and resources agree with parent child identity", async () => {
+  const descriptor = {
+    displayName: "Telemetry Scout",
+    role: "helper",
+    capability: "telemetry.inspect",
+  };
+  const parent = createFakeTelemetry({
+    workflowId: "workflow-v2-identity",
+    workflowRootAgentId: "agent-v2-root",
+    agentId: "agent-v2-parent",
+    rootAgentId: "agent-v2-root",
+    depth: 0,
+    role: "root",
+    orphaned: false,
+  });
+  const spawned = startSubagentSpawn(parent, {
+    spawnId: "spawn-v2-identity-telemetry",
+    childAgentId: "child-v2-identity-telemetry",
+    childIdentity: { mode: "v2", descriptor },
+  });
+  const pi = createFakePi();
+  let child;
+
+  registerHandlers(pi, {
+    env: spawned.env,
+    trustedParentContext: true,
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      child = createFakeTelemetry(lineage);
+      return child;
+    },
+  });
+
+  await pi.handlers.get("session_start")({ sessionId: "session-v2-identity-child" }, { cwd: "/workspace/demo" });
+
+  const sessionSpan = child.tracer.spans.find(span => span.name === SPAN_NAMES.PI_SESSION);
+  const startedLog = child.logger.records.find(record => record.body === LOG_EVENT_NAMES.SESSION_STARTED);
+  const resourceConfig = withTelemetrySessionResourceAttributes(
+    defaultObservMeConfig,
+    child.lineage,
+    "instance-v2-identity-child",
+  );
+  const identityPairs = [
+    ["pi.agent.child.display_name", "pi.agent.display_name", descriptor.displayName],
+    ["pi.agent.child.role", "pi.agent.role", descriptor.role],
+    ["pi.agent.child.capability", "pi.agent.capability", descriptor.capability],
+  ];
+
+  for (const [parentKey, childKey, expected] of identityPairs) {
+    assert.equal(spawned.attributes[parentKey], expected);
+    assert.equal(sessionSpan.attributes[childKey], expected);
+    assert.equal(startedLog.attributes[childKey], expected);
+    assert.equal(resourceConfig.resource.attributes[childKey], expected);
+  }
+});
+
+test("future OrcMe fixture nests direct Pi RPC children from the immediate returned environment", async () => {
+  const rootEvents = createEventBus();
+  const rootPi = createFakePi(rootEvents);
+  let rootTelemetry;
+  registerHandlers(rootPi, {
+    env: { OBSERVME_HASH_SALT: "future-orcme-root-fixture-salt" },
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      rootTelemetry = createFakeTelemetry(lineage);
+      return rootTelemetry;
+    },
+  });
+  await rootPi.handlers.get("session_start")(
+    { sessionId: "session-future-orcme-root" },
+    { cwd: "/workspace/future-orcme-root" },
+  );
+
+  const rootApi = requestFutureOrcMeObservMeV2({ events: rootEvents });
+  assert.ok(rootApi);
+  const baseEnvironment = createFutureOrcMeManagedBaseEnvironment();
+  const leadDescriptor = mapFutureOrcMeChildDescriptor({
+    durableDisplayIdentity: "Durable Nested Lead",
+    manifestRole: "lead",
+    pinnedDefinitionName: "lead.nested-fixture",
+  });
+  const lead = startFutureOrcMePiRpcDelegation(rootApi, {
+    requestedSpawnId: "spawn-future-orcme-lead",
+    requestedChildAgentId: "child-future-orcme-lead",
+    child: leadDescriptor,
+    baseEnvironment,
+  });
+  assert.equal(lead.ok, true);
+
+  const leadProcessEnvironment = simulateFutureOrcMePiRpcOverlay({
+    OBSERVME_AGENT_ID: "rpc-overlay-stale-agent",
+    TRACEPARENT: "rpc-overlay-stale-traceparent",
+    TRACESTATE: "rpc-overlay-stale-tracestate",
+    ORCME_RPC_SENTINEL: "synthetic-rpc-only",
+  }, lead.rpcEnvironment);
+  assert.equal(Object.hasOwn(leadProcessEnvironment, "OBSERVME_AGENT_ID"), false);
+  assert.equal(Object.hasOwn(leadProcessEnvironment, "TRACEPARENT"), false);
+  assert.equal(Object.hasOwn(leadProcessEnvironment, "TRACESTATE"), false);
+  assert.equal(leadProcessEnvironment.OBSERVME_AGENT_DISPLAY_NAME, leadDescriptor.displayName);
+  assert.equal(leadProcessEnvironment.OBSERVME_AGENT_ROLE, leadDescriptor.role);
+  assert.equal(leadProcessEnvironment.OBSERVME_AGENT_CAPABILITY, leadDescriptor.capability);
+
+  const leadEvents = createEventBus();
+  const leadPi = createFakePi(leadEvents);
+  let leadTelemetry;
+  registerHandlers(leadPi, {
+    env: leadProcessEnvironment,
+    trustedParentContext: true,
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      leadTelemetry = createFakeTelemetry(lineage);
+      return leadTelemetry;
+    },
+  });
+  await leadPi.handlers.get("session_start")(
+    { sessionId: "session-future-orcme-lead" },
+    { cwd: "/workspace/future-orcme-lead" },
+  );
+  assert.equal(leadTelemetry.lineage.displayName, leadDescriptor.displayName);
+  assert.equal(leadTelemetry.lineage.role, leadDescriptor.role);
+  assert.equal(leadTelemetry.lineage.capability, leadDescriptor.capability);
+  assert.equal(leadTelemetry.lineage.depth, rootTelemetry.lineage.depth + 1);
+
+  const leadApi = requestFutureOrcMeObservMeV2({ events: leadEvents });
+  const trackedLeadApi = new FutureOrcMeStartTrackingApi(leadApi);
+  const helperDescriptor = mapFutureOrcMeChildDescriptor({
+    durableDisplayIdentity: "Durable Nested Helper",
+    manifestRole: "helper",
+    pinnedDefinitionName: "helper.nested-fixture",
+  });
+  assert.notEqual(helperDescriptor, leadDescriptor);
+  const helper = startFutureOrcMePiRpcDelegation(trackedLeadApi, {
+    requestedSpawnId: "spawn-future-orcme-helper",
+    requestedChildAgentId: "child-future-orcme-helper",
+    child: helperDescriptor,
+    baseEnvironment: lead.observMeEnvironment,
+  });
+  assert.equal(helper.ok, true);
+  assert.equal(trackedLeadApi.startCalls.length, 1);
+  assert.equal(trackedLeadApi.startCalls[0].env, lead.observMeEnvironment);
+  assert.equal(trackedLeadApi.startCalls[0].child, helperDescriptor);
+  assert.equal(helper.observMeEnvironment.OBSERVME_PARENT_AGENT_ID, leadTelemetry.lineage.agentId);
+  assert.equal(helper.observMeEnvironment.OBSERVME_AGENT_DEPTH, String(leadTelemetry.lineage.depth));
+  assert.equal(helper.observMeEnvironment.OBSERVME_AGENT_DISPLAY_NAME, helperDescriptor.displayName);
+  assert.equal(helper.observMeEnvironment.OBSERVME_AGENT_ROLE, helperDescriptor.role);
+  assert.equal(helper.observMeEnvironment.OBSERVME_AGENT_CAPABILITY, helperDescriptor.capability);
+
+  assert.deepEqual(leadApi.completeSubagent(helper.spawnId), { ok: true });
+  assert.deepEqual(rootApi.completeSubagent(lead.spawnId), { ok: true });
+  await leadPi.handlers.get("session_shutdown")({ status: "ok" }, {});
+  await rootPi.handlers.get("session_shutdown")({ status: "ok" }, {});
+});
+
 test("trusted lineage without W3C continuation starts a new trace with a validated parent link", async () => {
   const pi = createFakePi();
   const env = completePropagationEnvironment();
@@ -1605,6 +1792,52 @@ test("invalid process propagation fails open once without logging inherited valu
     env.OBSERVME_SPAWN_ID,
     env.traceparent,
     env.tracestate,
+  ]) {
+    assert.equal(diagnostics.includes(inherited), false);
+  }
+});
+
+test("unknown child identity envelope version emits one bounded value-free propagation diagnostic", async () => {
+  const pi = createFakePi();
+  const env = completePropagationEnvironment({
+    OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION: "99-private-version",
+    OBSERVME_AGENT_DISPLAY_NAME: "Private child display name",
+    OBSERVME_AGENT_ROLE: "private-role",
+    OBSERVME_AGENT_CAPABILITY: "private-capability",
+  });
+  let telemetry;
+
+  registerHandlers(pi, {
+    env,
+    trustedParentContext: true,
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      return telemetry;
+    },
+  });
+
+  await assert.doesNotReject(() =>
+    pi.handlers.get("session_start")({ sessionId: "session-unknown-identity-version" }, { cwd: "/workspace/demo" }),
+  );
+
+  const propagationLogs = telemetry.logger.records.filter(
+    record => record.body === LOG_EVENT_NAMES.TRACE_CONTEXT_PROPAGATION_FAILED,
+  );
+  const diagnostics = JSON.stringify({ logs: telemetry.logger.records, events: telemetry.sessionSpan.events });
+  assert.equal(telemetry.lineage.parentAgentId, undefined);
+  assert.equal(telemetry.lineage.role, "root");
+  assert.equal(telemetry.lineage.displayName, undefined);
+  assert.equal(telemetry.lineage.capability, undefined);
+  assert.equal(telemetry.lineage.propagationFailure, "unsupported_identity_envelope");
+  assert.equal(propagationLogs.length, 1);
+  assert.equal(propagationLogs[0].attributes[LOG_ATTRIBUTES.ERROR_TYPE], "unsupported_identity_envelope");
+  assert.equal(metricTotal(telemetry.meter.records, OBSERVME_COUNTER_METRIC_NAMES.TRACE_CONTEXT_PROPAGATION_FAILURES_TOTAL), 1);
+  for (const inherited of [
+    env.OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION,
+    env.OBSERVME_AGENT_DISPLAY_NAME,
+    env.OBSERVME_AGENT_ROLE,
+    env.OBSERVME_AGENT_CAPABILITY,
   ]) {
     assert.equal(diagnostics.includes(inherited), false);
   }
@@ -2056,7 +2289,9 @@ test("shutdown fences cached integration mutations and cancels active orchestrat
     { cwd: "/workspace/integration-shutdown" },
   );
   const integration = requestObservMeIntegration({ events });
+  const [integrationV2] = collectIntegrationProviderResponses(events, [2, 1]);
   assert.ok(integration);
+  assert.equal(integrationV2.version, 2);
 
   const spawn = integration.startSubagent({
     spawnId: "spawn-shutdown-overlap",
@@ -2153,6 +2388,16 @@ test("shutdown fences cached integration mutations and cancels active orchestrat
     integration.endJoin(join.id, { joinStatus: "completed" }),
   ];
   assert.deepEqual(racingResults, new Array(racingResults.length).fill(closingFailure));
+  const v2RacingResults = [
+    integrationV2.getContext(),
+    integrationV2.startSubagent({
+      spawnId: "spawn-v2-too-late",
+      child: { displayName: "Too Late", role: "worker", capability: "shutdown.check" },
+      env: {},
+    }),
+    integrationV2.startWait({ id: "wait-v2-too-late" }),
+  ];
+  assert.deepEqual(v2RacingResults, new Array(v2RacingResults.length).fill(closingFailure));
   assert.deepEqual({
     spans: telemetry.tracer.spans.length,
     metrics: telemetry.meter.records.length,
@@ -2167,6 +2412,7 @@ test("shutdown fences cached integration mutations and cancels active orchestrat
   flushRelease.resolve();
   await shutdown;
   assert.deepEqual(integration.getContext(), { ok: false, reason: "session_unavailable" });
+  assert.deepEqual(integrationV2.getContext(), { ok: false, reason: "session_unavailable" });
 });
 
 test("shared lifecycle queue drains delayed startup before interleaved shutdown", async t => {

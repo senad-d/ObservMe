@@ -1,11 +1,31 @@
 import { randomUUID } from "node:crypto";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { ValidationIssue } from "../config/validate.ts";
+import {
+  OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION,
+  OBSERVME_CHILD_ROLES,
+  type ObservMeChildDescriptor,
+  type ObservMeChildRole,
+} from "../integration.ts";
 import { validateObservMeConfig } from "../config/validate.ts";
 import { AGENT_LINEAGE_ATTRIBUTES, COMMON_SPAN_ATTRIBUTES, RESOURCE_ATTRIBUTES } from "../semconv/attributes.ts";
+import { validateObservMeChildDescriptor } from "./child-identity.ts";
 
-export type AgentRole = "root" | "subagent" | "orchestrator" | "worker" | "reviewer" | "unknown";
-export type ParentPropagationFailureReason = "partial_envelope" | "malformed_envelope" | "stale_envelope";
+const retainedLegacyAgentRoles = ["subagent", "orchestrator", "reviewer", "unknown"] as const;
+
+export type RootAgentRole = "root";
+export type LegacyAgentRole = (typeof retainedLegacyAgentRoles)[number];
+export type AgentRole = RootAgentRole | ObservMeChildRole | LegacyAgentRole;
+
+const metricAgentRoles = new Set<AgentRole>(["root", ...OBSERVME_CHILD_ROLES, ...retainedLegacyAgentRoles]);
+export type ParentPropagationFailureReason =
+  | "partial_envelope"
+  | "malformed_envelope"
+  | "stale_envelope"
+  | "unsupported_identity_envelope";
+export type ChildIdentityPropagation =
+  | { readonly mode: "v1" }
+  | { readonly mode: "v2"; readonly descriptor: ObservMeChildDescriptor };
 
 export interface ValidatedParentTraceContext {
   readonly traceId: string;
@@ -22,6 +42,7 @@ export interface AgentLineageContext {
   readonly rootAgentId: string;
   readonly depth: number;
   readonly role: AgentRole;
+  readonly displayName?: string;
   readonly capability?: string;
   readonly parentSessionId?: string;
   readonly parentTraceId?: string;
@@ -37,6 +58,7 @@ export interface CreateAgentLineageContextOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly trustedParentContext?: boolean;
   readonly role?: AgentRole;
+  readonly displayName?: string;
   readonly capability?: string;
   readonly generateId?: () => string;
   readonly requireCompletePropagationEnvelope?: boolean;
@@ -53,6 +75,8 @@ export interface PropagatedLineageEnvironment {
   readonly parentSpanId?: string;
   readonly depth?: number;
   readonly spawnId?: string;
+  readonly displayName?: string;
+  readonly role?: ObservMeChildRole;
   readonly capability?: string;
   readonly traceContext?: ValidatedParentTraceContext;
 }
@@ -82,7 +106,8 @@ export function createAgentLineageContext(options: CreateAgentLineageContextOpti
   const workflowId = propagated.workflowId ?? `workflow-${generateId()}`;
   const rootAgentId = resolveRootAgentId(agentId, propagated.rootAgentId, parentAgentId);
   const depth = resolveDepth(propagated.depth, parentAgentId);
-  const role = options.role ?? resolveDefaultRole(parentAgentId);
+  const role = options.role ?? propagated.role ?? resolveDefaultRole(parentAgentId);
+  const displayName = options.displayName ?? propagated.displayName;
   const capability = options.capability ?? propagated.capability;
   const orphaned = Boolean(parentAgentId && !propagated.rootAgentId) || propagation.failure !== undefined;
 
@@ -94,6 +119,7 @@ export function createAgentLineageContext(options: CreateAgentLineageContextOpti
     rootAgentId,
     depth,
     role,
+    displayName,
     capability,
     parentSessionId: propagated.parentSessionId,
     parentTraceId: propagated.parentTraceId,
@@ -112,6 +138,7 @@ export function readTrustedPropagatedLineage(
 ): PropagatedLineageEnvironment {
   if (!trustedParentContext) return {};
 
+  const childIdentity = readPropagatedChildIdentity(config, env);
   assertValidPropagatedLineage(config, env);
   const traceContext = readValidatedParentTraceContext(env);
   assertConsistentParentTraceMetadata(config, env, traceContext);
@@ -126,9 +153,46 @@ export function readTrustedPropagatedLineage(
     parentSpanId: traceContext?.spanId ?? env[config.agent.parentSpanIdEnv],
     depth: parsePropagatedDepth(env[config.agent.depthEnv]),
     spawnId: env[config.agent.spawnIdEnv],
-    capability: env[config.agent.capabilityEnv],
+    ...childIdentity,
     traceContext,
   };
+}
+
+function readPropagatedChildIdentity(
+  config: ObservMeConfig,
+  env: NodeJS.ProcessEnv,
+): ObservMeChildDescriptor | undefined {
+  const envelopeVersion = env[config.agent.childIdentityEnvelopeVersionEnv];
+  if (envelopeVersion === undefined) {
+    if (hasAnyPropagatedChildIdentityField(config, env)) {
+      throwPropagationError("partial_envelope", "Propagated child identity requires an envelope version marker.");
+    }
+    return undefined;
+  }
+
+  if (envelopeVersion !== String(OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION)) {
+    throwPropagationError("unsupported_identity_envelope", "Propagated child identity envelope version is unsupported.");
+  }
+
+  const descriptor = {
+    displayName: env[config.agent.displayNameEnv],
+    role: env[config.agent.roleEnv],
+    capability: env[config.agent.capabilityEnv],
+  };
+  if (Object.values(descriptor).some(value => value === undefined)) {
+    throwPropagationError("partial_envelope", "Propagated child identity envelope is incomplete.");
+  }
+
+  const result = validateObservMeChildDescriptor(descriptor);
+  if (!result.ok) {
+    throwPropagationError("malformed_envelope", "Propagated child identity envelope is malformed.");
+  }
+  return result.descriptor;
+}
+
+function hasAnyPropagatedChildIdentityField(config: ObservMeConfig, env: NodeJS.ProcessEnv): boolean {
+  return [config.agent.displayNameEnv, config.agent.roleEnv, config.agent.capabilityEnv]
+    .some(name => env[name] !== undefined);
 }
 
 function resolveTrustedPropagation(
@@ -268,6 +332,7 @@ export function buildLineageAttributes(lineage: AgentLineageContext): LineageAtt
   };
 
   if (lineage.parentAgentId) attributes[COMMON_SPAN_ATTRIBUTES.PI_AGENT_PARENT_ID] = lineage.parentAgentId;
+  if (lineage.displayName) attributes[RESOURCE_ATTRIBUTES.PI_AGENT_DISPLAY_NAME] = lineage.displayName;
   if (lineage.capability) attributes[AGENT_LINEAGE_ATTRIBUTES.PI_AGENT_CAPABILITY] = lineage.capability;
   if (lineage.orphaned) attributes[AGENT_LINEAGE_ATTRIBUTES.PI_AGENT_ORPHANED] = true;
 
@@ -285,6 +350,7 @@ export function buildResourceLineageAttributes(lineage: AgentLineageContext): Li
   };
 
   if (lineage.parentAgentId) attributes[RESOURCE_ATTRIBUTES.PI_AGENT_PARENT_ID] = lineage.parentAgentId;
+  if (lineage.displayName) attributes[RESOURCE_ATTRIBUTES.PI_AGENT_DISPLAY_NAME] = lineage.displayName;
   if (lineage.capability) attributes[AGENT_LINEAGE_ATTRIBUTES.PI_AGENT_CAPABILITY] = lineage.capability;
 
   return attributes;
@@ -294,6 +360,7 @@ export function createPropagationEnvironment(
   lineage: AgentLineageContext,
   config: ObservMeConfig,
   extra: NodeJS.ProcessEnv = {},
+  childIdentity: ChildIdentityPropagation = { mode: "v1" },
 ): NodeJS.ProcessEnv {
   const sanitizedExtra = sanitizePropagationEnvironment(config, extra);
 
@@ -305,7 +372,30 @@ export function createPropagationEnvironment(
     [config.agent.parentIdEnv]: lineage.agentId,
     [config.agent.rootIdEnv]: lineage.rootAgentId,
     [config.agent.depthEnv]: String(lineage.depth),
-    ...(lineage.capability ? { [config.agent.capabilityEnv]: lineage.capability } : {}),
+    ...buildChildIdentityPropagationEnvironment(config, childIdentity),
+  };
+}
+
+export function validateChildIdentityPropagation(childIdentity: ChildIdentityPropagation): ChildIdentityPropagation {
+  if (childIdentity.mode === "v1") return { mode: "v1" };
+
+  const result = validateObservMeChildDescriptor(childIdentity.descriptor);
+  if (!result.ok) throw new Error("Invalid ObservMe child identity descriptor.");
+  return { mode: "v2", descriptor: result.descriptor };
+}
+
+function buildChildIdentityPropagationEnvironment(
+  config: ObservMeConfig,
+  childIdentity: ChildIdentityPropagation,
+): NodeJS.ProcessEnv {
+  const validatedIdentity = validateChildIdentityPropagation(childIdentity);
+  if (validatedIdentity.mode === "v1") return {};
+
+  return {
+    [config.agent.childIdentityEnvelopeVersionEnv]: String(OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION),
+    [config.agent.displayNameEnv]: validatedIdentity.descriptor.displayName,
+    [config.agent.roleEnv]: validatedIdentity.descriptor.role,
+    [config.agent.capabilityEnv]: validatedIdentity.descriptor.capability,
   };
 }
 
@@ -321,8 +411,13 @@ const highCardinalityLineageKeyPatterns = [
   /(?:workflow|session|trace|span|entry|spawn|tool_call)[._-]id/iu,
   /agent[._-](?:id|parent[._-]id|root[._-]id|child[._-]id)/iu,
   /(?:parent|child|root)[._-]agent[._-]id/iu,
+  /(?:^|[._-])(?:display[._-]?name|capability)$/iu,
   /(?:^|[._-])id$/iu,
 ] as const;
+
+export function normalizeAgentRoleMetricLabel(value: unknown): AgentRole {
+  return metricAgentRoles.has(value as AgentRole) ? (value as AgentRole) : "unknown";
+}
 
 export function isHighCardinalityLineageKey(key: string): boolean {
   return highCardinalityLineageKeyPatterns.some(pattern => pattern.test(key));
@@ -340,6 +435,9 @@ function propagationEnvironmentKeys(config: ObservMeConfig): string[] {
       config.agent.parentSpanIdEnv,
       config.agent.depthEnv,
       config.agent.spawnIdEnv,
+      config.agent.childIdentityEnvelopeVersionEnv,
+      config.agent.displayNameEnv,
+      config.agent.roleEnv,
       config.agent.capabilityEnv,
       "traceparent",
       "tracestate",

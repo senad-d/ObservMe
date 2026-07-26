@@ -18,45 +18,76 @@ An orchestration extension must report those transitions and launch the child wi
 
 ## Public integration surface
 
-Import the API types and discovery helper from the package subpath:
+### Package helper
+
+Packages that declare a real ObservMe dependency should import the explicit v2 helper and types from the package subpath:
 
 ```typescript
 import {
-  requestObservMeIntegration,
-  type ObservMeIntegrationApi,
+  requestObservMeIntegrationV2,
+  type ObservMeChildDescriptor,
+  type ObservMeIntegrationApiV2,
 } from "@senad-d/observme/integration";
+
+const observme: ObservMeIntegrationApiV2 | undefined = requestObservMeIntegrationV2(pi);
 ```
 
-The helper uses Pi's shared `pi.events` bus and negotiates integration API version 1 synchronously:
+The unsuffixed exports remain the source-compatible v1 surface. `OBSERVME_INTEGRATION_VERSION`, `ObservMeIntegrationApi`, `ObservMeStartSubagentOptions`, and `requestObservMeIntegration()` still mean v1 and do not require child identity. V2 is opt-in through `OBSERVME_INTEGRATION_VERSION_V2`, suffixed v2 types, and `requestObservMeIntegrationV2()`.
 
-```typescript
-const observme: ObservMeIntegrationApi | undefined = requestObservMeIntegration(pi);
-```
+| Helper | Versions advertised | Return behavior |
+| --- | --- | --- |
+| `requestObservMeIntegration()` | `[1]` | First structurally valid synchronous v1 response, or `undefined`. |
+| `requestObservMeIntegrationV2()` | `[2, 1]` | Highest structurally valid synchronous response, but returns it only when it is v2; a v1-only result is exposed as `undefined`. |
 
-ObservMe registers no global object and does not require another extension to import its internal telemetry session. The event bus is the runtime boundary; the package subpath provides the stable constants, types, and request helper.
+ObservMe registers no global object and does not expose its private telemetry session. The event bus is the runtime boundary; the package subpath is a convenience for constants, types, structural guards, and request helpers.
 
 The API can be absent when ObservMe is not installed or loaded, is incompatible, or cannot register/respond through the shared event bus. When ObservMe is loaded, the provider can still be discovered before session startup or while `enabled: false`; methods then return `{ ok: false, reason: "session_unavailable" }` because no telemetry session is active. Once session shutdown begins, discovery is unsubscribed and every method on a previously cached API returns `{ ok: false, reason: "session_closing" }` until cleanup finishes, without changing spans, agent trees, metrics, or runtime hints. Orchestration must remain functional in all cases and may run the child without ObservMe correlation after reporting a bounded local warning.
 
-A package that cannot take a runtime dependency can implement the same synchronous request directly. Keep this channel and version stable:
+### Package-decoupled wire contract
+
+Separately installed Pi packages can have different Node module roots. An intentionally decoupled package may mirror the following wire shape locally and must not rely on `instanceof`, constructor identity, symbol identity, or shared module state:
 
 ```typescript
-let observme: ObservMeIntegrationApi | undefined;
-pi.events.emit("observme:integration:request", {
-  supportedVersions: [1],
-  respond(api: ObservMeIntegrationApi) {
-    observme ??= api;
+const channel = "observme:integration:request";
+
+pi.events.emit(channel, {
+  supportedVersions: [2, 1],
+  respond(candidate: unknown) {
+    // Collect structurally valid synchronous candidates here.
   },
 });
 ```
 
-Request the API when the user/tool starts orchestration, not from the extension factory. If a `session_start` handler must launch work automatically, account for extension handler ordering and retry only after ObservMe has an active session.
+The request is an object with a `supportedVersions` array of positive safe integers and a `respond(api)` callback. A provider responds once with its highest mutually supported version. A v2 response is an object with:
+
+- `version: 2`;
+- frozen `childRoles` exactly equal to `lead`, `helper`, `worker`, `validator` in that order;
+- `childIdentityEnvelopeVersion: 1`;
+- callable `getContext`, `startSubagent`, `completeSubagent`, `failSubagent`, `startWait`, `endWait`, `startJoin`, and `endJoin` methods.
+
+A v1 response has `version: 1` and the same lifecycle methods, but no `childRoles` or `childIdentityEnvelopeVersion` field and no required `child` option. Package-decoupled consumers should validate fields structurally and treat accessor errors or malformed candidates as absent providers.
+
+Discovery and selection are synchronous. Collect valid responses only until `pi.events.emit()` returns, select the highest version, use the first response in Pi load order only to break a same-version tie, and ignore every late callback. V2-aware clients advertise `[2, 1]`; array order does not force a provider to return a lower version. Request the API when the user or tool starts orchestration, not from the extension factory. If a `session_start` handler must launch work automatically, account for extension handler ordering and retry only after ObservMe has an active session.
+
+### Identity concepts
+
+V2 keeps presentation, telemetry classification, and lifecycle correlation separate:
+
+| Concept | Contract |
+| --- | --- |
+| `displayName` | Launcher-owned human-readable label, 1–128 Unicode scalar values, no control characters, no invalid Unicode. It is not an ID, authorization input, or metric label. Duplicate names are valid. |
+| `role` | Exactly `lead`, `helper`, `worker`, or `validator`. In the approved role order, a lead coordinates, a helper provides scoped assistance, a worker executes assigned work, and a validator independently checks it. ObservMe records the value; it grants no authority and infers nothing from role or depth. |
+| `capability` | Stable launcher-defined machine value, 1–64 ASCII characters matching `[A-Za-z0-9][A-Za-z0-9._:-]*`. It is a resource/span/log/UI attribute, not a metric label unless a later bounded allowlist contract says otherwise. |
+| Technical IDs | `spawnId`, `childAgentId`, workflow, task, attempt, instance, session, trace, and span IDs remain correlation keys. Display name, role, and capability never replace them. |
+
+V2 supplies no descriptor or field defaults: all three fields are required for every launch. Validation is exact; ObservMe does not trim, normalize, rewrite, or partially accept a descriptor. A malformed descriptor returns `invalid_request` before observability or propagation state is created.
 
 ## Required parent lifecycle
 
 Use this order for each child process:
 
-1. Request the ObservMe integration API.
-2. Call `startSubagent()` immediately before launching the child.
+1. Request the v2 ObservMe integration API when child identity is required.
+2. Call `startSubagent()` with one complete child descriptor immediately before launching the child.
 3. Pass the returned `env` as the child process environment without logging it.
 4. Call `failSubagent()` only when the launcher fails before the child is running.
 5. Call `startWait()`/`endWait()` around time spent waiting for child completion.
@@ -77,8 +108,14 @@ Classify launcher and wait outcomes before changing child state:
 The shared `classifyObservMeRunnerOutcome()` helper implements these rules. A returned `cancelled` status is a confirmed terminal child result; a thrown `AbortError` from a wait describes the caller's wait operation and is non-terminal for the child. The packaged runner's `start()` method returns an `ObservableSubagentExecution` whose `wait()` method can be retried after timeout, abort, or transport failure. The `run()` method is a one-wait convenience; use `start()` whenever later completion must remain reachable through the adapter.
 
 ```typescript
-const observme = requestObservMeIntegration(pi);
+const observme = requestObservMeIntegrationV2(pi);
+const childDescriptor: ObservMeChildDescriptor = {
+  displayName: "Scout",
+  role: "worker",
+  capability: "code-search",
+};
 const started = observme?.startSubagent({
+  child: childDescriptor,
   command: "pi",
   args: ["--mode", "rpc"],
   spawnType: "extension",
@@ -137,13 +174,23 @@ Do not put raw tasks, prompts, command lines, environment values, child output, 
 | `spawnType` | `command`, `tool`, `extension`, or `unknown`. |
 | `spawnReason` | `delegated_task`, `parallel_search`, `review`, `tool_wrapper`, or `unknown`. |
 | `toolCallId` | Optional high-cardinality trace/log correlation when a tool initiated the spawn. |
-| `env` | Base child environment. ObservMe removes stale lineage/W3C keys and returns the replacement environment. |
+| `env` | Base child environment. ObservMe removes stale lineage/W3C/identity keys and returns the replacement environment. |
+| `child` | Required in v2 and absent from v1: exact `displayName`, `role`, and `capability` descriptor defined above. |
 
-Runtime callers are validated even when JavaScript bypasses the TypeScript types. Caller-provided lifecycle identifiers must match `[A-Za-z0-9._:-]{1,128}`. Commands and individual arguments are capped at 4096 characters, argument lists at 256 items, and environment objects at 4096 entries. Durations must be finite, non-negative milliseconds. Invalid or duplicate active operations return a failure without replacing an existing span. Child placeholders, including generated placeholders, are collision-checked before span, tree, metric, or propagation state is created; do not reuse a terminal placeholder while its bounded tree node remains retained.
+Runtime callers are validated even when JavaScript bypasses the TypeScript types. Caller-provided lifecycle identifiers must match `[A-Za-z0-9._:-]{1,128}`. Commands and individual arguments are capped at 4096 characters, argument lists at 256 items, environment objects at 4096 entries, environment keys at 256 characters, and `errorClass` at 256 characters. Environment keys must be non-empty and contain neither `=` nor NUL; values may be strings or explicit `undefined` tombstones and must not contain NUL. Durations must be finite, non-negative safe milliseconds. Invalid or duplicate active operations return a failure without replacing an existing span. Child placeholders, including generated placeholders, are collision-checked before span, tree, metric, or propagation state is created; do not reuse a terminal placeholder while its bounded tree node remains retained.
 
-Completion accepts only terminal child states (`completed`, `failed`, `cancelled`), and any supplied outcome must match. Wait/join methods use bounded child states (`starting`, `active`, `completed`, `failed`, `cancelled`, `orphaned`), join states (`waiting`, `completed`, `failed`, `cancelled`, `timeout`, `unknown`), and wait reasons (`dependency`, `rate_limit`, `child_running`, `unknown`). `failurePropagated=false` on a completed join confirms that the parent recovered from a failed child.
+Completion accepts only terminal child states (`completed`, `failed`, `cancelled`), and any supplied outcome must match. Wait/join methods use bounded child states (`starting`, `active`, `completed`, `failed`, `cancelled`, `orphaned`), join states (`waiting`, `completed`, `failed`, `cancelled`, `timeout`, `unknown`), and wait reasons (`dependency`, `rate_limit`, `child_running`, `unknown`). Spawn type is `command`, `tool`, `extension`, or `unknown`; spawn reason is `delegated_task`, `parallel_search`, `review`, `tool_wrapper`, or `unknown`. `failurePropagated=false` on a completed join confirms that the parent recovered from a failed child.
 
-All mutation methods return a discriminated result. Handle these reasons without crashing Pi:
+Lifecycle results are structural discriminated unions:
+
+| Operation | Success shape |
+| --- | --- |
+| `getContext()` | `{ ok: true, context }` |
+| `startSubagent()` | `{ ok: true, spawnId, childAgentId, env, traceContextPropagated }` |
+| `startWait()` / `startJoin()` | `{ ok: true, id }` |
+| Completion/failure/end methods | `{ ok: true }` |
+
+Every operation can instead return `{ ok: false, reason }`. Handle these reasons without crashing Pi:
 
 | Reason | Meaning |
 | --- | --- |
@@ -172,6 +219,9 @@ OBSERVME_PARENT_TRACE_ID
 OBSERVME_PARENT_SPAN_ID
 OBSERVME_AGENT_DEPTH
 OBSERVME_SPAWN_ID
+OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION
+OBSERVME_AGENT_DISPLAY_NAME
+OBSERVME_AGENT_ROLE
 OBSERVME_AGENT_CAPABILITY
 traceparent
 tracestate
@@ -179,7 +229,11 @@ tracestate
 
 Important rules:
 
-- Pass the complete returned `env`; do not merge stale lineage values back afterward.
+- Pass the complete returned `env`; do not merge stale lineage or child-identity values back afterward.
+- In v2, ObservMe scrubs all configured identity keys and then writes marker `1` plus the complete requested descriptor. Child metadata replaces stale inherited parent or previous-child metadata.
+- In v1, ObservMe scrubs identity keys, writes no identity marker or descriptor, retains legacy child role `subagent`, and does not inherit the parent's capability.
+- A child reads identity only after a supported marker and accepts it atomically. Marker-free, partial, malformed, contradictory, or future-version identity fails open with one bounded value-free propagation diagnostic; no field is partially interpreted.
+- Explicit trusted runtime identity options take precedence over propagated identity. Otherwise a complete supported envelope wins; without one, legacy/root defaults apply. Project `.env` configuration cannot establish lineage or child identity.
 - Do not set `OBSERVME_AGENT_ID` for a child. The child creates its own logical agent ID.
 - `OBSERVME_AGENT_DEPTH` carries the parent depth; the child increments it.
 - The child accepts lineage only from its Pi process environment, not project `.env`.
@@ -192,13 +246,13 @@ Names can be changed in ObservMe configuration. This is another reason to use th
 
 The child Pi process must:
 
-1. load a compatible ObservMe package;
+1. load a compatible ObservMe package; child-identity envelope version 1 requires `@senad-d/observme` 0.1.8 or later;
 2. receive the returned environment unchanged;
 3. use the same or a compatible OTLP destination;
 4. run in a trusted project when project-local ObservMe configuration is required;
 5. avoid `--no-extensions` unless ObservMe is explicitly loaded again with `-e`.
 
-A child that loads ObservMe without the envelope is still observable, but it appears as a separate root-like runtime. A malformed or partial envelope fails open and emits bounded orphan/propagation diagnostics.
+A child that loads ObservMe without the lineage envelope is still observable, but it appears as a separate root-like runtime. A malformed or partial envelope fails open and emits bounded orphan/propagation diagnostics. Negotiating a v2 root provider proves only the in-process lifecycle API; it does not prove that an explicitly loaded child extension can read identity envelope version 1. Launchers using `--no-extensions` must add ObservMe back explicitly and pin a compatible child release rather than assuming the root provider's package is reused.
 
 ## Troubleshooting: every agent appears as its own root
 
@@ -266,16 +320,36 @@ Workflow, session, agent, spawn, trace, and span identifiers remain trace/log at
 | Arbitrary custom metrics/logs/spans | Not exposed by this API. The API intentionally limits labels and event names to the ObservMe orchestration contract. Propose a versioned semantic addition instead of accepting arbitrary telemetry names or labels. |
 | Orchestration control | Not provided. Task queues, process/session management, RPC, retries, concurrency, status transport, result storage, and cleanup remain the orchestrator's responsibility. |
 
+## OrcMe interoperability profile: shipped v1 versus planned v2
+
+ObservMe publishes this profile as a neutral interoperability contract. It does not claim that OrcMe already ships v2 identity.
+
+**Current reviewed OrcMe behavior:** OrcMe intentionally declares no ObservMe package dependency, mirrors API v1 locally in `src/process/observme.ts`, advertises `[1]`, and launches direct Pi RPC children with `--no-extensions`. Its implemented ObservMe integration is therefore metadata-free v1 behavior; no durable managed display name or v2 child descriptor should be inferred from it.
+
+**Approved downstream plan, not shipped behavior:** once OrcMe adopts v2, it will advertise `[2, 1]` and require a structurally valid v2 result when identity is required. The mapping is exact and does not use aliases or inference:
+
+- durable managed display identity → `displayName`;
+- manifest role → `role`, in the order `lead` (coordinates), `helper` (scoped assistance), `worker` (executes assigned work), `validator` (independently checks);
+- pinned definition name → `capability`.
+
+Task, attempt, instance, spawn, and child-agent placeholders remain OrcMe lifecycle identifiers. OrcMe managed depth and ObservMe lineage depth remain separate: an OrcMe depth-0 lead can be an ObservMe depth-1 child of an interactive root. ObservMe role telemetry is supplementary evidence only; it grants, infers, or widens no OrcMe authority, and OrcMe's durable task state remains authoritative.
+
+OrcMe's launch contract remains transport-owned: build and sanitize its managed base environment, pass that base to `startSubagent()`, preserve every returned ObservMe value, and carry explicit `undefined` tombstones so Pi RPC's `process.env` overlay cannot restore keys ObservMe removed. Never log, persist, hash, display, or snapshot complete environments or unrelated values. Keep `spawnType: "extension"` and `spawnReason: "delegated_task"`. A duplicate requested `spawnId` or `childAgentId` may be retried once without those technical identifiers, but with the byte-identical descriptor.
+
+Lifecycle ordering remains start immediately before launch, `failSubagent()` once only for pre-handle launch failure, wait calls around actual blocking, `completeSubagent()` exactly once for confirmed terminal child state, and join calls around terminal evidence collection. Export or telemetry failure after a valid launch stays fail-open and never replaces OrcMe task state.
+
+Policy stays explicit: `disabled` performs no ObservMe negotiation; `inherit` follows effective OrcMe configuration; after v2 adoption, `enabled` requires a v2 root provider and an explicitly pinned envelope-compatible child ObservMe release under `--no-extensions`. Each nested delegation must supply a fresh descriptor and use the immediate parent's newly returned environment.
+
 ## Dependency and versioning guidance
 
 The example imports `@senad-d/observme/integration` because it ships inside the same ObservMe package. A separately distributed Pi package has two choices:
 
 1. Add `@senad-d/observme` as a development/runtime dependency according to its packaging strategy so the helper and types resolve, while still requiring users to load ObservMe as a Pi extension.
-2. Avoid a runtime dependency by emitting the documented `observme:integration:request` event locally and using an `import type` during development. The runtime protocol is the shared Pi event channel, not shared module state.
+2. Avoid a runtime dependency by mirroring the documented structural interfaces and emitting `observme:integration:request` locally. The runtime protocol is the shared Pi event channel, not shared module state.
 
 Pi packages can have separate module roots. Do not assume that an independently installed ObservMe package is automatically resolvable as a Node module from another package, and do not load a bundled second ObservMe extension accidentally. Runtime negotiation determines whether one compatible ObservMe integration provider is actually loaded.
 
-The current public integration version is `1`. Additive API changes can preserve version 1; incompatible behavior requires a new negotiated version.
+Integration API v1 remains stable and metadata-free. Integration API v2 and child-identity envelope version 1 first appear in `@senad-d/observme` 0.1.8. Adding, removing, renaming, or changing the meaning of a v2 role requires a later integration API version; the v2 role catalog is not runtime-configurable.
 
 ## Related documentation
 

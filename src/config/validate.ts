@@ -408,8 +408,8 @@ function validateProjectTrust(options: ConfigValidationOptions): ValidationIssue
 }
 
 function validateLineageEnvironment(config: ObservMeConfig, env: NodeJS.ProcessEnv): ValidationIssue[] {
-  const allEnvironmentNames = configuredLineageEnvironmentNames(config);
-  const environmentNameIssues = validateLineageEnvironmentNames(allEnvironmentNames);
+  const allEnvironmentNames = configuredPropagationEnvironmentNames(config);
+  const environmentNameIssues = validatePropagationEnvironmentNames(allEnvironmentNames);
   if (environmentNameIssues.length > 0) return environmentNameIssues;
 
   const lineageEnvNames = [
@@ -431,7 +431,7 @@ function validateLineageEnvironment(config: ObservMeConfig, env: NodeJS.ProcessE
   ];
 }
 
-function configuredLineageEnvironmentNames(config: ObservMeConfig): string[] {
+function configuredPropagationEnvironmentNames(config: ObservMeConfig): string[] {
   return [
     config.workflow.idEnv,
     config.agent.idEnv,
@@ -442,11 +442,14 @@ function configuredLineageEnvironmentNames(config: ObservMeConfig): string[] {
     config.agent.parentSpanIdEnv,
     config.agent.depthEnv,
     config.agent.spawnIdEnv,
+    config.agent.childIdentityEnvelopeVersionEnv,
+    config.agent.displayNameEnv,
+    config.agent.roleEnv,
     config.agent.capabilityEnv,
   ];
 }
 
-function validateLineageEnvironmentNames(names: string[]): ValidationIssue[] {
+function validatePropagationEnvironmentNames(names: string[]): ValidationIssue[] {
   const normalizedNames = names.map(name => name.toUpperCase());
   const uniqueNames = new Set(normalizedNames);
   const malformed = names.some(name => !/^[A-Za-z_]\w{0,127}$/u.test(name));
@@ -456,7 +459,7 @@ function validateLineageEnvironmentNames(names: string[]): ValidationIssue[] {
   return [
     {
       code: "malformed_lineage_value",
-      message: "Configured lineage environment variable names must be unique, safe, and distinct from W3C trace headers.",
+      message: "Configured propagation environment variable names must be unique, safe, and distinct from W3C trace headers.",
     },
   ];
 }

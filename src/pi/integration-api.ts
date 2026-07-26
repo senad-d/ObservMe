@@ -1,19 +1,26 @@
 import {
+  OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION,
+  OBSERVME_CHILD_ROLES,
   OBSERVME_INTEGRATION_CHANNEL,
   OBSERVME_INTEGRATION_VERSION,
+  OBSERVME_INTEGRATION_VERSION_V2,
   type ObservMeCompleteSubagentOptions,
   type ObservMeFailSubagentOptions,
   type ObservMeIntegrationApi,
+  type ObservMeIntegrationApiV2,
+  type ObservMeIntegrationContext,
   type ObservMeIntegrationContextSuccess,
   type ObservMeIntegrationFailure,
-  type ObservMeIntegrationRequest,
+  type ObservMeIntegrationResponseV2,
   type ObservMeIntegrationSuccess,
   type ObservMeStartedSubagent,
   type ObservMeStartedWaitJoin,
   type ObservMeStartSubagentOptions,
+  type ObservMeStartSubagentOptionsV2,
   type ObservMeWaitJoinOptions,
 } from "../integration.ts";
 import { SESSION_ATTRIBUTES } from "../semconv/attributes.ts";
+import { validateObservMeChildDescriptor } from "./child-identity.ts";
 import {
   completeSubagentSpawn,
   endAgentJoin,
@@ -24,6 +31,7 @@ import {
   startAgentWait,
   startSubagentSpawn,
 } from "./subagent-spawn.ts";
+import type { AgentRole, ChildIdentityPropagation } from "./agent-lineage.ts";
 import type { HandlerSessionState, ObservMeTelemetrySession } from "./handler-types.ts";
 
 interface IntegrationEventBus {
@@ -38,6 +46,18 @@ type IntegrationSessionAvailability =
   | { readonly ok: true; readonly session: ObservMeTelemetrySession }
   | ObservMeIntegrationFailure;
 
+type IntegrationIdentityMode = ChildIdentityPropagation["mode"];
+
+interface IntegrationProviderRequest {
+  readonly supportedVersions: readonly number[];
+  readonly respond: (api: ObservMeIntegrationResponseV2) => void;
+}
+
+interface ValidatedStartSubagentRequest {
+  readonly options: ObservMeStartSubagentOptions;
+  readonly childIdentity: ChildIdentityPropagation;
+}
+
 const integrationIdentifierPattern = /^[A-Za-z0-9._:-]{1,128}$/u;
 const maximumIntegrationCommandLength = 4096;
 const maximumIntegrationArgumentCount = 256;
@@ -49,29 +69,19 @@ export function registerObservMeIntegration(pi: unknown, state: HandlerSessionSt
   const events = resolveIntegrationEventBus(pi);
   if (!events) return undefined;
 
-  const api = new SessionBackedObservMeIntegrationApi(state);
+  const provider = new SessionBackedObservMeIntegrationProvider(state);
   try {
-    return events.on(OBSERVME_INTEGRATION_CHANNEL, api.handleRequest.bind(api));
+    return events.on(OBSERVME_INTEGRATION_CHANNEL, provider.handleRequest.bind(provider));
   } catch {
     return undefined;
   }
 }
 
-export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationApi {
-  readonly version = OBSERVME_INTEGRATION_VERSION;
+class SessionBackedObservMeIntegrationOperations {
   readonly #state: HandlerSessionState;
 
   constructor(state: HandlerSessionState) {
     this.#state = state;
-  }
-
-  handleRequest(value: unknown): void {
-    try {
-      if (!isCompatibleIntegrationRequest(value)) return;
-      value.respond(this);
-    } catch {
-      return;
-    }
   }
 
   getContext(): ObservMeIntegrationContextSuccess | ObservMeIntegrationFailure {
@@ -88,7 +98,7 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
         parentAgentId: session.lineage.parentAgentId,
         rootAgentId: session.lineage.rootAgentId,
         depth: session.lineage.depth,
-        role: session.lineage.role,
+        role: resolveV1IntegrationContextRole(session.lineage.role),
         capability: session.lineage.capability,
         sessionId: readSessionId(session),
         traceId: readSessionTraceId(session),
@@ -96,13 +106,26 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
     };
   }
 
-  startSubagent(options: ObservMeStartSubagentOptions = {}): ObservMeStartedSubagent | ObservMeIntegrationFailure {
+  startSubagentV1(options: unknown = {}): ObservMeStartedSubagent | ObservMeIntegrationFailure {
+    return this.startSubagent(options, "v1");
+  }
+
+  startSubagentV2(options: unknown): ObservMeStartedSubagent | ObservMeIntegrationFailure {
+    return this.startSubagent(options, "v2");
+  }
+
+  private startSubagent(
+    options: unknown,
+    identityMode: IntegrationIdentityMode,
+  ): ObservMeStartedSubagent | ObservMeIntegrationFailure {
     const availability = resolveIntegrationSession(this.#state);
     if (!availability.ok) return availability;
     const { session } = availability;
     try {
-      if (!isValidStartSubagentOptions(options)) return integrationFailure("invalid_request");
-      const identity = resolveSubagentSpawnIdentity(options);
+      const request = validateStartSubagentRequest(options, identityMode);
+      if (!request) return integrationFailure("invalid_request");
+
+      const identity = resolveSubagentSpawnIdentity(request.options);
       if (session.spans.activeSubagentSpawns.has(identity.spawnId)) {
         return integrationFailure("spawn_already_exists");
       }
@@ -110,7 +133,11 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
         return integrationFailure("child_agent_already_exists");
       }
 
-      const started = startSubagentSpawn(session, { ...options, ...identity });
+      const started = startSubagentSpawn(session, {
+        ...request.options,
+        ...identity,
+        childIdentity: request.childIdentity,
+      });
       return {
         ok: true,
         spawnId: started.spawnId,
@@ -227,6 +254,69 @@ export class SessionBackedObservMeIntegrationApi implements ObservMeIntegrationA
   }
 }
 
+export class SessionBackedObservMeIntegrationProvider {
+  readonly #apiV1: ObservMeIntegrationApi;
+  readonly #apiV2: ObservMeIntegrationApiV2;
+
+  constructor(state: HandlerSessionState) {
+    const operations = new SessionBackedObservMeIntegrationOperations(state);
+    this.#apiV1 = createIntegrationApiV1(operations);
+    this.#apiV2 = createIntegrationApiV2(operations);
+  }
+
+  handleRequest(value: unknown): void {
+    try {
+      const request = readIntegrationProviderRequest(value);
+      if (!request) return;
+
+      const api = selectHighestMutuallySupportedApi(request.supportedVersions, this.#apiV1, this.#apiV2);
+      if (api) request.respond(api);
+    } catch {
+      return;
+    }
+  }
+}
+
+function createIntegrationApiV1(operations: SessionBackedObservMeIntegrationOperations): ObservMeIntegrationApi {
+  return Object.freeze({
+    version: OBSERVME_INTEGRATION_VERSION,
+    getContext: operations.getContext.bind(operations),
+    startSubagent: operations.startSubagentV1.bind(operations),
+    completeSubagent: operations.completeSubagent.bind(operations),
+    failSubagent: operations.failSubagent.bind(operations),
+    startWait: operations.startWait.bind(operations),
+    endWait: operations.endWait.bind(operations),
+    startJoin: operations.startJoin.bind(operations),
+    endJoin: operations.endJoin.bind(operations),
+  });
+}
+
+function createIntegrationApiV2(operations: SessionBackedObservMeIntegrationOperations): ObservMeIntegrationApiV2 {
+  return Object.freeze({
+    version: OBSERVME_INTEGRATION_VERSION_V2,
+    childRoles: OBSERVME_CHILD_ROLES,
+    childIdentityEnvelopeVersion: OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION,
+    getContext: operations.getContext.bind(operations),
+    startSubagent: operations.startSubagentV2.bind(operations),
+    completeSubagent: operations.completeSubagent.bind(operations),
+    failSubagent: operations.failSubagent.bind(operations),
+    startWait: operations.startWait.bind(operations),
+    endWait: operations.endWait.bind(operations),
+    startJoin: operations.startJoin.bind(operations),
+    endJoin: operations.endJoin.bind(operations),
+  });
+}
+
+function selectHighestMutuallySupportedApi(
+  supportedVersions: readonly number[],
+  apiV1: ObservMeIntegrationApi,
+  apiV2: ObservMeIntegrationApiV2,
+): ObservMeIntegrationResponseV2 | undefined {
+  if (supportedVersions.includes(OBSERVME_INTEGRATION_VERSION_V2)) return apiV2;
+  if (supportedVersions.includes(OBSERVME_INTEGRATION_VERSION)) return apiV1;
+  return undefined;
+}
+
 function resolveIntegrationSession(state: HandlerSessionState): IntegrationSessionAvailability {
   if (state.integrationSessionPhase === "closing") return integrationFailure("session_closing");
   return state.session ? { ok: true, session: state.session } : integrationFailure("session_unavailable");
@@ -250,14 +340,60 @@ function resolveIntegrationEventBus(pi: unknown): IntegrationEventBus | undefine
   }
 }
 
-function isCompatibleIntegrationRequest(value: unknown): value is ObservMeIntegrationRequest {
-  if (!value || typeof value !== "object") return false;
-  const request = value as Partial<ObservMeIntegrationRequest>;
-  return (
-    Array.isArray(request.supportedVersions) &&
-    request.supportedVersions.includes(OBSERVME_INTEGRATION_VERSION) &&
-    typeof request.respond === "function"
-  );
+function readIntegrationProviderRequest(value: unknown): IntegrationProviderRequest | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  try {
+    const supportedVersions = Reflect.get(value, "supportedVersions");
+    const respond = Reflect.get(value, "respond");
+    if (!Array.isArray(supportedVersions) || !hasValidRequestedIntegrationVersions(supportedVersions)) {
+      return undefined;
+    }
+    if (typeof respond !== "function") return undefined;
+    return { supportedVersions, respond };
+  } catch {
+    return undefined;
+  }
+}
+
+function hasValidRequestedIntegrationVersions(values: readonly unknown[]): values is readonly number[] {
+  for (const value of values) {
+    if (!isValidRequestedIntegrationVersion(value)) return false;
+  }
+  return true;
+}
+
+function isValidRequestedIntegrationVersion(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function validateStartSubagentRequest(
+  value: unknown,
+  identityMode: IntegrationIdentityMode,
+): ValidatedStartSubagentRequest | undefined {
+  try {
+    if (!isValidStartSubagentOptions(value)) return undefined;
+    const options = copyStartSubagentOptions(value);
+    if (identityMode === "v1") return { options, childIdentity: { mode: "v1" } };
+
+    const descriptor = validateObservMeChildDescriptor(Reflect.get(value, "child"));
+    if (!descriptor.ok) return undefined;
+    return { options, childIdentity: { mode: "v2", descriptor: descriptor.descriptor } };
+  } catch {
+    return undefined;
+  }
+}
+
+function copyStartSubagentOptions(value: ObservMeStartSubagentOptionsV2 | ObservMeStartSubagentOptions): ObservMeStartSubagentOptions {
+  return {
+    spawnId: value.spawnId,
+    childAgentId: value.childAgentId,
+    command: value.command,
+    args: value.args,
+    spawnType: value.spawnType,
+    spawnReason: value.spawnReason,
+    toolCallId: value.toolCallId,
+    env: value.env,
+  };
 }
 
 function isValidStartSubagentOptions(value: unknown): value is ObservMeStartSubagentOptions {
@@ -413,6 +549,11 @@ function isValidDuration(value: unknown): value is number {
 
 function resolveRequestedWaitJoinId(options: ObservMeWaitJoinOptions, kind: "wait" | "join"): string | undefined {
   return options.id ?? (options.spawnId ? `${kind}-${options.spawnId}` : undefined);
+}
+
+function resolveV1IntegrationContextRole(role: AgentRole): ObservMeIntegrationContext["role"] {
+  if (role === "lead" || role === "helper" || role === "validator") return "subagent";
+  return role;
 }
 
 function readSessionId(session: ObservMeTelemetrySession): string | undefined {

@@ -1232,7 +1232,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Top 10 agent-role selected-range p95 run-latency estimates with run counts. Histogram bucket increases retain agent_role and le. Low run counts make percentile ranks sparse; an absent row means no matching observations and is not a zero-latency result.",
+      "description": "Top 10 agent-role selected-range p95 run-latency estimates with run counts. Histogram bucket increases retain agent_role and le without aliases: v2 lead, helper, worker, and validator remain separate, as do root and legacy subagent, orchestrator, reviewer, and unknown values. Low run counts make percentile ranks sparse; an absent row means no matching observations and is not a zero-latency result.",
       "fieldConfig": {
         "defaults": {
           "color": {

@@ -52,9 +52,10 @@ observme.instance.id               = <same generated uuid per ObservMe telemetry
 pi.agent.id                        = <generated id per logical agent runtime>
 pi.agent.parent_id                 = <validated parent agent id>, optional high-cardinality resource attribute
 pi.agent.root_id                   = <root agent id>
-pi.agent.role                      = root|subagent|orchestrator|worker|reviewer|unknown
+pi.agent.display_name              = optional validated v2 child presentation label
+pi.agent.role                      = root|lead|helper|worker|validator|subagent|orchestrator|reviewer|unknown
 pi.agent.depth                     = 0 for root, 1+ for subagents
-pi.agent.capability                = optional trusted safe capability name
+pi.agent.capability                = optional validated launcher-defined machine value
 pi.cwd.hash                        = reserved/configurable resource key; live cwd hash is on pi.session.cwd_hash
 pi.cwd.basename                    = reserved/configurable resource key
 deployment.environment.name        = development|test|staging|production|custom
@@ -79,6 +80,9 @@ pi.workflow.root_agent_id
 pi.agent.id
 pi.agent.parent_id                  # if this runtime is a subagent
 pi.agent.root_id
+pi.agent.display_name               # if this runtime has a v2 child descriptor
+pi.agent.role
+pi.agent.capability                 # if this runtime has a validated capability
 pi.agent.run.id                     # if inside an agent_start/agent_end lifecycle
 pi.entry.id                         # if linked to an entry
 pi.entry.parent_id                  # if linked to an entry
@@ -139,9 +143,12 @@ pi.workflow.status                  # ok|error|cancelled|unknown
 Additional lineage attributes where known:
 
 ```text
-pi.agent.capability                 # optional trusted safe capability name
+pi.agent.display_name               # optional validated presentation label; never a correlation key
+pi.agent.capability                 # optional validated launcher-defined machine value
 pi.agent.orphaned                   # true when parent lineage is incomplete
 ```
+
+For integration API v2 children, `pi.agent.display_name`, `pi.agent.role`, and `pi.agent.capability` are emitted consistently as the child's own resource, span, and log attributes. Parent spawn telemetry uses the child-specific names below instead, so a child's identity cannot be mistaken for the parent's identity. Display names are bounded to 128 Unicode code points and reject controls or invalid Unicode; capabilities are bounded to 64 characters and use the documented ASCII token grammar. The validated values are emitted without inferring, trimming, normalizing, or widening the launcher-supplied role.
 
 ### 5.1 Agent Run Span
 
@@ -159,7 +166,7 @@ Attributes:
 pi.agent.id
 pi.agent.parent_id                  # optional
 pi.agent.root_id
-pi.agent.role                       # root|subagent|orchestrator|worker|reviewer|unknown
+pi.agent.role                       # root|lead|helper|worker|validator|subagent|orchestrator|reviewer|unknown
 pi.agent.depth
 pi.agent.run.id
 pi.agent.run.index
@@ -196,7 +203,10 @@ pi.agent.spawn.reason               # delegated_task|parallel_search|review|tool
 pi.agent.spawn.outcome              # completed|failed|cancelled; set on terminal transition
 pi.agent.spawn.tool_call_id          # if spawned from a tool call
 pi.agent.spawn.command.hash          # if spawned by a command; never raw by default
-pi.agent.child.id                    # if known after spawn
+pi.agent.child.id                    # technical child correlation id, if known after spawn
+pi.agent.child.display_name          # validated v2 child presentation label; never the parent name
+pi.agent.child.role                  # exact v2 child role: lead|helper|worker|validator
+pi.agent.child.capability            # validated v2 launcher-defined machine value
 pi.agent.child.count                 # current/observed child count for the parent operation
 pi.agent.children.active             # active children at observation time
 pi.agent.parent_id                   # current pi.agent.id
@@ -208,7 +218,7 @@ pi.session.id
 pi.agent.spawn.trace_context_propagated
 ```
 
-If W3C trace context is propagated to the child, the child `pi.session` span should continue the trace. If not, link the child trace back using span links/log attributes and the lineage fields above.
+The child-specific descriptor attributes are present on the parent spawn start and terminal span events/logs, including launcher failure, completion, and cancellation. API v1 starts omit them. If W3C trace context is propagated to the child, the child `pi.session` span should continue the trace. If not, link the child trace back using span links/log attributes and the lineage fields above.
 
 ### 5.3 Agent Wait and Join Spans
 
@@ -621,8 +631,8 @@ operation
 status
 error_class
 reason                                       # bounded enum only, e.g. span_registry_full|export_timeout
-agent_role                                  # root|subagent|orchestrator|worker|reviewer|unknown
-agent_capability                            # reserved for launchers with a bounded capability enum; not currently emitted
+agent_role                                  # root|lead|helper|worker|validator|subagent|orchestrator|reviewer|unknown
+agent_capability                            # reserved for a separate bounded allowlist contract; not currently emitted
 subagent_depth                              # bounded bucket or small integer
 spawn_type                                  # tool|command|extension|unknown
 spawn_reason                                # delegated_task|parallel_search|review|tool_wrapper|unknown
@@ -670,6 +680,9 @@ pi.workflow.root_agent_id
 pi.agent.id
 pi.agent.parent_id
 pi.agent.root_id
+pi.agent.display_name                       # optional validated v2 child identity; never a metric label
+pi.agent.role
+pi.agent.capability                         # optional validated child identity; never a metric label
 pi.agent.run.id
 pi.turn.id
 trace_id
@@ -683,6 +696,8 @@ observme.config.rejection.issue_count
 ```
 
 Configuration rejection diagnostics use only the bounded effective source, normalized issue codes, and aggregate issue count. They never include rejected values, raw validation messages, paths, headers, environment values, or custom regular expressions.
+
+Role values remain explicit across contract generations: `root` is the ObservMe topology root; integration API v2 children use exactly `lead`, `helper`, `worker`, or `validator`; API v1 children use `subagent`; and `orchestrator`, `reviewer`, and `unknown` remain distinguishable historical values. Role is descriptive telemetry and grants no authority. `pi.agent.display_name`, `pi.agent.capability`, and their parent-side `pi.agent.child.*` forms are span/log/resource attributes only and must not be promoted to metric labels.
 
 Operational `tool.call.completed` and `tool.call.failed` logs include every available common session/workflow/agent/run/turn correlation field plus `pi.tool.call.id`, `pi.tool.name`, `pi.tool.category`, matching `trace_id`/`span_id`, success, and bounded `error.type` for failures. These operational logs never copy raw tool arguments, results, prompts, commands, paths, or error messages. When `capture.toolResults` is explicitly enabled and the capture policy succeeds, failed-tool output is emitted separately as the `tool.error.captured` log body with `event.category="tool_content"`; redaction remains enabled by default and capture failures emit no content.
 

@@ -49,6 +49,9 @@ const expectedDocumentedDefaults = {
     spawnIdEnv: "OBSERVME_SPAWN_ID",
     propagateTraceContext: true,
     propagateToSubagents: true,
+    childIdentityEnvelopeVersionEnv: "OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION",
+    displayNameEnv: "OBSERVME_AGENT_DISPLAY_NAME",
+    roleEnv: "OBSERVME_AGENT_ROLE",
     capabilityEnv: "OBSERVME_AGENT_CAPABILITY",
     writeCorrelationEntry: false,
   },
@@ -225,6 +228,22 @@ function sortUnique(values) {
 
 test("default config snapshots every documented default value", () => {
   assert.deepEqual(defaultObservMeConfig, expectedDocumentedDefaults);
+});
+
+test("default child-identity environment keys are documented and distinct", () => {
+  const childIdentityEnvironmentKeys = [
+    defaultObservMeConfig.agent.childIdentityEnvelopeVersionEnv,
+    defaultObservMeConfig.agent.displayNameEnv,
+    defaultObservMeConfig.agent.roleEnv,
+  ];
+
+  assert.deepEqual(childIdentityEnvironmentKeys, [
+    "OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION",
+    "OBSERVME_AGENT_DISPLAY_NAME",
+    "OBSERVME_AGENT_ROLE",
+  ]);
+  assert.equal(new Set(childIdentityEnvironmentKeys).size, childIdentityEnvironmentKeys.length);
+  assert.equal(childIdentityEnvironmentKeys.includes(defaultObservMeConfig.agent.capabilityEnv), false);
 });
 
 test("default active-agent lease satisfies the bounded export relationship", () => {

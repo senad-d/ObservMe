@@ -72,10 +72,10 @@ test("trusted parent lineage creates a subagent that preserves workflow and root
       OBSERVME_PARENT_AGENT_ID: "agent-parent-1",
       OBSERVME_ROOT_AGENT_ID: "agent-root-1",
       OBSERVME_AGENT_DEPTH: "1",
-      OBSERVME_AGENT_CAPABILITY: "code-review",
     },
     trustedParentContext: true,
     role: "worker",
+    capability: "code-review",
     generateId: nextGeneratedId,
   });
 
@@ -134,6 +134,7 @@ test("lineage attributes include root-agent and subagent correlation fields", ()
     workflowRootAgentId: "agent-root",
     depth: 1,
     role: "subagent",
+    displayName: "Analysis Scout",
     capability: "analysis",
   });
 
@@ -146,19 +147,29 @@ test("lineage attributes include root-agent and subagent correlation fields", ()
     "pi.agent.depth": 0,
   });
   assert.equal(buildLineageAttributes(child)["pi.agent.parent_id"], "agent-root");
+  assert.equal(buildLineageAttributes(child)["pi.agent.display_name"], "Analysis Scout");
   assert.equal(buildLineageAttributes(child)["pi.agent.capability"], "analysis");
 });
 
-test("propagation environment sends only generated workflow and parent lineage to child agents", () => {
+test("v1 propagation environment sends lineage without inheriting parent identity", () => {
   const lineage = makeLineage({ agentId: "agent-parent", rootAgentId: "agent-root", depth: 3, capability: "planning" });
-  const env = createPropagationEnvironment(lineage, defaultObservMeConfig, { PATH: "/usr/bin" });
+  const env = createPropagationEnvironment(lineage, defaultObservMeConfig, {
+    PATH: "/usr/bin",
+    OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION: "stale-version",
+    OBSERVME_AGENT_DISPLAY_NAME: "Stale name",
+    OBSERVME_AGENT_ROLE: "worker",
+    OBSERVME_AGENT_CAPABILITY: "stale-capability",
+  });
 
   assert.equal(env.PATH, "/usr/bin");
   assert.equal(env.OBSERVME_WORKFLOW_ID, "workflow-1");
   assert.equal(env.OBSERVME_PARENT_AGENT_ID, "agent-parent");
   assert.equal(env.OBSERVME_ROOT_AGENT_ID, "agent-root");
   assert.equal(env.OBSERVME_AGENT_DEPTH, "3");
-  assert.equal(env.OBSERVME_AGENT_CAPABILITY, "planning");
+  assert.equal(env.OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION, undefined);
+  assert.equal(env.OBSERVME_AGENT_DISPLAY_NAME, undefined);
+  assert.equal(env.OBSERVME_AGENT_ROLE, undefined);
+  assert.equal(env.OBSERVME_AGENT_CAPABILITY, undefined);
   assert.equal(env.OBSERVME_AGENT_ID, undefined);
 });
 
@@ -361,6 +372,48 @@ test("agent tree tracker records active children, fan-out, depth, width, orphan 
   assert.equal(summary.childStatuses.completed, 1);
   assert.equal(summary.childStatuses.active, 2);
   assert.equal(tracker.getAgent("agent-orphan").status, "orphaned");
+});
+
+test("agent tree retains the exact child descriptor through status changes and bounded eviction", () => {
+  const evicted = [];
+  const tracker = new AgentTreeTracker({ maxAgents: 2, onEvict: node => evicted.push(node) });
+  const root = makeLineage({ agentId: "agent-root", rootAgentId: "agent-root", workflowRootAgentId: "agent-root" });
+  const descriptor = Object.freeze({
+    displayName: "Tree Scout",
+    role: "worker",
+    capability: "tree.search",
+  });
+  const child = makeLineage({
+    agentId: "agent-child-descriptor",
+    parentAgentId: "agent-root",
+    rootAgentId: "agent-root",
+    workflowRootAgentId: "agent-root",
+    depth: 1,
+    role: descriptor.role,
+    displayName: descriptor.displayName,
+    capability: descriptor.capability,
+  });
+
+  tracker.registerAgent(root);
+  tracker.registerAgent(child, "starting", descriptor);
+  assert.equal(tracker.getAgent(child.agentId).childDescriptor, descriptor);
+  assert.equal(tracker.updateStatus(child.agentId, "active").childDescriptor, descriptor);
+  tracker.registerAgent(child, "active");
+  assert.equal(tracker.getAgent(child.agentId).childDescriptor, descriptor);
+
+  tracker.registerAgent(makeLineage({
+    agentId: "agent-child-replacement",
+    parentAgentId: "agent-root",
+    rootAgentId: "agent-root",
+    workflowRootAgentId: "agent-root",
+    depth: 1,
+    role: "subagent",
+  }));
+
+  assert.equal(evicted.length, 1);
+  assert.equal(evicted[0].agentId, child.agentId);
+  assert.equal(evicted[0].childDescriptor, descriptor);
+  assert.equal(Object.isFrozen(evicted[0].childDescriptor), true);
 });
 
 test("agent tree eviction detaches stale child ids while preserving historical fan-out", t => {

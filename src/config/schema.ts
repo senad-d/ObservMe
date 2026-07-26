@@ -56,6 +56,9 @@ export interface AgentConfig {
   spawnIdEnv: string;
   propagateTraceContext: boolean;
   propagateToSubagents: boolean;
+  childIdentityEnvelopeVersionEnv: string;
+  displayNameEnv: string;
+  roleEnv: string;
   capabilityEnv: string;
   writeCorrelationEntry: boolean;
 }
@@ -275,6 +278,9 @@ export const observMeConfigSchema = Type.Object(
         spawnIdEnv: Type.String({ minLength: 1 }),
         propagateTraceContext: Type.Boolean(),
         propagateToSubagents: Type.Boolean(),
+        childIdentityEnvelopeVersionEnv: Type.String({ minLength: 1 }),
+        displayNameEnv: Type.String({ minLength: 1 }),
+        roleEnv: Type.String({ minLength: 1 }),
         capabilityEnv: Type.String({ minLength: 1 }),
         writeCorrelationEntry: Type.Boolean(),
       },

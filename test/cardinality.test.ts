@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { trace } from "@opentelemetry/api";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
+import { OBSERVME_CHILD_ROLES } from "../src/integration.ts";
 import type { AgentLineageContext } from "../src/pi/agent-lineage.ts";
 import {
   createAgentTreeTracker,
@@ -11,6 +13,7 @@ import {
   type Handler,
   type ObservMeTelemetrySession,
 } from "../src/pi/handlers.ts";
+import { metricLabels } from "../src/pi/handler-internals.ts";
 import {
   completeSubagentSpawn,
   failSubagentSpawn,
@@ -44,7 +47,6 @@ const documentedAllowedLabels = new Set([
   "error_class",
   "reason",
   "agent_role",
-  "agent_capability",
   "subagent_depth",
   "spawn_type",
   "spawn_reason",
@@ -71,6 +73,24 @@ const documentedForbiddenLabels = new Set([
   "raw_path",
   "raw_error",
   "raw_error_message",
+  "display_name",
+  "agent_display_name",
+  "child_display_name",
+  "pi.agent.display_name",
+  "pi.agent.child.display_name",
+  "capability",
+  "agent_capability",
+  "child_capability",
+  "pi.agent.capability",
+  "pi.agent.child.capability",
+]);
+const documentedAgentRoleLabels = new Set([
+  "root",
+  ...OBSERVME_CHILD_ROLES,
+  "subagent",
+  "orchestrator",
+  "reviewer",
+  "unknown",
 ]);
 const forbiddenCardinalityValues = [
   "workflow-cardinality",
@@ -89,6 +109,10 @@ const forbiddenCardinalityValues = [
   "cat /Users/alice/private-project/secret.txt",
   "raw prompt secret",
   "raw error stack",
+  "Parent Coordinator Cardinality",
+  "parent-capability-cardinality",
+  "Duplicate Scout Identity",
+  "code-search-cardinality",
 ];
 const validSpanContext: TestSpanContext = {
   traceId: "11111111111111111111111111111111",
@@ -100,6 +124,13 @@ const invalidSpanContext: TestSpanContext = {
   spanId: "0000000000000000",
   traceFlags: 0,
 };
+const localCollectorConfigFile = "observability-stack/config/otel/otel-collector.yaml";
+const collectorDroppedIdentityResourceAttributes = [
+  "pi.agent.display_name",
+  "pi.agent.capability",
+  "pi.agent.child.display_name",
+  "pi.agent.child.capability",
+];
 
 function compareStrings(left: string, right: string): number {
   return left.localeCompare(right);
@@ -416,10 +447,24 @@ async function recordHandlerErrorMetric(): Promise<TestMetricRecord[]> {
 }
 
 function recordSubagentMetrics(): TestMetricRecord[] {
-  const telemetry = createTelemetrySession({ spanContext: invalidSpanContext });
+  const telemetry = createTelemetrySession({
+    spanContext: invalidSpanContext,
+    lineage: makeLineage({
+      displayName: "Parent Coordinator Cardinality",
+      capability: "parent-capability-cardinality",
+    }),
+  });
   telemetry.sessionSpan = createFakeSpan("pi.session", {}, undefined, invalidSpanContext);
   const started = startSubagentSpawn(telemetry, {
     spawnId: "spawn-cardinality",
+    childIdentity: {
+      mode: "v2",
+      descriptor: {
+        displayName: "Duplicate Scout Identity",
+        role: "worker",
+        capability: "code-search-cardinality",
+      },
+    },
     toolCallId: "tool-call-cardinality",
     command: "cat /Users/alice/private-project/secret.txt",
     spawnType: "command",
@@ -472,6 +517,9 @@ function assertMetricRecordUsesOnlyAllowedLabels(record: Pick<TestMetricRecord, 
     assert.equal(documentedAllowedLabels.has(key), true, `${record.name} used undocumented metric label ${key}`);
     assert.equal(documentedForbiddenLabels.has(key), false, `${record.name} used forbidden metric label ${key}`);
     assert.equal(forbiddenLabelPattern().test(key), false, `${record.name} used high-cardinality metric label ${key}`);
+    if (key === "agent_role") {
+      assert.equal(documentedAgentRoleLabels.has(String(value)), true, `${record.name} used unknown role label ${value}`);
+    }
     assertMetricLabelValueIsNotForbidden(record, key, value);
   }
 }
@@ -489,7 +537,7 @@ function assertMetricLabelValueIsNotForbidden(record: Pick<TestMetricRecord, "na
 }
 
 function forbiddenLabelPattern(): RegExp {
-  return /(?:workflow|session|trace|span|entry|spawn|tool_call)[._-]id|agent[._-](?:id|parent[._-]id|root[._-]id|child[._-]id)|(?:parent|child|root)[._-]agent[._-]id|raw[._-](?:path|command|prompt|error)/iu;
+  return /(?:workflow|session|trace|span|entry|spawn|tool_call)[._-]id|agent[._-](?:id|parent[._-]id|root[._-]id|child[._-]id)|(?:parent|child|root)[._-]agent[._-]id|(?:^|[._-])(?:display[._-]?name|capability)$|raw[._-](?:path|command|prompt|error)/iu;
 }
 
 test("metric cardinality inventory enumerates every metric with documented allowed labels only", () => {
@@ -503,6 +551,95 @@ test("representative emitted metric labels exclude IDs, trace/span context, and 
   const records = [...(await recordHandlerErrorMetric()), ...recordSubagentMetrics()];
 
   assertMetricRecordsUseOnlyAllowedLabels(records);
+});
+
+test("v2 child identity stays out of parent metric labels and lifecycle correlation", () => {
+  const telemetry = createTelemetrySession();
+  const displayName = "Duplicate Scout Identity";
+  const started = startSubagentSpawn(telemetry, {
+    spawnId: "spawn-v2-cardinality",
+    childAgentId: "child-v2-cardinality",
+    childIdentity: {
+      mode: "v2",
+      descriptor: { displayName, role: "worker", capability: "code-search-cardinality" },
+    },
+    spawnType: "extension",
+    spawnReason: "delegated_task",
+  });
+  const parentMetricRecords = telemetry.meter.records.filter(record => record.attributes.agent_role !== undefined);
+
+  assert.ok(parentMetricRecords.length > 0);
+  assert.deepEqual([...new Set(parentMetricRecords.map(record => record.attributes.agent_role))], ["root"]);
+  assertMetricRecordsUseOnlyAllowedLabels(telemetry.meter.records);
+  assert.deepEqual(completeSubagentSpawn(telemetry, started.spawnId, { childAgentId: displayName }), {
+    ok: false,
+    reason: "child_agent_mismatch",
+  });
+  assert.ok(telemetry.spans.activeSubagentSpawns.get(started.spawnId));
+  assert.deepEqual(completeSubagentSpawn(telemetry, started.spawnId, { childAgentId: started.childAgentId }), { ok: true });
+});
+
+test("agent role metric labels accept only v2 catalog and explicit legacy values", () => {
+  const expectedRoles = [
+    "root",
+    ...OBSERVME_CHILD_ROLES,
+    "subagent",
+    "orchestrator",
+    "reviewer",
+    "unknown",
+  ] as const;
+  const emittedRoles = new Set<string>();
+
+  for (const role of expectedRoles) {
+    const lineage = makeLineage({ role }) as AgentLineageContext;
+    const telemetry = createTelemetrySession({ lineage });
+    startSubagentSpawn(telemetry, { spawnId: `spawn-role-${role}`, childAgentId: `child-role-${role}` });
+    for (const record of telemetry.meter.records) {
+      if (record.attributes.agent_role !== undefined) emittedRoles.add(String(record.attributes.agent_role));
+    }
+    assert.equal(metricLabels(telemetry.config, lineage).agent_role, role);
+  }
+
+  const invalidLineage = makeLineage({ role: "launcher-defined-unbounded-role" }) as unknown as AgentLineageContext;
+  const invalidTelemetry = createTelemetrySession({ lineage: invalidLineage });
+  startSubagentSpawn(invalidTelemetry, { spawnId: "spawn-role-invalid", childAgentId: "child-role-invalid" });
+
+  assert.deepEqual(emittedRoles, new Set(expectedRoles));
+  assert.equal(metricLabels(invalidTelemetry.config, invalidLineage).agent_role, "unknown");
+  assert.deepEqual(
+    new Set(
+      invalidTelemetry.meter.records
+        .map(record => record.attributes.agent_role)
+        .filter(role => role !== undefined),
+    ),
+    new Set(["unknown"]),
+  );
+});
+
+test("Collector prevents display name and capability resource promotion to metric labels", async () => {
+  const text = await readFile(localCollectorConfigFile, "utf8");
+  const policyStart = text.indexOf("resource/drop_high_cardinality_metric_attrs:");
+  const policyEnd = text.indexOf("attributes/drop_content_attributes:", policyStart);
+
+  assert.notEqual(policyStart, -1, `${localCollectorConfigFile}: metric resource drop processor is required`);
+  assert.notEqual(policyEnd, -1, `${localCollectorConfigFile}: metric resource drop processor must be bounded`);
+  const policy = text.slice(policyStart, policyEnd);
+  for (const attribute of collectorDroppedIdentityResourceAttributes) {
+    assert.ok(
+      policy.includes(`- key: ${attribute}\n        action: delete`),
+      `${localCollectorConfigFile}: ${attribute} must be deleted before Prometheus resource conversion`,
+    );
+  }
+  assert.equal(
+    policy.includes("- key: pi.agent.role\n        action: delete"),
+    false,
+    `${localCollectorConfigFile}: bounded exact roles must remain available to Prometheus`,
+  );
+  assert.match(text, /resource_to_telemetry_conversion:\n\s+enabled: true/u);
+  assert.match(
+    text,
+    /metrics:[\s\S]*processors: \[memory_limiter, resource\/observme, resource\/drop_high_cardinality_metric_attrs, batch\]/u,
+  );
 });
 
 test("hundreds of arbitrary spawn and wait reasons collapse to bounded enum labels", () => {

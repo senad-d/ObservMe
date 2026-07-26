@@ -28,6 +28,7 @@ import {
 } from "../semconv/attributes.ts";
 import { LOG_EVENT_NAMES } from "../semconv/metrics.ts";
 import { SPAN_NAMES } from "../semconv/spans.ts";
+import { normalizeAgentRoleMetricLabel } from "./agent-lineage.ts";
 import type { AgentLineageContext, ParentPropagationFailureReason } from "./agent-lineage.ts";
 import type {
   AttributeMap,
@@ -1056,6 +1057,9 @@ export function buildLineageMetricSafeLogAttributes(session: SelfObservabilitySe
     [LOG_ATTRIBUTES.PI_AGENT_ID]: session.lineage.agentId,
     [LOG_ATTRIBUTES.PI_AGENT_PARENT_ID]: session.lineage.parentAgentId,
     [LOG_ATTRIBUTES.PI_AGENT_ROOT_ID]: session.lineage.rootAgentId,
+    [LOG_ATTRIBUTES.PI_AGENT_DISPLAY_NAME]: session.lineage.displayName,
+    [LOG_ATTRIBUTES.PI_AGENT_ROLE]: session.lineage.role,
+    [LOG_ATTRIBUTES.PI_AGENT_CAPABILITY]: session.lineage.capability,
   });
 }
 
@@ -1389,6 +1393,9 @@ export function buildCommonSessionSpanAttributes(
     [COMMON_SPAN_ATTRIBUTES.PI_AGENT_ID]: lineage.agentId,
     [COMMON_SPAN_ATTRIBUTES.PI_AGENT_PARENT_ID]: lineage.parentAgentId,
     [COMMON_SPAN_ATTRIBUTES.PI_AGENT_ROOT_ID]: lineage.rootAgentId,
+    [COMMON_SPAN_ATTRIBUTES.PI_AGENT_DISPLAY_NAME]: lineage.displayName,
+    [COMMON_SPAN_ATTRIBUTES.PI_AGENT_ROLE]: lineage.role,
+    [COMMON_SPAN_ATTRIBUTES.PI_AGENT_CAPABILITY]: lineage.capability,
     [COMMON_SPAN_ATTRIBUTES.OBSERVME_CAPTURE_PROMPTS]: config.capture.prompts,
     [COMMON_SPAN_ATTRIBUTES.OBSERVME_CAPTURE_RESPONSES]: config.capture.responses,
     [COMMON_SPAN_ATTRIBUTES.OBSERVME_CAPTURE_TOOL_ARGUMENTS]: config.capture.toolArguments,
@@ -1404,7 +1411,7 @@ export function buildCommonSessionSpanAttributes(
 export function metricLabels(config: ObservMeConfig, lineage: AgentLineageContext): Record<string, string> {
   return {
     environment: config.environment,
-    agent_role: lineage.role,
+    agent_role: normalizeAgentRoleMetricLabel(lineage.role),
   };
 }
 

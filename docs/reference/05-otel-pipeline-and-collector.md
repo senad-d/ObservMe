@@ -72,11 +72,17 @@ OBSERVME_PARENT_TRACE_ID
 OBSERVME_PARENT_SPAN_ID
 OBSERVME_AGENT_DEPTH
 OBSERVME_SPAWN_ID
+OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION
+OBSERVME_AGENT_DISPLAY_NAME
+OBSERVME_AGENT_ROLE
+OBSERVME_AGENT_CAPABILITY
 ```
 
 Preferred behavior is W3C trace-context continuation: the child `pi.session` span becomes part of the same trace as the parent `pi.agent.spawn` span. If the child cannot continue the parent trace, ObservMe should start a new trace and record a span link or structured log with the parent trace/span IDs, `pi.workflow.id`, and `pi.agent.parent_id`.
 
-A child envelope must not contain `OBSERVME_AGENT_ID`; the child generates its own logical agent ID. These identifiers are high cardinality. Keep them on resource/span/log attributes only; never promote them to Collector-generated metric labels. Loki label promotion requires an explicit cardinality decision; structured metadata is preferred for broad deployments.
+A child envelope must not contain `OBSERVME_AGENT_ID`; the child generates its own logical agent ID. V1 launch output omits every child-identity field and therefore starts with legacy `subagent` behavior and no child capability. A supported v2-compatible launch writes identity marker version `1` plus one complete display-name/role/capability descriptor. The child reads the marker first and validates the descriptor atomically. Marker-free identity fields, partial or malformed values, contradictions, and unknown versions discard the propagated context and fail open with one bounded value-free propagation diagnostic; an unknown version never causes identity fields to be interpreted. Explicit trusted runtime identity options have precedence over propagated values.
+
+Identity role does not control topology depth. For example, an orchestrator-managed `lead` at managed depth 0 can still be an ObservMe child at lineage depth 1. Display name and capability are high cardinality and must not become metric labels. Generated lineage identifiers are also high cardinality: keep them on resource/span/log attributes only and never promote them to Collector-generated metric labels. Loki label promotion requires an explicit cardinality decision; structured metadata is preferred for broad deployments.
 
 ## 5. Minimal Debug Collector
 

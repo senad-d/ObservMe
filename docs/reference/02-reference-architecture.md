@@ -70,13 +70,20 @@ pi.agent.id             # logical Pi agent runtime
 pi.agent.parent_id      # parent agent when spawned as a subagent
 pi.agent.root_id        # root of the agent tree
 pi.agent.depth          # bounded integer depth
+pi.agent.display_name   # v2 presentation label; never a lifecycle key or metric label
+pi.agent.role           # topology/v2/legacy descriptive telemetry
+pi.agent.capability     # launcher-defined machine value; not a metric label in v2
 ```
 
-When a Pi tool or extension starts another Pi agent, ObservMe should create a `pi.agent.spawn` span under the current turn/tool span and pass correlation to the child through environment variables and W3C trace context. If the child receives `traceparent`, its `pi.session` span can continue the parent trace. If it cannot continue the trace, it must still record `pi.agent.parent_id`, `pi.agent.root_id`, and a span link or log event so Grafana can reconstruct lineage.
+When a Pi tool or extension starts another Pi agent, ObservMe creates a `pi.agent.spawn` span under the current turn/tool span and passes correlation to the child through environment variables and W3C trace context. Identity-aware launchers use integration API v2 and supply one complete child descriptor. Display name is 1–128 control-free Unicode scalar values; role is exactly `lead`, `helper`, `worker`, or `validator`; capability is 1–64 ASCII characters matching `[A-Za-z0-9][A-Za-z0-9._:-]*`. These fields are presentation and descriptive telemetry, not lifecycle correlation or authorization. Technical workflow, spawn, task, attempt, instance, child-agent, session, trace, and span IDs remain separate.
+
+If the child receives `traceparent`, its `pi.session` span can continue the parent trace. If it cannot continue the trace, it must still record `pi.agent.parent_id`, `pi.agent.root_id`, and a span link or log event so Grafana can reconstruct lineage.
 
 `pi.workflow.id`, `pi.workflow.root_agent_id`, `pi.agent.id`, `pi.agent.parent_id`, and `pi.agent.spawn.id` are high-cardinality identifiers. They belong in resource/span/log attributes and trace links, not Prometheus labels.
 
-For orchestrator workloads, ObservMe treats the root agent and every descendant as one logical workflow tree. The root agent creates `pi.workflow.id`; descendants inherit it through environment propagation. Aggregate metrics describe the tree using low-cardinality dimensions such as `agent_role`, `agent_capability`, `subagent_depth`, `spawn_type`, `spawn_reason`, and `status`, while per-workflow drill-down uses Tempo/Loki attributes.
+For orchestrator workloads, ObservMe treats the root agent and every descendant as one logical workflow tree. The root agent creates `pi.workflow.id`; descendants inherit it through environment propagation. Aggregate metrics describe the tree using documented low-cardinality dimensions such as `agent_role`, `subagent_depth`, `spawn_type`, `spawn_reason`, and `status`, while per-workflow drill-down uses Tempo/Loki attributes. Display name and capability remain resource/span/log/UI attributes and are explicitly excluded from Prometheus labels.
+
+The package helper and a package-decoupled structural client use the same synchronous `observme:integration:request` wire contract. V2 clients advertise `[2, 1]`; providers answer with their highest mutual version; clients select the highest structurally valid response before `emit()` returns and use first response only as a same-version tie-breaker. Separately installed packages must not depend on shared constructors or Node module identity. Negotiating root API v2 does not prove child-envelope support: an explicitly loaded child under `--no-extensions` must pin `@senad-d/observme` 0.1.8 or later for identity envelope version 1.
 
 ### 2.3 OpenTelemetry Collector
 
@@ -183,9 +190,9 @@ Metrics update success/failure and latency
 ### 3.5 Subagent Spawn and Agent-Tree Flow
 
 ```text
-An ObservMe-aware parent extension requests the integration API before starting another Pi agent
-Its startSubagent call creates pi.agent.spawn telemetry and returns a sanitized lineage/W3C environment
-The launcher passes that returned environment unchanged to the child
+An ObservMe-aware parent extension requests explicit integration API v2 before starting an identity-aware child
+Its startSubagent call validates the complete descriptor, creates pi.agent.spawn telemetry, and returns a sanitized lineage/W3C/identity environment
+The launcher passes that returned environment unchanged to a child with a pinned envelope-compatible ObservMe extension
 Child ObservMe runtime starts pi.session with pi.workflow.id, pi.agent.parent_id, and pi.agent.root_id
 If the parent waits for the child, ObservMe records pi.agent.wait and/or pi.agent.join spans/events
 Metrics increment subagent spawn, fan-out, depth, active-agent, wait/join, orphan, and propagation-failure counters/histograms; per-agent drill-down uses traces/logs, not metric labels
@@ -248,7 +255,7 @@ For orchestrator workloads, operators should watch these signals closely:
 | Trace-context propagation failures | Detects fragmented traces | `observme_trace_context_propagation_failures_total`, span links/log fallback |
 | Wait/join latency | Shows critical path and slow child results | `pi.agent.wait`, `pi.agent.join`, `observme_agent_wait_duration_ms`, `observme_agent_join_duration_ms` |
 | Child-agent failures and recovery | Separates child failure from parent workflow failure | `observme_child_agent_failures_total`, `observme_parent_recovered_from_child_failure_total` |
-| Cost by role/depth | Shows cost amplification without workflow IDs as labels | existing token/cost metrics labeled by `agent_role`, `agent_capability`, `subagent_depth`, provider, and model |
+| Cost by role/depth | Shows cost amplification without workflow IDs as labels | existing token/cost metrics use their documented bounded role/depth/provider/model labels; display name and capability are excluded |
 
 Per-workflow and per-agent drill-down should use Tempo/Loki attributes such as `pi.workflow.id`, `pi.agent.id`, `pi.agent.parent_id`, and trace/span IDs. These identifiers must not become Prometheus labels by default.
 
@@ -303,3 +310,5 @@ Recommended for scale and centralized policy.
 ## 8. Extension Boundary
 
 ObservMe should not parse the full session file continuously during normal operation if Pi events provide the data. It may read session state on startup or command execution to reconstruct current session context, but runtime observability should be event-driven.
+
+The integration event channel is telemetry plumbing, not an orchestration control plane. ObservMe does not infer a descriptor from commands, prompts, definitions, tools, or depth and does not grant role authority. For the approved downstream OrcMe profile, the future mapping is already resolved—durable display identity to display name, exact manifest role to role, and pinned definition name to capability—but OrcMe's reviewed shipped integration remains API v1. OrcMe durable task state stays authoritative; ObservMe is supplementary evidence only.

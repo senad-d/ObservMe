@@ -1998,7 +1998,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Canonical leased-active agents by emitted bounded role and environment. Clean shutdown reaches zero after export/scrape propagation; after an ungraceful exit, leased totals converge to zero within the default 60-second lease plus one Prometheus scrape while raw claims may remain cached. Depth is omitted because active signals do not emit subagent_depth. An unlabeled zero means healthy idle or no qualifying lease when Prometheus is reachable; compare Export Health. /obs agents is current-process child state, not this aggregate fleet view.",
+      "description": "Canonical leased-active agents by emitted bounded role and environment. Exact v2 lead, helper, worker, and validator values remain separate from root and the legacy subagent, orchestrator, reviewer, and unknown values. Clean shutdown reaches zero after export/scrape propagation; after an ungraceful exit, leased totals converge to zero within the default 60-second lease plus one Prometheus scrape while raw claims may remain cached. Depth is omitted because active signals do not emit subagent_depth. An unlabeled zero means healthy idle or no qualifying lease when Prometheus is reachable; compare Export Health. /obs agents is current-process child state, not this aggregate fleet view.",
       "fieldConfig": {
         "defaults": {
           "color": {

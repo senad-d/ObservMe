@@ -39,6 +39,17 @@ processors:
         action: delete
       - key: pi.agent.root_id
         action: delete
+      # Child display names and capabilities are valid trace/log resource
+      # attributes, but are launcher-defined and must never become
+      # Prometheus labels through resource_to_telemetry_conversion.
+      - key: pi.agent.display_name
+        action: delete
+      - key: pi.agent.capability
+        action: delete
+      - key: pi.agent.child.display_name
+        action: delete
+      - key: pi.agent.child.capability
+        action: delete
       - key: pi.agent.run.id
         action: delete
       - key: pi.agent.spawn.id

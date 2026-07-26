@@ -14,6 +14,8 @@ const canonicalExpiredActiveAgentClaimsAlertExpression = `(${CANONICAL_EXPIRED_A
 const rawActiveAgentSumPattern = /sum\s*\(\s*observme_active_agents(?:\s*>\s*0)?\s*\)/u;
 const forbiddenMetricLabelPattern =
   /\b(?:session_id|workflow_id|workflow_root_agent_id|agent_id|parent_agent_id|child_agent_id|agent_run_id|spawn_id|spawn_tool_call_id|trace_id|span_id|pi_workflow_id|pi_workflow_root_agent_id|pi_agent_id|pi_agent_parent_id|pi_agent_root_id|pi_agent_spawn_id)\b/u;
+const agentIdentityPolicyPattern =
+  /\b(?:agent_role|agent_capability|agent_display_name|child_capability|child_display_name|pi[._]agent[._](?:role|capability|display_name))\b/u;
 const expectedAlertRules = [
   {
     name: "ObservMeHighLlmErrorRate",
@@ -207,6 +209,16 @@ async function alertRulesAvoidForbiddenHighCardinalityLabels() {
   assert.doesNotMatch(text, forbiddenMetricLabelPattern, "alert rules must not group or filter by high-cardinality labels");
 }
 
+async function alertRulesRemainAgentIdentityNeutral() {
+  const text = await readFile(alertFile, "utf8");
+
+  assert.doesNotMatch(
+    text,
+    agentIdentityPolicyPattern,
+    "bounded alert inventory must not filter, alias, or promote role, capability, or display-name identity",
+  );
+}
+
 async function activeAgentAlertRequiresCanonicalLeaseQualification() {
   const text = await readFile(alertFile, "utf8");
   const block = alertBlocksByName(text).get("ObservMeActiveAgentsStuckHigh");
@@ -241,5 +253,6 @@ async function expiredActiveAgentClaimsAlertIsTunableAndDiagnosticOnly() {
 test("alert rules match every documented production alert", alertRulesMatchProductionDocs);
 test("alert rule expressions only use documented ObservMe metric names", alertRulesUseOnlyDocumentedMetricNames);
 test("alert rules avoid forbidden high-cardinality metric labels", alertRulesAvoidForbiddenHighCardinalityLabels);
+test("alert rules remain agent-identity neutral", alertRulesRemainAgentIdentityNeutral);
 test("active-agent alert requires canonical lease qualification", activeAgentAlertRequiresCanonicalLeaseQualification);
 test("expired active-agent claims alert is tunable and diagnostic only", expiredActiveAgentClaimsAlertIsTunableAndDiagnosticOnly);

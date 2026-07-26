@@ -1,7 +1,19 @@
 export const OBSERVME_INTEGRATION_CHANNEL = "observme:integration:request";
 export const OBSERVME_INTEGRATION_VERSION = 1 as const;
+export const OBSERVME_INTEGRATION_VERSION_V2 = 2 as const;
+export const OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION = 1 as const;
+export const OBSERVME_CHILD_ROLES = Object.freeze(["lead", "helper", "worker", "validator"] as const);
 
 export type ObservMeIntegrationVersion = typeof OBSERVME_INTEGRATION_VERSION;
+export type ObservMeIntegrationVersionV2 = typeof OBSERVME_INTEGRATION_VERSION_V2;
+export type ObservMeChildIdentityEnvelopeVersion = typeof OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION;
+export type ObservMeChildRole = (typeof OBSERVME_CHILD_ROLES)[number];
+
+export interface ObservMeChildDescriptor {
+  readonly displayName: string;
+  readonly role: ObservMeChildRole;
+  readonly capability: string;
+}
 export type ObservMeProcessEnvironment = Record<string, string | undefined>;
 export type ObservMeSpawnType = "command" | "tool" | "extension" | "unknown";
 export type ObservMeSpawnReason = "delegated_task" | "parallel_search" | "review" | "tool_wrapper" | "unknown";
@@ -80,6 +92,10 @@ export interface ObservMeStartSubagentOptions {
   readonly env?: ObservMeProcessEnvironment;
 }
 
+export interface ObservMeStartSubagentOptionsV2 extends ObservMeStartSubagentOptions {
+  readonly child: ObservMeChildDescriptor;
+}
+
 export interface ObservMeStartedSubagent {
   readonly ok: true;
   readonly spawnId: string;
@@ -131,9 +147,23 @@ export interface ObservMeIntegrationApi {
   endJoin(joinId: string, options?: ObservMeWaitJoinOptions): ObservMeIntegrationSuccess | ObservMeIntegrationFailure;
 }
 
+export interface ObservMeIntegrationApiV2 extends Omit<ObservMeIntegrationApi, "version" | "startSubagent"> {
+  readonly version: ObservMeIntegrationVersionV2;
+  readonly childRoles: typeof OBSERVME_CHILD_ROLES;
+  readonly childIdentityEnvelopeVersion: ObservMeChildIdentityEnvelopeVersion;
+  startSubagent(options: ObservMeStartSubagentOptionsV2): ObservMeStartedSubagent | ObservMeIntegrationFailure;
+}
+
 export interface ObservMeIntegrationRequest {
   readonly supportedVersions: readonly ObservMeIntegrationVersion[];
   readonly respond: (api: ObservMeIntegrationApi) => void;
+}
+
+export type ObservMeIntegrationResponseV2 = ObservMeIntegrationApiV2 | ObservMeIntegrationApi;
+
+export interface ObservMeIntegrationRequestV2 {
+  readonly supportedVersions: readonly (ObservMeIntegrationVersionV2 | ObservMeIntegrationVersion)[];
+  readonly respond: (api: ObservMeIntegrationResponseV2) => void;
 }
 
 export interface ObservMeIntegrationEventBus {
@@ -144,8 +174,10 @@ export interface ObservMeIntegrationHost {
   readonly events: ObservMeIntegrationEventBus;
 }
 
-interface IntegrationResponseHolder {
-  api?: ObservMeIntegrationApi;
+interface IntegrationResponseHolder<TApi> {
+  accepting: boolean;
+  api?: TApi;
+  version?: ObservMeIntegrationVersion | ObservMeIntegrationVersionV2;
 }
 
 export function classifyObservMeRunnerOutcome(settlement: ObservMeRunnerSettlement): ObservMeRunnerOutcome {
@@ -163,18 +195,28 @@ export function requestObservMeIntegration(host: ObservMeIntegrationHost): Obser
   const events = resolveIntegrationEventBus(host);
   if (!events) return undefined;
 
-  const holder: IntegrationResponseHolder = {};
+  const holder: IntegrationResponseHolder<ObservMeIntegrationApi> = { accepting: true };
   const request: ObservMeIntegrationRequest = {
     supportedVersions: [OBSERVME_INTEGRATION_VERSION],
-    respond: receiveObservMeIntegration.bind(undefined, holder),
+    respond: receiveObservMeIntegrationV1.bind(undefined, holder),
   };
 
-  try {
-    events.emit(OBSERVME_INTEGRATION_CHANNEL, request);
-  } catch {
-    return undefined;
-  }
+  if (!emitObservMeIntegrationRequest(events, request, holder)) return undefined;
   return holder.api;
+}
+
+export function requestObservMeIntegrationV2(host: ObservMeIntegrationHost): ObservMeIntegrationApiV2 | undefined {
+  const events = resolveIntegrationEventBus(host);
+  if (!events) return undefined;
+
+  const holder: IntegrationResponseHolder<ObservMeIntegrationResponseV2> = { accepting: true };
+  const request: ObservMeIntegrationRequestV2 = {
+    supportedVersions: [OBSERVME_INTEGRATION_VERSION_V2, OBSERVME_INTEGRATION_VERSION],
+    respond: receiveObservMeIntegrationV2.bind(undefined, holder),
+  };
+
+  if (!emitObservMeIntegrationRequest(events, request, holder)) return undefined;
+  return isObservMeIntegrationApiV2(holder.api) ? holder.api : undefined;
 }
 
 function classifyObservMeRunnerResult(status: ObservMeRunnerResultStatus): ObservMeRunnerOutcome {
@@ -213,9 +255,46 @@ function resolveIntegrationEventBus(host: unknown): ObservMeIntegrationEventBus 
   }
 }
 
-function receiveObservMeIntegration(holder: IntegrationResponseHolder, value: unknown): void {
-  if (holder.api || !isObservMeIntegrationApi(value)) return;
+function emitObservMeIntegrationRequest(
+  events: ObservMeIntegrationEventBus,
+  request: ObservMeIntegrationRequest | ObservMeIntegrationRequestV2,
+  holder: { accepting: boolean },
+): boolean {
+  try {
+    events.emit(OBSERVME_INTEGRATION_CHANNEL, request);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    holder.accepting = false;
+  }
+}
+
+function receiveObservMeIntegrationV1(
+  holder: IntegrationResponseHolder<ObservMeIntegrationApi>,
+  value: unknown,
+): void {
+  if (!holder.accepting || holder.api || !isObservMeIntegrationApi(value)) return;
   holder.api = value;
+  holder.version = OBSERVME_INTEGRATION_VERSION;
+}
+
+function receiveObservMeIntegrationV2(
+  holder: IntegrationResponseHolder<ObservMeIntegrationResponseV2>,
+  value: unknown,
+): void {
+  if (!holder.accepting) return;
+  if (isObservMeIntegrationApiV2(value)) {
+    if (holder.version !== OBSERVME_INTEGRATION_VERSION_V2) {
+      holder.api = value;
+      holder.version = OBSERVME_INTEGRATION_VERSION_V2;
+    }
+    return;
+  }
+  if (holder.version === undefined && isObservMeIntegrationApi(value)) {
+    holder.api = value;
+    holder.version = OBSERVME_INTEGRATION_VERSION;
+  }
 }
 
 function isObservMeIntegrationApi(value: unknown): value is ObservMeIntegrationApi {
@@ -223,18 +302,46 @@ function isObservMeIntegrationApi(value: unknown): value is ObservMeIntegrationA
 
   try {
     const api = value as Partial<ObservMeIntegrationApi>;
+    return api.version === OBSERVME_INTEGRATION_VERSION && hasObservMeIntegrationMethods(api);
+  } catch {
+    return false;
+  }
+}
+
+function isObservMeIntegrationApiV2(value: unknown): value is ObservMeIntegrationApiV2 {
+  if (!value || typeof value !== "object") return false;
+
+  try {
+    const api = value as Partial<ObservMeIntegrationApiV2>;
     return (
-      api.version === OBSERVME_INTEGRATION_VERSION &&
-      typeof api.getContext === "function" &&
-      typeof api.startSubagent === "function" &&
-      typeof api.completeSubagent === "function" &&
-      typeof api.failSubagent === "function" &&
-      typeof api.startWait === "function" &&
-      typeof api.endWait === "function" &&
-      typeof api.startJoin === "function" &&
-      typeof api.endJoin === "function"
+      api.version === OBSERVME_INTEGRATION_VERSION_V2 &&
+      api.childIdentityEnvelopeVersion === OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION &&
+      isExactFrozenChildRoleCatalog(api.childRoles) &&
+      hasObservMeIntegrationMethods(api)
     );
   } catch {
     return false;
   }
+}
+
+function hasObservMeIntegrationMethods(api: object): boolean {
+  const candidate = api as Partial<ObservMeIntegrationApi>;
+  return (
+    typeof candidate.getContext === "function" &&
+    typeof candidate.startSubagent === "function" &&
+    typeof candidate.completeSubagent === "function" &&
+    typeof candidate.failSubagent === "function" &&
+    typeof candidate.startWait === "function" &&
+    typeof candidate.endWait === "function" &&
+    typeof candidate.startJoin === "function" &&
+    typeof candidate.endJoin === "function"
+  );
+}
+
+function isExactFrozenChildRoleCatalog(value: unknown): value is typeof OBSERVME_CHILD_ROLES {
+  if (!Array.isArray(value) || !Object.isFrozen(value) || value.length !== OBSERVME_CHILD_ROLES.length) return false;
+  for (let index = 0; index < OBSERVME_CHILD_ROLES.length; index += 1) {
+    if (value[index] !== OBSERVME_CHILD_ROLES[index]) return false;
+  }
+  return true;
 }

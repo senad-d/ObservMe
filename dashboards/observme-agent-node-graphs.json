@@ -45,7 +45,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Aggregate fleet topology built only from bounded Prometheus labels; it is not per-workflow truth or a single trace tree. Role nodes combine canonical leased-current activity with selected-range run/spawn counts, so node and edge values must not be read as one execution. Clean shutdown removes leased activity after export/scrape propagation; after a crash, SIGKILL, cancelled job, or runner loss, leased activity converges to zero within the default 60-second lease plus one Prometheus scrape while raw claims may stay cached. Red nodes and edges identify spawn, lineage, or propagation failures. /obs agents is current-process child state; use Trace Journey for one execution.",
+      "description": "Aggregate fleet topology built only from bounded Prometheus labels; it is not per-workflow truth or a single trace tree. Role nodes preserve exact v2 lead, helper, worker, and validator values, plus separate root and legacy subagent, orchestrator, reviewer, and unknown values. Role nodes combine canonical leased-current activity with selected-range run/spawn counts, so node and edge values must not be read as one execution. Clean shutdown removes leased activity after export/scrape propagation; after a crash, SIGKILL, cancelled job, or runner loss, leased activity converges to zero within the default 60-second lease plus one Prometheus scrape while raw claims may stay cached. Red nodes and edges identify spawn, lineage, or propagation failures. /obs agents is current-process child state; use Trace Journey for one execution.",
       "fieldConfig": {
         "defaults": {
           "mappings": [],
