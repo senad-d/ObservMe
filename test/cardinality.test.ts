@@ -126,8 +126,13 @@ const invalidSpanContext: TestSpanContext = {
 };
 const localCollectorConfigFile = "observability-stack/config/otel/otel-collector.yaml";
 const localLokiConfigFile = "observability-stack/config/loki/loki.yaml";
-const collectorDroppedIdentityResourceAttributes = [
+const metricDroppedIdentityResourceAttributes = [
   "pi.agent.display_name",
+  "pi.agent.capability",
+  "pi.agent.child.display_name",
+  "pi.agent.child.capability",
+];
+const lokiStructuredMetadataIdentityResourceAttributes = [
   "pi.agent.capability",
   "pi.agent.child.display_name",
   "pi.agent.child.capability",
@@ -617,7 +622,7 @@ test("agent role metric labels accept only v2 catalog and explicit legacy values
   );
 });
 
-test("Collector removes friendly identity only from metrics and retains it for traces and logs", async () => {
+test("Collector removes friendly identity from metrics and indexes only agent display names in logs", async () => {
   const [text, lokiConfig] = await Promise.all([
     readFile(localCollectorConfigFile, "utf8"),
     readFile(localLokiConfigFile, "utf8"),
@@ -628,7 +633,7 @@ test("Collector removes friendly identity only from metrics and retains it for t
   assert.notEqual(policyStart, -1, `${localCollectorConfigFile}: metric resource drop processor is required`);
   assert.notEqual(policyEnd, -1, `${localCollectorConfigFile}: metric resource drop processor must be bounded`);
   const policy = text.slice(policyStart, policyEnd);
-  for (const attribute of collectorDroppedIdentityResourceAttributes) {
+  for (const attribute of metricDroppedIdentityResourceAttributes) {
     assert.ok(
       policy.includes(`- key: ${attribute}\n        action: delete`),
       `${localCollectorConfigFile}: ${attribute} must be deleted before Prometheus resource conversion`,
@@ -656,7 +661,17 @@ test("Collector removes friendly identity only from metrics and retains it for t
   assert.match(lokiConfig, /allow_structured_metadata:\s*true/u);
   assert.match(logsPipeline, /exporters: \[otlphttp\/loki\]/u);
   assert.match(text, /otlphttp\/loki:\n\s+endpoint: http:\/\/loki:3100\/otlp/u);
-  for (const attribute of collectorDroppedIdentityResourceAttributes) {
+  assert.equal(
+    lokiAttributeLabels.split(",").includes("pi.agent.display_name"),
+    true,
+    `${localCollectorConfigFile}: pi.agent.display_name must remain queryable as a Loki label`,
+  );
+  assert.equal(
+    lokiConfig.includes("- pi.agent.display_name"),
+    true,
+    `${localLokiConfigFile}: pi.agent.display_name must be configured as an index label`,
+  );
+  for (const attribute of lokiStructuredMetadataIdentityResourceAttributes) {
     assert.equal(
       lokiAttributeLabels.split(",").includes(attribute),
       false,
