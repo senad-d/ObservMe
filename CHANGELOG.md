@@ -26,7 +26,6 @@
 
 ### Changed
 
-- The LLM Conversations dashboard can now discover and filter captured content by friendly agent name from Loki structured metadata while retaining agent IDs for exact correlation.
 - Removed the fixed-version Pi compatibility CI matrix; normal validation retains capability-based startup checks and real Pi runtime smoke coverage without reinstalling selected Pi releases.
 - Published the integration API v2 wire and compatibility contract for helper-based and package-decoupled consumers, including the 0.1.8 child-envelope minimum, the unchanged metadata-free v1 path for legacy launchers and older children, and an explicit distinction between OrcMe's shipped API-v1 behavior and planned v2 adoption. Display identity and role remain non-authoritative supplementary telemetry, while raw prompts, commands, credentials, and environment contents retain the existing privacy boundaries.
 - The transport-neutral subagent runner now requires a complete child descriptor, negotiates only the explicit v2 integration helper, preserves returned environment objects and tombstones unchanged, and remains transport-functional without falling back to v1 lifecycle calls.
@@ -45,6 +44,7 @@
 
 ### Fixed
 
+- Restored default LLM Conversations visibility for named and legacy unnamed records, removed the invalid JSON parser from native OTLP content lines, prevented cascading variables from interpolating Agent ID All as the empty regex `()`, and replaced unsupported structured-metadata name scans with a Grafana 11.1/Loki 3.0-compatible name-to-agent-ID filter that disambiguates duplicate names.
 - Replaced line-based native TypeScript coverage remapping with Monocart LCOV generation, covering the runtime helper and enforcing Sonar's combined coverage above 80%.
 - Resolved the active SonarCloud maintainability findings across lineage propagation, path redaction, and sensitive-input regular-expression construction without changing runtime behavior.
 - Aligned the real Pi runtime smoke with its offline telemetry fixture so `/obs health` verifies disabled Collector signals and Grafana query health without requiring OTLP exporters.

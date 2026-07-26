@@ -78,14 +78,38 @@ processors:
         action: delete
       - key: pi.tool.result.redacted
         action: delete
-  # Keep display names and capabilities out of Loki's label hints. Loki stores
-  # these OTEL attributes as structured metadata (for example,
-  # pi.agent.display_name becomes pi_agent_display_name) for bounded queries.
+  # Promote display name only in Loki, alongside the already-indexed agent ID.
+  # A valid agent keeps one display name, so this functional dependency does not
+  # partition its existing agent-ID streams further. Capabilities remain metadata.
   attributes/loki_query_hints:
     actions:
       - key: loki.attribute.labels
-        value: event.name,event.category,pi.session.id,pi.workflow.id,pi.agent.id,pi.agent.parent_id,pi.agent.child.id,pi.agent.run.id,pi.tool.name,pi.tool.category,error.type,gen_ai.provider.name,gen_ai.request.model,pi.llm.stop_reason,pi.llm.content.kind,trace_id,span_id,pi.bash.exit_code
+        value: event.name,event.category,pi.session.id,pi.workflow.id,pi.agent.id,pi.agent.display_name,pi.agent.parent_id,pi.agent.child.id,pi.agent.run.id,pi.tool.name,pi.tool.category,error.type,gen_ai.provider.name,gen_ai.request.model,pi.llm.stop_reason,pi.llm.content.kind,trace_id,span_id,pi.bash.exit_code
         action: insert
+  # Loki 3.0 can select configured OTLP resource attributes as index labels but
+  # cannot promote arbitrary log attributes. Group only the bounded selector set
+  # into per-record resources before native OTLP ingestion.
+  groupbyattrs/loki_index_labels:
+    keys:
+      - event.name
+      - event.category
+      - pi.session.id
+      - pi.workflow.id
+      - pi.agent.id
+      - pi.agent.display_name
+      - pi.agent.parent_id
+      - pi.agent.child.id
+      - pi.agent.run.id
+      - pi.tool.name
+      - pi.tool.category
+      - error.type
+      - gen_ai.provider.name
+      - gen_ai.request.model
+      - pi.llm.stop_reason
+      - pi.llm.content.kind
+      - trace_id
+      - span_id
+      - pi.bash.exit_code
   resource/loki_query_hints:
     attributes:
       - key: loki.resource.labels
@@ -105,8 +129,8 @@ exporters:
     resource_to_telemetry_conversion:
       enabled: true
   # Native OTLP ingestion retains non-indexed log/resource attributes as Loki
-  # structured metadata. Loki configuration indexes only the bounded selector
-  # attributes used by dashboards and /obs queries.
+  # structured metadata. Loki indexes bounded selectors plus display name, which
+  # is presentation-only and functionally dependent on the indexed agent ID.
   otlphttp/loki:
     endpoint: http://loki:3100/otlp
   otlp/tempo:
@@ -123,9 +147,9 @@ service:
       exporters: [prometheus]
     logs:
       receivers: [otlp]
-      # Identity presentation attributes are retained as Loki structured metadata;
-      # only accidental content attributes are deleted from log records.
-      processors: [memory_limiter, resource/observme, resource/loki_query_hints, attributes/drop_content_attributes, attributes/loki_query_hints, batch]
+      # Display name is a Loki-only index label for the bounded name-to-agent-ID
+      # dashboard lookup; other identity presentation attributes remain metadata.
+      processors: [memory_limiter, resource/observme, resource/loki_query_hints, attributes/drop_content_attributes, attributes/loki_query_hints, groupbyattrs/loki_index_labels, batch]
       exporters: [otlphttp/loki]
     traces:
       receivers: [otlp]

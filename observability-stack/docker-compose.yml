@@ -181,7 +181,7 @@ services:
       - observability-backend
 
   loki:
-    image: grafana/loki:3.5.1
+    image: grafana/loki:3.0.0
     user: "0:0"
     command: ["-config.file=/etc/loki/loki.yaml"]
     volumes:

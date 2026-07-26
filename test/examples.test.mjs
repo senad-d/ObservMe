@@ -19,7 +19,7 @@ const supportedLocalDatasourceUids = {
   loki: "loki",
   prometheus: "prometheus",
 };
-const requiredLocalLokiAttributeLabels = ["event.name", "event.category", "pi.session.id"];
+const requiredLocalLokiAttributeLabels = ["event.name", "event.category", "pi.session.id", "pi.agent.display_name"];
 const requiredHighCardinalityDrops = [
   "pi.workflow.id",
   "pi.workflow.root_agent_id",

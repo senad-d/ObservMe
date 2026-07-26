@@ -47,6 +47,7 @@ const errorsDashboardFile = "dashboards/observme-errors.json";
 const exportHealthDashboardFile = "dashboards/observme-export-health.json";
 const sloHealthDashboardFile = "dashboards/observme-slo-health.json";
 const localCollectorConfigFile = "observability-stack/config/otel/otel-collector.yaml";
+const localLokiConfigFile = "observability-stack/config/loki/loki.yaml";
 const nativeOtlpLokiIndexLabels = ["service_namespace"];
 const exactAgentRoleValues = [
   "root",
@@ -205,7 +206,6 @@ const llmConversationFilterLinkFragments = [
   "${agent_run_id:queryparam}",
 ];
 const llmConversationAgentNameVariable = "agent_name";
-const llmConversationAgentNameFilterFragment = 'pi_agent_display_name=~"${agent_name:regex}"';
 const llmConversationBodyLogPanelTitles = ["Conversation timeline (redacted, opt-in)", "Prompts", "Responses", "Thinking"];
 const overviewLandingRowTitles = ["Health", "Workload", "Cost", "Latency", "Agent lineage", "Links"];
 const overviewHealthChipTitles = [
@@ -974,9 +974,7 @@ async function lokiDashboardTargetsUseProvisionedLabels() {
     const targets = lokiTargetsForDashboard(dashboard);
 
     for (const { panel, target } of targets) {
-      const parsesIntentionalContentBody =
-        (path === llmConversationsDashboardFile && llmConversationBodyLogPanelTitles.includes(panel.title)) ||
-        (path === toolsDashboardFile && panel.title === toolCapturedErrorPanelTitle);
+      const parsesIntentionalContentBody = path === toolsDashboardFile && panel.title === toolCapturedErrorPanelTitle;
       if (!parsesIntentionalContentBody) {
         assert.doesNotMatch(target.expr, lokiJsonParserPattern, `${path}: ${panel.title} must not parse non-JSON ObservMe log bodies`);
       }
@@ -1239,25 +1237,53 @@ async function traceJourneyTraceAndLogPanelsKeepFilterLinks() {
 }
 
 async function llmConversationDashboardSupportsSafeFilteredDrilldown() {
-  const dashboard = await readJsonFile(llmConversationsDashboardFile);
-  const expressionText = lokiTargetsForDashboard(dashboard).map(({ target }) => target.expr).join("\n");
+  const [dashboard, collectorConfig, lokiConfig] = await Promise.all([
+    readJsonFile(llmConversationsDashboardFile),
+    readFile(localCollectorConfigFile, "utf8"),
+    readFile(localLokiConfigFile, "utf8"),
+  ]);
+  const lokiTargets = lokiTargetsForDashboard(dashboard);
+  const expressionText = lokiTargets.map(({ target }) => target.expr).join("\n");
   const timelinePanel = assertNamedPanel(llmConversationsDashboardFile, dashboard, "Conversation timeline (redacted, opt-in)");
+  const guidancePanel = assertNamedPanel(llmConversationsDashboardFile, dashboard, "Read before viewing captured content");
   const traceLinksPanel = assertNamedPanel(llmConversationsDashboardFile, dashboard, "Conversation trace links");
   const traceLinkOverrides = JSON.stringify(traceLinksPanel.fieldConfig?.overrides ?? []);
   const traceLinkTransforms = (traceLinksPanel.transformations ?? []).map(transformation => transformation.id);
-  const agentNameVariable = dashboard.templating?.list?.find(variable => variable.name === llmConversationAgentNameVariable);
+  const variables = dashboard.templating?.list ?? [];
+  const variableNames = variables.map(variable => variable.name);
+  const agentNameVariable = variables.find(variable => variable.name === llmConversationAgentNameVariable);
+  const agentIdVariable = variables.find(variable => variable.name === "agent_id");
+  const guidance = panelMarkdownContent(guidancePanel);
 
   assertDashboardDefinesVariables(llmConversationsDashboardFile, dashboard, [
     ...llmConversationFilterVariables,
     llmConversationAgentNameVariable,
   ]);
   assert.ok(agentNameVariable, `${llmConversationsDashboardFile}: Agent name variable is required`);
-  assert.match(agentNameVariable.query, /query_result[\s\S]*pi_agent_display_name[\s\S]*label_format agent_name/u);
-  assert.match(agentNameVariable.description ?? "", /may be duplicated.*Agent ID/iu);
-  for (const { panel, target } of lokiTargetsForDashboard(dashboard)) {
-    assert.ok(
-      target.expr.includes(llmConversationAgentNameFilterFragment),
-      `${llmConversationsDashboardFile}: ${panel.title} must filter by agent display-name metadata`,
+  assert.ok(agentIdVariable, `${llmConversationsDashboardFile}: Agent ID variable is required`);
+  assert.ok(
+    variableNames.indexOf(llmConversationAgentNameVariable) < variableNames.indexOf("agent_id"),
+    `${llmConversationsDashboardFile}: Agent name must resolve before Agent ID`,
+  );
+  assert.match(agentNameVariable.query, /^label_values\([\s\S]*pi_agent_display_name\)$/u);
+  assert.doesNotMatch(JSON.stringify(dashboard.templating), /query_result\s*\(/u);
+  assert.match(agentNameVariable.description ?? "", /duplicated.*Agent ID/iu);
+  assert.match(agentIdVariable.query, /pi_agent_display_name=~"\$\{agent_name:regex\}"[\s\S]*pi_agent_id/u);
+  assert.equal(
+    agentIdVariable.allValue,
+    ".*",
+    `${llmConversationsDashboardFile}: Agent ID All must stay visible while cascading variables load`,
+  );
+  assert.match(agentIdVariable.description ?? "", /exact correlation key.*select an exact Agent ID/iu);
+  assert.match(collectorConfig, /loki[.]attribute[.]labels[\s\S]*pi[.]agent[.]display_name/u);
+  assert.match(lokiConfig, /default_resource_attributes_as_index_labels:[\s\S]*pi[.]agent[.]display_name/u);
+  assert.match(collectorConfig, /groupbyattrs\/loki_index_labels:[\s\S]*pi[.]agent[.]display_name/u);
+
+  for (const { panel, target } of lokiTargets) {
+    assert.doesNotMatch(
+      target.expr,
+      /pi_agent_display_name|\$\{agent_name:/u,
+      `${llmConversationsDashboardFile}: ${panel.title} must filter panels only through indexed technical IDs`,
     );
   }
   for (const fragment of llmConversationLokiFilterFragments) {
@@ -1267,15 +1293,19 @@ async function llmConversationDashboardSupportsSafeFilteredDrilldown() {
     const panel = assertNamedPanel(llmConversationsDashboardFile, dashboard, title);
     const panelExpressionText = expressionsForPanel(panel).join("\n");
 
-    assert.match(
+    assert.doesNotMatch(
       panelExpressionText,
-      /\|\s*json\s*\|\s*line_format\s+"\{\{\.body\}\}"/u,
-      `${llmConversationsDashboardFile}: ${title} must show only the parsed body log line by default`,
+      /\|\s*(?:json|line_format)\b/u,
+      `${llmConversationsDashboardFile}: ${title} must use the native OTLP log line without a JSON parser`,
     );
     assert.equal(panel.options?.showTime, false, `${llmConversationsDashboardFile}: ${title} must hide the log time column`);
     assert.equal(panel.options?.showLabels, false, `${llmConversationsDashboardFile}: ${title} must hide unique labels by default`);
   }
 
+  for (const guidancePattern of [/no telemetry in range/iu, /lifecycle events but no captured content/iu, /query error/iu, /datasource timeout/iu, /\/obs status/u, /\/obs health/u]) {
+    assert.match(guidance, guidancePattern, `${llmConversationsDashboardFile}: empty-state guidance must distinguish ${guidancePattern}`);
+  }
+  assert.match(guidance, /All keeps legacy unnamed records visible/iu);
   assert.match(timelinePanel.description ?? "", /(?:redacted.*opt-in|opt-in.*redacted)/i, `${llmConversationsDashboardFile}: timeline must explain redacted opt-in content`);
   assert.match(timelinePanel.description ?? "", /do not query by raw/i, `${llmConversationsDashboardFile}: timeline must discourage raw-content queries`);
   assert.equal(traceLinksPanel.type, "table", `${llmConversationsDashboardFile}: content trace links must be a table`);

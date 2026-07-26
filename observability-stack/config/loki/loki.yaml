@@ -10,6 +10,33 @@ common:
     kvstore:
       store: inmemory
 
+distributor:
+  # Loki 3.0 indexes configured OTLP resource attributes. The Collector's
+  # groupbyattrs processor moves only this bounded selector set to log resources.
+  otlp_config:
+    default_resource_attributes_as_index_labels:
+      - service.name
+      - service.namespace
+      - event.name
+      - event.category
+      - pi.session.id
+      - pi.workflow.id
+      - pi.agent.id
+      - pi.agent.display_name
+      - pi.agent.parent_id
+      - pi.agent.child.id
+      - pi.agent.run.id
+      - pi.tool.name
+      - pi.tool.category
+      - error.type
+      - gen_ai.provider.name
+      - gen_ai.request.model
+      - pi.llm.stop_reason
+      - pi.llm.content.kind
+      - trace_id
+      - span_id
+      - pi.bash.exit_code
+
 schema_config:
   configs:
     - from: 2024-01-01
@@ -44,49 +71,4 @@ ruler:
 limits_config:
   retention_period: 168h
   allow_structured_metadata: true
-  otlp_config:
-    resource_attributes:
-      attributes_config:
-        - action: index_label
-          attributes:
-            - service.name
-            - service.namespace
-            - pi.session.id
-            - pi.workflow.id
-            - pi.agent.id
-            - pi.agent.parent_id
-            - pi.agent.run.id
-            - event.name
-            - event.category
-            - pi.agent.child.id
-            - pi.tool.name
-            - pi.tool.category
-            - error.type
-            - gen_ai.provider.name
-            - gen_ai.request.model
-            - pi.llm.stop_reason
-            - pi.llm.content.kind
-            - trace_id
-            - span_id
-            - pi.bash.exit_code
-    log_attributes:
-      - action: index_label
-        attributes:
-          - event.name
-          - event.category
-          - pi.session.id
-          - pi.workflow.id
-          - pi.agent.id
-          - pi.agent.parent_id
-          - pi.agent.child.id
-          - pi.agent.run.id
-          - pi.tool.name
-          - pi.tool.category
-          - error.type
-          - gen_ai.provider.name
-          - gen_ai.request.model
-          - pi.llm.stop_reason
-          - pi.llm.content.kind
-          - trace_id
-          - span_id
-          - pi.bash.exit_code
+  max_label_names_per_series: 30
