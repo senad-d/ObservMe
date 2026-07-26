@@ -179,7 +179,7 @@ function readPropagatedChildIdentity(
     role: env[config.agent.roleEnv],
     capability: env[config.agent.capabilityEnv],
   };
-  if (Object.values(descriptor).some(value => value === undefined)) {
+  if (Object.values(descriptor).includes(undefined)) {
     throwPropagationError("partial_envelope", "Propagated child identity envelope is incomplete.");
   }
 
@@ -360,7 +360,7 @@ export function createPropagationEnvironment(
   lineage: AgentLineageContext,
   config: ObservMeConfig,
   extra: NodeJS.ProcessEnv = {},
-  childIdentity: ChildIdentityPropagation = { mode: "v1" },
+  childIdentity?: ChildIdentityPropagation,
 ): NodeJS.ProcessEnv {
   const sanitizedExtra = sanitizePropagationEnvironment(config, extra);
 
@@ -372,7 +372,7 @@ export function createPropagationEnvironment(
     [config.agent.parentIdEnv]: lineage.agentId,
     [config.agent.rootIdEnv]: lineage.rootAgentId,
     [config.agent.depthEnv]: String(lineage.depth),
-    ...buildChildIdentityPropagationEnvironment(config, childIdentity),
+    ...buildChildIdentityPropagationEnvironment(config, childIdentity ?? { mode: "v1" }),
   };
 }
 

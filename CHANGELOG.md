@@ -42,6 +42,7 @@
 
 ### Fixed
 
+- Resolved the active SonarCloud maintainability findings across lineage propagation, path redaction, and sensitive-input regular-expression construction without changing runtime behavior.
 - Aligned the real Pi runtime smoke with its offline telemetry fixture so `/obs health` verifies disabled Collector signals and Grafana query health without requiring OTLP exporters.
 - Kept bounded `/obs backfill` abort cleanup timers referenced while awaited so timed-out exporter setup settles reliably across supported Node.js releases.
 - Kept the Pi handler facade below its enforced thin-module boundary after adding runtime ownership exports.

@@ -18,11 +18,11 @@ const shellCommandPattern = /(?:^|[\s"'`|=])(?:sudo|rm|mv|cp|curl|wget|npm|pnpm|
 const localFilesystemPathPrefixPatternSource =
   String.raw`(?:~(?:[\\/]|\b)|\.{1,2}[\\/]|\/(?:Users|home|root|tmp|var|etc|private|workspace|opt|Volumes)(?:\/|\b)|[A-Za-z]:[\\/]|\\\\)`;
 const localFilesystemPathPattern = new RegExp(
-  `(?:^|[\\s"'\\x60=])${localFilesystemPathPrefixPatternSource}\\S*`,
+  String.raw`(?:^|[\s"'\x60=])${localFilesystemPathPrefixPatternSource}\S*`,
   "u",
 );
 const diagnosticLocalFilesystemPathPattern = new RegExp(
-  `(^|[\\s(\\["'\\x60=])${localFilesystemPathPrefixPatternSource}[^\\s)"'\\x60,;]*`,
+  String.raw`(^|[\s(\["'\x60=])${localFilesystemPathPrefixPatternSource}[^\s)"'\x60,;]*`,
   "gu",
 );
 const environmentAssignmentPattern = /\b[A-Z][A-Z0-9_]{2,}=[^\s"'`;,)]*/u;

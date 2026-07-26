@@ -75,7 +75,7 @@ const HASH_PREFIX_LENGTH = 12;
 export const MAX_CUSTOM_REDACTION_REPLACEMENT_CHARS =
   "[REDACTED::]".length + CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS + HASH_PREFIX_LENGTH;
 const CUSTOM_REDACTION_BUDGET_EXCEEDED_ERROR = "custom redaction budget exceeded";
-const LOCAL_PATH_START_PATTERN = /(?:file:\/\/|[a-zA-Z]:[\\/]|\\\\|\/+)/giu;
+const LOCAL_PATH_START_PATTERN = /(?:file:\/\/|[a-z]:[\\/]|\\\\|\/+)/giu;
 const FILE_URL_PREFIX_PATTERN = /^file:\/\//iu;
 const URL_SCHEME_PREFIX_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//iu;
 const PATH_PREFIX_CONTINUATION_PATTERN = /[\p{L}\p{N}._~:/\\-]/u;
@@ -440,8 +440,8 @@ export function isPathCandidateBoundaryToken(value: string): boolean {
   return URL_SCHEME_PREFIX_PATTERN.test(value)
     || PATH_CONNECTOR_WORDS.has(value.toLowerCase())
     || /^[a-zA-Z]:[\\/]/u.test(value)
-    || /^\\\\/u.test(value)
-    || /^\//u.test(value);
+    || value.startsWith("\\\\")
+    || value.startsWith("/");
 }
 
 export function pathTokenLooksLikeFilename(value: string): boolean {
@@ -471,15 +471,15 @@ export function parseLocalFileUrl(value: string): ParsedLocalPath | undefined {
 
   const decodedPathname = decodeFileUrlComponent(fileUrl.pathname);
   if (fileUrl.hostname && fileUrl.hostname.toLowerCase() !== "localhost") {
-    const uncPath = `\\\\${decodeFileUrlComponent(fileUrl.hostname)}${decodedPathname.replace(/\//gu, "\\")}`;
+    const uncPath = `\\\\${decodeFileUrlComponent(fileUrl.hostname)}${decodedPathname.replaceAll("/", "\\")}`;
     return isUncPath(uncPath) ? { path: uncPath, style: "windows" } : undefined;
   }
   if (/^\/[a-zA-Z]:[\\/]/u.test(decodedPathname)) {
-    const drivePath = decodedPathname.slice(1).replace(/\//gu, "\\");
+    const drivePath = decodedPathname.slice(1).replaceAll("/", "\\");
     return isWindowsDrivePath(drivePath) ? { path: drivePath, style: "windows" } : undefined;
   }
   if (decodedPathname.startsWith("//")) {
-    const uncPath = decodedPathname.replace(/\//gu, "\\");
+    const uncPath = decodedPathname.replaceAll("/", "\\");
     return isUncPath(uncPath) ? { path: uncPath, style: "windows" } : undefined;
   }
   return detectAbsolutePathStyle(decodedPathname) === "posix"
