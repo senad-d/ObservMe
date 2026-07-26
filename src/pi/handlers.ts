@@ -30,8 +30,7 @@ export {
   startSessionTelemetry,
   withTelemetrySessionResourceAttributes,
 } from "./handler-runtime.ts";
-export { createOtelOperationOwnership } from "./otel-operation-ownership.ts";
-export type { OtelOperationOwnership } from "./otel-operation-ownership.ts";
+export { createOtelOperationOwnership, type OtelOperationOwnership } from "./otel-operation-ownership.ts";
 export type {
   AppendEntry,
   AttributeMap,

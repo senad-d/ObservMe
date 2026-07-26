@@ -41,6 +41,7 @@
 
 ### Fixed
 
+- Kept the Pi handler facade below its enforced thin-module boundary after adding runtime ownership exports.
 - Reconciled the public integration API environment-key limit at 128 characters across runtime validation, boundary tests, and integration documentation.
 - Neutralized Unicode bidirectional controls in backend labels and final `/obs` notifications without stripping ordinary international text.
 - Disposed custom backfill exporters that settle after setup timeout without letting late failures replace the bounded timeout result.
