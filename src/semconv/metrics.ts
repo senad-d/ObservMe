@@ -31,6 +31,28 @@ export const OBSERVME_COUNTER_METRIC_NAMES = {
   HANDLER_ERRORS_TOTAL: "observme_handler_errors_total",
 } as const;
 
+export const OBSERVME_ORPHAN_AGENT_METRIC_LABELS = {
+  STATUS: "status",
+  REASON: "reason",
+} as const;
+
+export const OBSERVME_ORPHAN_AGENT_METRIC_LABEL_KEYS = Object.values(OBSERVME_ORPHAN_AGENT_METRIC_LABELS);
+
+export type ObservMeOrphanAgentMetricLabels = Record<
+  (typeof OBSERVME_ORPHAN_AGENT_METRIC_LABEL_KEYS)[number],
+  string
+>;
+
+export function createOrphanAgentMetricLabels(
+  status: string,
+  reason: "attached" | "orphaned",
+): ObservMeOrphanAgentMetricLabels {
+  return {
+    [OBSERVME_ORPHAN_AGENT_METRIC_LABELS.STATUS]: status,
+    [OBSERVME_ORPHAN_AGENT_METRIC_LABELS.REASON]: reason,
+  };
+}
+
 export const OBSERVME_TOKEN_COST_COUNTER_METRIC_NAMES = {
   LLM_INPUT_TOKENS_TOTAL: "observme_llm_input_tokens_total",
   LLM_OUTPUT_TOKENS_TOTAL: "observme_llm_output_tokens_total",

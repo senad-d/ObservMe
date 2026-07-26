@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createServer } from "node:http";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
@@ -8,6 +10,7 @@ import {
   handleObsHealthCommand,
   renderObsHealth,
 } from "../src/commands/obs-health.ts";
+import { createOtlpHealthNodeRequestOptions } from "../src/otel/otlp-health-transport.ts";
 
 function cloneDefaultConfig() {
   return structuredClone(defaultObservMeConfig);
@@ -57,9 +60,50 @@ class PendingCollectorFetch {
   }
 }
 
+class CollectorRedirectServers {
+  authorizationHeaders = [];
+  destinationRequestCount = 0;
+  destinationServer = createServer(this.handleDestination.bind(this));
+  redirectServer = createServer(this.handleRedirect.bind(this));
+
+  async start() {
+    const listening = Promise.all([once(this.destinationServer, "listening"), once(this.redirectServer, "listening")]);
+    this.destinationServer.listen(0, "127.0.0.1");
+    this.redirectServer.listen(0, "127.0.0.1");
+    await listening;
+  }
+
+  async close() {
+    const closed = Promise.all([once(this.destinationServer, "close"), once(this.redirectServer, "close")]);
+    this.destinationServer.close();
+    this.redirectServer.close();
+    await closed;
+  }
+
+  get redirectOrigin() {
+    return `http://127.0.0.1:${this.redirectServer.address().port}`;
+  }
+
+  get destinationUrl() {
+    return `http://127.0.0.1:${this.destinationServer.address().port}/v1/traces`;
+  }
+
+  handleDestination(_request, response) {
+    this.destinationRequestCount += 1;
+    response.writeHead(200).end();
+  }
+
+  handleRedirect(request, response) {
+    this.authorizationHeaders.push(request.headers.authorization);
+    response.writeHead(307, { Location: this.destinationUrl }).end();
+  }
+}
+
 function createCollectorOnlyConfig() {
   const config = cloneDefaultConfig();
   config.otlp.endpoint = "http://collector.local:4318";
+  config.metrics.enabled = false;
+  config.logs.enabled = false;
   config.query.enabled = false;
   return config;
 }
@@ -125,11 +169,13 @@ test("/obs health checks Collector, Grafana, and configured datasources with the
   assert.equal(snapshot.timeoutMs, 1234);
   assert.match(renderObsHealth(snapshot), /Collector transport security: plaintext HTTP/u);
   assert.match(renderObsHealth(snapshot), /Grafana transport security: plaintext HTTP/u);
-  assert.equal(renderObsHealth(snapshot).includes("Collector: reachable"), true);
+  assert.equal(renderObsHealth(snapshot).includes("Collector traces: reachable"), true);
   assert.deepEqual(
     calls.map(call => call.input),
     [
-      "http://collector.local:4318",
+      "http://collector.local:4318/v1/traces",
+      "http://collector.local:4318/v1/metrics",
+      "http://collector.local:4318/v1/logs",
       "http://grafana.local:3000/api/health",
       "http://grafana.local:3000/api/datasources/uid/tempo-main/health",
       "http://grafana.local:3000/api/datasources/uid/loki-main/health",
@@ -137,7 +183,80 @@ test("/obs health checks Collector, Grafana, and configured datasources with the
     ],
   );
   assert.equal(calls[0].init.headers.Authorization, "Bearer otlp-token");
-  assert.equal(calls[1].init.headers.Authorization, "Bearer grafana-token");
+  assert.equal(calls[0].init.redirect, "manual");
+  assert.equal(calls[3].init.headers.Authorization, "Bearer grafana-token");
+});
+
+test("/obs health probes every enabled effective OTLP signal destination with exporter headers", async () => {
+  const config = cloneDefaultConfig();
+  config.otlp.endpoint = "https://base-collector.local:4318/tenant";
+  config.otlp.signalEndpoints = {
+    traces: "https://trace-collector.local:4318/custom/v1/traces",
+    logs: "http://log-collector.local:4318/custom/v1/logs",
+  };
+  config.otlp.headers = {
+    Authorization: "Bearer ${OBSERVME_OTLP_TOKEN}",
+    "X-Tenant": "platform",
+  };
+  config.metrics.enabled = false;
+  config.query.enabled = false;
+  const calls = [];
+
+  const snapshot = await getObsHealthSnapshot(createCommandContext([]), {
+    loadConfig: async () => config,
+    fetch: async (input, init) => {
+      calls.push({ input: String(input), init });
+      return createHealthyResponse();
+    },
+  });
+
+  assert.deepEqual(
+    calls.map(call => call.input),
+    [
+      "https://trace-collector.local:4318/custom/v1/traces",
+      "http://log-collector.local:4318/custom/v1/logs",
+    ],
+  );
+  assert.deepEqual(
+    snapshot.checks.filter(check => check.label.startsWith("Collector")).map(check => check.label),
+    ["Collector traces", "Collector logs"],
+  );
+  assert.deepEqual(calls[0].init.headers, config.otlp.headers);
+  assert.match(
+    renderObsHealth(snapshot),
+    /Collector transport security: traces: TLS certificate verification enabled, logs: plaintext HTTP/u,
+  );
+});
+
+test("/obs health refuses cross-origin redirects without forwarding OTLP credential headers", async () => {
+  const servers = new CollectorRedirectServers();
+  await servers.start();
+
+  try {
+    const config = createCollectorOnlyConfig();
+    config.otlp.endpoint = servers.redirectOrigin;
+    config.otlp.headers = { Authorization: "Bearer collector-token" };
+
+    const snapshot = await getObsHealthSnapshot(createCommandContext([]), {
+      loadConfig: async () => config,
+      timeoutMs: 1000,
+    });
+
+    assert.deepEqual(servers.authorizationHeaders, ["Bearer collector-token"]);
+    assert.equal(servers.destinationRequestCount, 0);
+    assert.equal(snapshot.checks[0].status, "failed");
+    assert.equal(snapshot.checks[0].detail, "HTTP 307 Temporary Redirect");
+  } finally {
+    await servers.close();
+  }
+});
+
+test("/obs health node transport applies the exporter TLS verification policy", () => {
+  const config = createCollectorOnlyConfig();
+  assert.equal(createOtlpHealthNodeRequestOptions(config).rejectUnauthorized, true);
+
+  config.otlp.tls.insecureSkipVerify = true;
+  assert.equal(createOtlpHealthNodeRequestOptions(config).rejectUnauthorized, false);
 });
 
 test("/obs health cancels successful and failed Collector response bodies exactly once", async () => {
@@ -174,7 +293,7 @@ test("/obs health releases every stalled Collector body across repeated checks",
       timeoutMs: 25,
     });
 
-    assert.match(renderObsHealth(snapshot), /Collector: reachable/u);
+    assert.match(renderObsHealth(snapshot), /Collector traces: reachable/u);
   }
 
   await Promise.resolve();
@@ -196,7 +315,7 @@ test("/obs health aborts a pending Collector request and closes it exactly once"
   assert.equal(pending.closureCount, 1);
   assert.equal(snapshot.checks[0].status, "failed");
   assert.equal(snapshot.checks[0].detail, "timed out");
-  assert.match(renderObsHealth(snapshot), /Collector: unreachable \(timed out/u);
+  assert.match(renderObsHealth(snapshot), /Collector traces: unreachable \(timed out/u);
 });
 
 test("/obs health reports acknowledged TLS verification bypasses without credentials", async () => {
@@ -233,9 +352,13 @@ test("/obs health reports query.enabled=false and skips every Grafana network ca
     },
   });
 
-  assert.deepEqual(calls, ["http://collector.local:4318"]);
+  assert.deepEqual(calls, [
+    "http://collector.local:4318/v1/traces",
+    "http://collector.local:4318/v1/metrics",
+    "http://collector.local:4318/v1/logs",
+  ]);
   assert.equal(notifications[0].type, "info");
-  assert.match(notifications[0].message, /Collector: reachable/u);
+  assert.match(notifications[0].message, /Collector traces: reachable/u);
   assert.match(
     notifications[0].message,
     /Grafana: skipped \(Grafana query integration is disabled \(query\.enabled=false\)\. Next: set query\.enabled=true to enable Grafana-backed commands\.\)/u,
@@ -249,6 +372,8 @@ test("/obs health reports query.enabled=false and skips every Grafana network ca
 test("/obs health reports unresolved Grafana auth before making Grafana calls", async () => {
   const config = cloneDefaultConfig();
   config.otlp.endpoint = "http://collector.local:4318";
+  config.metrics.enabled = false;
+  config.logs.enabled = false;
   config.query.grafana.url = "http://grafana.local:3000";
   config.query.grafana.token = "${OBSERVME_GRAFANA_TOKEN}";
   const notifications = [];
@@ -256,7 +381,7 @@ test("/obs health reports unresolved Grafana auth before making Grafana calls", 
 
   const fetcher = async input => {
     calls.push(String(input));
-    if (String(input) === "http://collector.local:4318") return createHealthyResponse();
+    if (String(input) === "http://collector.local:4318/v1/traces") return createHealthyResponse();
     throw new Error("fetch should not run for Grafana when query auth is unresolved");
   };
 
@@ -266,10 +391,10 @@ test("/obs health reports unresolved Grafana auth before making Grafana calls", 
     timeoutMs: 25,
   });
 
-  assert.deepEqual(calls, ["http://collector.local:4318"]);
+  assert.deepEqual(calls, ["http://collector.local:4318/v1/traces"]);
   assert.equal(notifications.length, 1);
   assert.equal(notifications[0].type, "warning");
-  assert.match(notifications[0].message, /Collector: reachable/u);
+  assert.match(notifications[0].message, /Collector traces: reachable/u);
   assert.match(notifications[0].message, /Grafana: unreachable \(Grafana query configuration is not ready: .*query\.grafana\.token is unresolved/u);
   assert.match(notifications[0].message, /Next: check query\.grafana\.url and credentials, then rerun \/obs health\./u);
   assert.doesNotMatch(notifications[0].message, /\$\{OBSERVME_GRAFANA_TOKEN\}/u);
@@ -278,11 +403,13 @@ test("/obs health reports unresolved Grafana auth before making Grafana calls", 
 test("/obs health reports an unreachable Collector without throwing", async () => {
   const config = cloneDefaultConfig();
   config.otlp.endpoint = "http://collector.local:4318";
+  config.metrics.enabled = false;
+  config.logs.enabled = false;
   config.query.grafana.url = "http://grafana.local:3000";
   config.query.grafana.token = "grafana-token";
 
   const fetcher = async input => {
-    if (String(input) === "http://collector.local:4318") throw new Error("connect ECONNREFUSED");
+    if (String(input) === "http://collector.local:4318/v1/traces") throw new Error("connect ECONNREFUSED");
     return createHealthyResponse();
   };
   const notifications = [];
@@ -297,20 +424,25 @@ test("/obs health reports an unreachable Collector without throwing", async () =
 
   assert.equal(notifications.length, 1);
   assert.equal(notifications[0].type, "warning");
-  assert.match(notifications[0].message, /Collector: unreachable \(connect ECONNREFUSED Next: verify the Collector is running and otlp\.endpoint is reachable\.\)/u);
+  assert.match(
+    notifications[0].message,
+    /Collector traces: unreachable \(connect ECONNREFUSED Next: verify the Collector is running and the enabled OTLP signal endpoint is reachable\.\)/u,
+  );
   assert.match(notifications[0].message, /Grafana: reachable/u);
 });
 
 test("/obs health diagnostics do not render configured header secrets", async () => {
   const config = cloneDefaultConfig();
   config.otlp.endpoint = "http://collector.local:4318";
+  config.metrics.enabled = false;
+  config.logs.enabled = false;
   config.otlp.headers = { Authorization: "Bearer otlp-header-secret" };
   config.query.grafana.url = "http://grafana.local:3000";
   config.query.grafana.token = "grafana-token-secret";
   const notifications = [];
 
   const fetcher = async input => {
-    if (String(input) === "http://collector.local:4318") {
+    if (String(input) === "http://collector.local:4318/v1/traces") {
       throw new Error("Authorization: Bearer otlp-header-secret /tmp/private.env OBSERVME_OTLP_TOKEN=otlp-header-secret");
     }
 
@@ -325,7 +457,7 @@ test("/obs health diagnostics do not render configured header secrets", async ()
 
   assert.equal(notifications.length, 1);
   assert.equal(notifications[0].type, "warning");
-  assert.match(notifications[0].message, /Collector: unreachable/u);
+  assert.match(notifications[0].message, /Collector traces: unreachable/u);
   assert.match(notifications[0].message, /Grafana: unreachable/u);
   assert.doesNotMatch(notifications[0].message, /otlp-header-secret|grafana-token-secret|grafana-password-secret|private\.env/u);
 });
@@ -333,13 +465,15 @@ test("/obs health diagnostics do not render configured header secrets", async ()
 test("/obs health stores sanitized failure details before rendering", async () => {
   const config = cloneDefaultConfig();
   config.otlp.endpoint = "http://collector.local:4318";
+  config.metrics.enabled = false;
+  config.logs.enabled = false;
   config.query.grafana.url = "http://grafana.local:3000";
   config.query.grafana.token = "grafana-token";
 
   const snapshot = await getObsHealthSnapshot(createCommandContext([]), {
     loadConfig: async () => config,
     fetch: async input => {
-      if (String(input) === "http://collector.local:4318") {
+      if (String(input) === "http://collector.local:4318/v1/traces") {
         throw new Error(
           "Authorization: Basic private-basic password=collector-password /Users/senad/private.env rm -rf /tmp/demo OBSERVME_TOKEN=collector-token",
         );

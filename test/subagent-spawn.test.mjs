@@ -7,6 +7,7 @@ import { createObservMeMetrics, createSpanRegistry, createAgentTreeTracker } fro
 import { BoundedMap } from "../src/util/bounded-map.ts";
 import { createAgentLineageContext } from "../src/pi/agent-lineage.ts";
 import {
+  completeSubagentLaunch,
   completeSubagentSpawn,
   endAgentJoin,
   endAgentWait,
@@ -775,7 +776,7 @@ test("launcher failure cannot double-count a child failure already reported by j
   );
 });
 
-test("subagent spawn completion and launcher failure record elapsed duration from injected clocks", () => {
+test("launcher completion and launcher failure record spawn duration exactly once", () => {
   const telemetry = createFakeTelemetry();
   let nowMs = 100;
   const completed = startSubagentSpawn(telemetry, {
@@ -786,14 +787,52 @@ test("subagent spawn completion and launcher failure record elapsed duration fro
     now: () => nowMs,
   });
 
-  nowMs = 350;
+  nowMs = 150;
+  assert.deepEqual(
+    completeSubagentLaunch(telemetry, completed.spawnId, {
+      childAgentId: completed.childAgentId,
+      now: () => nowMs,
+    }),
+    { ok: true },
+  );
+  nowMs = 200;
+  assert.deepEqual(
+    completeSubagentLaunch(telemetry, completed.spawnId, {
+      childAgentId: completed.childAgentId,
+      now: () => nowMs,
+    }),
+    { ok: true },
+  );
+  assert.deepEqual(
+    failSubagentSpawn(telemetry, completed.spawnId, {
+      childAgentId: completed.childAgentId,
+      errorClass: "LateLauncherError",
+      now: () => nowMs,
+    }),
+    { ok: false, reason: "invalid_terminal_transition" },
+  );
+  recordAgentWait(telemetry, {
+    spawnId: completed.spawnId,
+    childAgentId: completed.childAgentId,
+    childStatus: "active",
+    joinStatus: "timeout",
+    durationMs: 10,
+  });
+  recordAgentJoin(telemetry, {
+    spawnId: completed.spawnId,
+    childAgentId: completed.childAgentId,
+    childStatus: "active",
+    joinStatus: "timeout",
+    durationMs: 5,
+  });
+  nowMs = 30 * 60 * 1_000;
   completeSubagentSpawn(telemetry, completed.spawnId, {
     childAgentId: completed.childAgentId,
     childStatus: "completed",
     now: () => nowMs,
   });
 
-  nowMs = 500;
+  nowMs = 30 * 60 * 1_000 + 100;
   const failed = startSubagentSpawn(telemetry, {
     spawnId: "spawn-duration-failed",
     childAgentId: "child-duration-failed",
@@ -802,7 +841,7 @@ test("subagent spawn completion and launcher failure record elapsed duration fro
     now: () => nowMs,
   });
 
-  nowMs = 575;
+  nowMs += 75;
   failSubagentSpawn(telemetry, failed.spawnId, {
     childAgentId: failed.childAgentId,
     errorClass: "SpawnError",
@@ -814,11 +853,12 @@ test("subagent spawn completion and launcher failure record elapsed duration fro
   assert.equal(failed.span.attributes["pi.agent.children.active"], 0);
   assert.equal(telemetry.agentTree.getAgent(failed.childAgentId).status, "failed");
   assert.ok(failed.span.events.some(event => event.name === LOG_EVENT_NAMES.AGENT_SPAWN_FAILED));
-  assertHistogramRecorded(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.SUBAGENT_SPAWN_DURATION_MS, 250);
+  assertHistogramRecorded(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.SUBAGENT_SPAWN_DURATION_MS, 50);
   assertHistogramRecorded(telemetry.meter.records, OBSERVME_HISTOGRAM_METRIC_NAMES.SUBAGENT_SPAWN_DURATION_MS, 75);
   const durationRecords = telemetry.meter.records.filter(
     record => record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.SUBAGENT_SPAWN_DURATION_MS,
   );
+  assert.equal(durationRecords.length, 2);
   assert.deepEqual(durationRecords.map(record => record.attributes.spawn_reason), ["delegated_task", "tool_wrapper"]);
   assert.ok(durationRecords.every(record => record.attributes.spawn_id === undefined));
 });
@@ -892,6 +932,50 @@ test("child failure and parent recovery metrics deduplicate bounded child transi
     telemetry.meter.records.filter(record => record.name === OBSERVME_COUNTER_METRIC_NAMES.SUBAGENT_SPAWN_FAILURES_TOTAL).length,
     1,
   );
+});
+
+test("late child accounting observations stay deduplicated after capacity-one eviction", () => {
+  const config = structuredClone(defaultObservMeConfig);
+  config.limits.maxActiveSubagentSpawns = 1;
+  const telemetry = createFakeTelemetry({ config });
+
+  recordAgentJoin(telemetry, {
+    id: "join-child-a-recovered",
+    childAgentId: "child-a",
+    childStatus: "failed",
+    joinStatus: "completed",
+    failurePropagated: false,
+  });
+  recordAgentJoin(telemetry, {
+    id: "join-child-b-recovered",
+    childAgentId: "child-b",
+    childStatus: "failed",
+    joinStatus: "completed",
+    failurePropagated: false,
+  });
+  recordAgentJoin(telemetry, {
+    id: "join-child-a-repeated-after-eviction",
+    childAgentId: "child-a",
+    childStatus: "failed",
+    joinStatus: "completed",
+    failurePropagated: false,
+  });
+
+  assert.equal(
+    telemetry.meter.records.filter(record => record.name === OBSERVME_COUNTER_METRIC_NAMES.CHILD_AGENT_FAILURES_TOTAL).length,
+    2,
+  );
+  assert.equal(
+    telemetry.meter.records.filter(
+      record => record.name === OBSERVME_COUNTER_METRIC_NAMES.PARENT_RECOVERED_FROM_CHILD_FAILURE_TOTAL,
+    ).length,
+    2,
+  );
+  assert.equal(telemetry.childFailureAccounting.size, 1);
+  assert.equal(telemetry.childFailureAccounting.has("child-b"), true);
+  assert.equal(telemetry.childFailureAccountingArchive.has("failure:child-a"), true);
+  assert.equal(telemetry.childFailureAccountingArchive.has("recovery:child-a"), true);
+  assert.equal(telemetry.childFailureAccountingArchive.byteLength, 128);
 });
 
 test("wait and join spans record child status, counts, durations, and spawn failures without high-cardinality metric labels", () => {
@@ -1116,6 +1200,34 @@ test("core runner preserves terminal child results and non-terminal wait outcome
     }),
     { ok: false, reason: "spawn_not_found" },
   );
+});
+
+test("core runner launch callback records quick launcher completion before delayed child completion", async () => {
+  const telemetry = createFakeTelemetry();
+  let nowMs = 100;
+
+  await runSubagentWithObservability(
+    telemetry,
+    "pi",
+    [],
+    async (_command, _args, runnerOptions) => {
+      nowMs = 150;
+      runnerOptions.onLaunchComplete();
+      nowMs = 30 * 60 * 1_000;
+      return { status: "completed" };
+    },
+    {
+      spawnId: "spawn-runner-delayed-child",
+      childAgentId: "child-runner-delayed-child",
+      now: () => nowMs,
+    },
+  );
+
+  const durations = telemetry.meter.records.filter(
+    record => record.name === OBSERVME_HISTOGRAM_METRIC_NAMES.SUBAGENT_SPAWN_DURATION_MS,
+  );
+  assert.deepEqual(durations.map(record => record.value), [50]);
+  assert.equal(telemetry.agentTree.getAgent("child-runner-delayed-child").status, "completed");
 });
 
 test("core runner distinguishes caller cancellation, transport failure, and launcher failure", async () => {

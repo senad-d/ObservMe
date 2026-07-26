@@ -6,6 +6,7 @@ import { createOversizedGrafanaStreamResponse } from "./grafana-response-limit-h
 import {
   FORBIDDEN_HIGH_CARDINALITY_PROMETHEUS_LABELS,
   PrometheusQueryClient,
+  assertPrometheusVectorResult,
   findForbiddenPrometheusLabels,
   queryPrometheus,
 } from "../src/query/prometheus.ts";
@@ -17,7 +18,7 @@ const documentedLowCardinalityPromQl = [
   "sum(increase(observme_llm_cost_usd_total[24h])) by (model, provider)",
   "sum(rate(observme_subagents_spawned_total[1h])) by (agent_role, subagent_depth, spawn_type, spawn_reason)",
   "histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket[1h])) by (subagent_depth, le))",
-  "sum(rate(observme_orphan_agents_total[1h])) by (agent_role, subagent_depth)",
+  "sum(rate(observme_orphan_agents_total[1h])) by (status, reason)",
   "topk(10, sum(rate(observme_tool_calls_total[1h])) by (tool_name))",
   "sum(rate(observme_tool_failures_total[1h])) by (tool_name, error_class)",
 ];
@@ -82,11 +83,11 @@ function createPrometheusAgentResponse() {
         resultType: "vector",
         result: [
           {
-            metric: { agent_role: "orchestrator", subagent_depth: "0" },
+            metric: { status: "orphaned", reason: "orphaned" },
             value: [1783422000, "5"],
           },
           {
-            metric: { agent_role: "worker", subagent_depth: "1" },
+            metric: { status: "failed", reason: "orphaned" },
             value: [1783422000, "3"],
           },
         ],
@@ -102,6 +103,17 @@ function createEmptyVectorResponse() {
       status: "success",
       data: { resultType: "vector", result: [] },
     }),
+    { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
+  );
+}
+
+function createNonVectorResponse(resultType) {
+  const result = resultType === "matrix"
+    ? [{ metric: { model: "claude-sonnet" }, values: [[1783422000.25, "1.42"]] }]
+    : [1783422000.25, resultType === "scalar" ? "1.42" : "ready"];
+
+  return new Response(
+    JSON.stringify({ status: "success", data: { resultType, result } }),
     { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
   );
 }
@@ -317,6 +329,27 @@ test("queryPrometheus preserves legitimate empty vector responses", async () => 
   });
 
   assert.deepEqual(result, { resultType: "vector", series: [] });
+  assert.doesNotThrow(() => assertPrometheusVectorResult(result));
+});
+
+test("fixed-vector assertions reject generic scalar, string, and matrix results with bounded contract errors", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+
+  for (const resultType of ["scalar", "string", "matrix"]) {
+    const result = await queryPrometheus(config, "observme_sessions_started_total", undefined, {
+      fetch: async () => createNonVectorResponse(resultType),
+    });
+
+    assert.equal(result.resultType, resultType);
+    assert.throws(
+      () => assertPrometheusVectorResult(result),
+      new Error(
+        `Prometheus query contract error: expected an instant-vector result, but backend returned ${resultType}; update the PromQL or datasource response to return a vector.`,
+      ),
+    );
+  }
 });
 
 test("Prometheus queries support local Grafana Basic auth when bearer token is unresolved", async () => {
@@ -456,7 +489,7 @@ test("queryPrometheus caps agent summaries by query.maxAgents when requested", a
 
   const result = await queryPrometheus(
     config,
-    "sum(rate(observme_orphan_agents_total[1h])) by (agent_role, subagent_depth)",
+    "sum(rate(observme_orphan_agents_total[1h])) by (status, reason)",
     undefined,
     { fetch: fetcher, resultLimit: "agents" },
   );
@@ -464,7 +497,7 @@ test("queryPrometheus caps agent summaries by query.maxAgents when requested", a
   const url = new URL(calls[0]);
   assert.equal(url.searchParams.get("limit"), "1");
   assert.equal(result.series.length, 1);
-  assert.deepEqual(result.series[0].metric, { agent_role: "orchestrator", subagent_depth: "0" });
+  assert.deepEqual(result.series[0].metric, { status: "orphaned", reason: "orphaned" });
 });
 
 test("documented Prometheus queries built by the client avoid forbidden high-cardinality labels", async () => {

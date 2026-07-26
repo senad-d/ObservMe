@@ -242,6 +242,8 @@ export const COMPACTION_ATTRIBUTES = {
 
 export const CONFIG_ATTRIBUTES = {
   OBSERVME_CONFIG_SOURCE: "observme.config.source",
+  OBSERVME_CONFIG_REJECTED_SOURCES: "observme.config.rejection.rejected_sources",
+  OBSERVME_CONFIG_SAFE_FALLBACK_APPLIED: "observme.config.safe_fallback_applied",
   OBSERVME_CONFIG_REJECTION_ISSUE_CODES: "observme.config.rejection.issue_codes",
   OBSERVME_CONFIG_REJECTION_ISSUE_COUNT: "observme.config.rejection.issue_count",
 } as const;

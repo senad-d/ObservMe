@@ -382,7 +382,7 @@ Panels:
 - Orphan agents and trace-context propagation failures.
 - Parent wait/join latency, child-agent failures, and recovered child failures.
 - Ratio panels for spawn failure rate, orphan pressure vs spawns/runs, propagation failure rate, and child recovery ratio.
-- Top tables for slow agent roles, failing spawn reasons, orphan-prone depths, and high fan-out roles.
+- Top tables for slow agent roles, failing spawn reasons, orphan status/reason combinations, and high fan-out roles.
 - Parent/child handoff table with parsed fields and Trace Journey/Tempo links.
 
 PromQL aggregates must avoid high-cardinality workflow IDs and agent IDs:
@@ -400,7 +400,7 @@ histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket[5m])) by (s
 ```
 
 ```promql
-sum(rate(observme_orphan_agents_total[5m])) by (agent_role, subagent_depth)
+sum(rate(observme_orphan_agents_total[5m])) by (status, reason)
 ```
 
 ```promql
@@ -415,7 +415,7 @@ histogram_quantile(0.95, sum(rate(observme_agent_join_duration_ms_bucket[5m])) b
 histogram_quantile(0.95, sum(rate(observme_agent_run_duration_ms_bucket[5m])) by (agent_role, le))
 ```
 
-Use Tempo or Loki for per-agent/per-workflow drill-down with attributes normalized by the backend, for example `pi_workflow_id`, `pi_agent_id`, `pi_agent_parent_id`, `pi_agent_root_id`, and `pi_agent_spawn_id`.
+The orphan counter emits exactly the bounded `status` and `reason` labels; role, depth, and execution IDs are not available on that metric. Use Tempo or Loki for per-agent/per-workflow drill-down with attributes normalized by the backend, for example `pi_workflow_id`, `pi_agent_id`, `pi_agent_parent_id`, `pi_agent_root_id`, and `pi_agent_spawn_id`.
 
 ## 5.1 Agent Node Graphs Dashboard
 

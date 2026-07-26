@@ -1,9 +1,10 @@
 import type { GrafanaDatasourceUidsConfig, ObservMeConfig } from "../config/schema.ts";
-import { hasUnresolvedEnvironmentPlaceholder, normalizeConfiguredGrafanaSecret } from "./grafana-transport.ts";
-import type { GrafanaUrlSecurityFailureClass } from "./grafana-url.ts";
+import { hasUnresolvedEnvironmentPlaceholder } from "../safety/sensitive-input.ts";
+import { normalizeConfiguredGrafanaSecret } from "./grafana-transport.ts";
 import {
-  classifyGrafanaUrlSecurityFailure,
-  formatGrafanaUrlSecurityFailure,
+  classifyGrafanaUrlFailure,
+  formatGrafanaUrlFailure,
+  getGrafanaUrlIssueCode,
 } from "./grafana-url.ts";
 
 export type GrafanaQueryDatasourceKey = keyof GrafanaDatasourceUidsConfig;
@@ -69,58 +70,16 @@ export function isGrafanaQueryDisabledError(error: unknown): error is GrafanaQue
 }
 
 function validateGrafanaUrl(url: string): GrafanaQueryReadinessIssue[] {
-  const trimmed = url.trim();
-  if (!trimmed) {
-    return [createGrafanaReadinessIssue("missing_grafana_url", "query.grafana.url", "query.grafana.url is not configured.")];
-  }
+  const failureClass = classifyGrafanaUrlFailure(url);
+  if (!failureClass) return [];
 
-  if (hasUnresolvedEnvironmentPlaceholder(trimmed)) {
-    return [
-      createGrafanaReadinessIssue(
-        "unresolved_grafana_url",
-        "query.grafana.url",
-        "query.grafana.url is unresolved. Set the referenced environment variable before running Grafana-backed queries.",
-      ),
-    ];
-  }
-
-  return validateGrafanaUrlProtocol(trimmed);
-}
-
-function validateGrafanaUrlProtocol(url: string): GrafanaQueryReadinessIssue[] {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return [createInvalidGrafanaUrlIssue()];
-
-    const securityFailure = classifyGrafanaUrlSecurityFailure(parsed);
-    return securityFailure ? [createEmbeddedGrafanaCredentialsIssue(securityFailure)] : [];
-  } catch (error) {
-    return [createInvalidGrafanaUrlIssue(readUrlParseFailureKind(error))];
-  }
-}
-
-function createEmbeddedGrafanaCredentialsIssue(
-  failureClass: GrafanaUrlSecurityFailureClass,
-): GrafanaQueryReadinessIssue {
-  return createGrafanaReadinessIssue(
-    "embedded_grafana_url_credentials",
-    "query.grafana.url",
-    formatGrafanaUrlSecurityFailure(failureClass),
-  );
-}
-
-function createInvalidGrafanaUrlIssue(failureKind?: string): GrafanaQueryReadinessIssue {
-  const failureDetail = failureKind ? ` URL parser failed with ${failureKind}.` : "";
-  return createGrafanaReadinessIssue(
-    "invalid_grafana_url",
-    "query.grafana.url",
-    `query.grafana.url must be a valid http:// or https:// URL.${failureDetail}`,
-  );
-}
-
-function readUrlParseFailureKind(error: unknown): string {
-  if (error instanceof Error) return error.name || "Error";
-  return typeof error;
+  return [
+    createGrafanaReadinessIssue(
+      getGrafanaUrlIssueCode(failureClass),
+      "query.grafana.url",
+      formatGrafanaUrlFailure(failureClass),
+    ),
+  ];
 }
 
 function validateGrafanaAuth(config: ObservMeConfig): GrafanaQueryReadinessIssue[] {

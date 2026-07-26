@@ -143,7 +143,7 @@ async function assertOversizedConfigSourcesRejected(sparseMultiplier = 1) {
     });
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /config_source_too_large/u);
-    assert.doesNotMatch(warnings[0], /observme-config-loader|global-observme|observme\.yaml|\.env/u);
+    assert.doesNotMatch(warnings[0], /observme-config-loader|global-observme|observme\.yaml/u);
   } finally {
     await removeTempConfigProject(cwd);
   }
@@ -210,6 +210,36 @@ const rejectionDiagnosticCases = [
     sensitiveFragments: ["private-grafana-user", "private-grafana-password"],
   },
   {
+    name: "blank Grafana URL",
+    runtimeOptions: { query: { grafana: { url: "  " } } },
+    expectedCode: "missing_grafana_url",
+    sensitiveFragments: [],
+  },
+  {
+    name: "malformed Grafana URL",
+    runtimeOptions: { query: { grafana: { url: "https://[private-malformed-grafana" } } },
+    expectedCode: "invalid_grafana_url",
+    sensitiveFragments: ["private-malformed-grafana"],
+  },
+  {
+    name: "relative Grafana URL",
+    runtimeOptions: { query: { grafana: { url: "private/relative/grafana" } } },
+    expectedCode: "invalid_grafana_url",
+    sensitiveFragments: ["private/relative/grafana"],
+  },
+  {
+    name: "file Grafana URL",
+    runtimeOptions: { query: { grafana: { url: "file:///private/grafana" } } },
+    expectedCode: "invalid_grafana_url",
+    sensitiveFragments: ["/private/grafana"],
+  },
+  {
+    name: "FTP Grafana URL",
+    runtimeOptions: { query: { grafana: { url: "ftp://private-grafana.test/observability" } } },
+    expectedCode: "invalid_grafana_url",
+    sensitiveFragments: ["private-grafana.test"],
+  },
+  {
     name: "forbidden metric labels",
     runtimeOptions: { metrics: { labels: ["pi.session.id.private-label-secret"] } },
     expectedCode: "high_cardinality_metric_label",
@@ -257,6 +287,141 @@ for (const diagnosticCase of rejectionDiagnosticCases) {
     const serializedDiagnostics = JSON.stringify({ diagnostics: loaded.diagnostics, warnings });
     for (const fragment of diagnosticCase.sensitiveFragments) {
       assert.equal(serializedDiagnostics.includes(fragment), false);
+    }
+  });
+}
+
+const explicitDisablementFallbackCases = [
+  {
+    name: "invalid OTLP global sibling",
+    files: {
+      "global.yaml": [
+        "observme:",
+        "  enabled: false",
+        "  otlp:",
+        "    endpoint: private-invalid-otlp-endpoint",
+      ].join("\n"),
+    },
+    loadOptions: {
+      globalConfigPath: "global.yaml",
+      isProjectTrusted: false,
+      env: {},
+    },
+    expectedCode: "invalid_otlp_endpoint",
+    sensitiveFragment: "private-invalid-otlp-endpoint",
+  },
+  {
+    name: "structurally invalid timeout global sibling",
+    files: {
+      "global.yaml": [
+        "observme:",
+        "  enabled: false",
+        "  otlp:",
+        "    timeoutMs: private-timeout",
+      ].join("\n"),
+    },
+    loadOptions: {
+      globalConfigPath: "global.yaml",
+      isProjectTrusted: false,
+      env: {},
+    },
+    expectedCode: "invalid_config_shape",
+    sensitiveFragment: "private-timeout",
+  },
+  {
+    name: "invalid Grafana trusted-project sibling",
+    files: {
+      "project.yaml": [
+        "observme:",
+        "  enabled: false",
+        "  query:",
+        "    grafana:",
+        "      url: https://private-user:private-password@grafana.example.test",
+      ].join("\n"),
+    },
+    loadOptions: {
+      globalConfigPath: "missing-global.yaml",
+      projectConfigPath: "project.yaml",
+      isProjectTrusted: true,
+      loadEnvFile: false,
+      env: {},
+    },
+    expectedCode: "embedded_grafana_url_credentials",
+    sensitiveFragment: "private-password",
+  },
+  {
+    name: "invalid capture trusted-project environment sibling",
+    files: {
+      "project.env": [
+        "OBSERVME_ENABLED=false",
+        "OBSERVME_CAPTURE_PROMPTS=true",
+        "OBSERVME_REDACTION_ENABLED=false",
+      ].join("\n"),
+    },
+    loadOptions: {
+      globalConfigPath: "missing-global.yaml",
+      projectConfigPath: "missing-project.yaml",
+      envFilePath: "project.env",
+      isProjectTrusted: true,
+      env: {},
+    },
+    expectedCode: "unsafe_capture_without_redaction",
+  },
+  {
+    name: "invalid lineage process-environment sibling",
+    files: {},
+    loadOptions: {
+      globalConfigPath: "missing-global.yaml",
+      isProjectTrusted: false,
+      env: {
+        OBSERVME_ENABLED: "false",
+        OBSERVME_WORKFLOW_ID: "private-lineage/unsafe",
+      },
+    },
+    expectedCode: "malformed_lineage_value",
+    sensitiveFragment: "private-lineage",
+  },
+  {
+    name: "invalid timeout runtime sibling",
+    files: {},
+    loadOptions: {
+      globalConfigPath: "missing-global.yaml",
+      isProjectTrusted: false,
+      env: {},
+      runtimeOptions: {
+        enabled: false,
+        otlp: { timeoutMs: "private-timeout" },
+      },
+    },
+    expectedCode: "invalid_config_shape",
+    sensitiveFragment: "private-timeout",
+  },
+];
+
+for (const fallbackCase of explicitDisablementFallbackCases) {
+  test(`session loader preserves explicit disablement with ${fallbackCase.name}`, async () => {
+    const warnings = [];
+    const loaded = await loadSessionConfigWithDiagnostics({
+      ...fallbackCase.loadOptions,
+      readText: createReader(fallbackCase.files),
+      logger: { warn: message => warnings.push(message) },
+    });
+
+    assert.equal(loaded.config.enabled, false);
+    assert.deepEqual(
+      { ...loaded.config, enabled: true },
+      defaultObservMeConfig,
+      "invalid sibling values fall back without reversing explicit disablement",
+    );
+    assert.ok(loaded.diagnostics.rejection?.issueCodes.includes(fallbackCase.expectedCode));
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /explicit disablement preserved/u);
+    assert.match(warnings[0], /telemetry remains disabled/u);
+    if (fallbackCase.sensitiveFragment) {
+      assert.doesNotMatch(
+        JSON.stringify({ diagnostics: loaded.diagnostics, warnings }),
+        new RegExp(fallbackCase.sensitiveFragment, "u"),
+      );
     }
   });
 }
@@ -321,10 +486,137 @@ for (const [name, environmentName, value] of malformedTypedEnvironmentCases) {
 
     assert.deepEqual(loaded.config, defaultObservMeConfig);
     assert.equal(loaded.diagnostics.environmentStatus, "rejected");
-    assert.equal(loaded.diagnostics.environmentOverrides, true);
+    assert.equal(loaded.diagnostics.environmentOverrides, false);
+    assert.equal(loaded.diagnostics.effectiveSource, "defaults");
+    assert.deepEqual(loaded.diagnostics.rejectedSources, ["process_environment"]);
+    assert.equal(loaded.diagnostics.safeFallbackApplied, false);
     assert.deepEqual(loaded.diagnostics.rejection?.issueCodes, ["invalid_config_shape"]);
     assert.equal(warnings.length, 1);
     assert.doesNotMatch(JSON.stringify({ diagnostics: loaded.diagnostics, warnings }), /private-|1\.5/u);
+  });
+}
+
+const repairedRejectedLayerCases = [
+  {
+    name: "global config",
+    files: {
+      "global.yaml": [
+        "observme:",
+        "  tenant: private-rejected-global",
+        "  otlp:",
+        "    timeoutMs: private-invalid-timeout",
+        "  capture:",
+        "    prompts: true",
+        "  privacy:",
+        "    redactionEnabled: false",
+        "    allowUnsafeCapture: true",
+      ].join("\n"),
+    },
+    options: {
+      globalConfigPath: "global.yaml",
+      isProjectTrusted: false,
+      env: {},
+    },
+    statusField: "globalConfigStatus",
+    rejectedSource: "global",
+    warningSource: /global config/u,
+  },
+  {
+    name: "trusted project config",
+    files: {
+      "project.yaml": [
+        "observme:",
+        "  tenant: private-rejected-project",
+        "  otlp:",
+        "    timeoutMs: private-invalid-timeout",
+        "  capture:",
+        "    prompts: true",
+        "  privacy:",
+        "    redactionEnabled: false",
+        "    allowUnsafeCapture: true",
+      ].join("\n"),
+    },
+    options: {
+      globalConfigPath: "missing-global.yaml",
+      projectConfigPath: "project.yaml",
+      isProjectTrusted: true,
+      loadEnvFile: false,
+      env: {},
+    },
+    statusField: "projectConfigStatus",
+    rejectedSource: "trusted_project",
+    warningSource: /trusted project config/u,
+  },
+  {
+    name: "trusted project .env",
+    files: {
+      "project.env": [
+        "OBSERVME_TENANT=private-rejected-project-env",
+        "OBSERVME_OTLP_TIMEOUT_MS=private-invalid-timeout",
+        "OBSERVME_CAPTURE_PROMPTS=true",
+        "OBSERVME_REDACTION_ENABLED=false",
+        "OBSERVME_ALLOW_UNSAFE_CAPTURE=true",
+      ].join("\n"),
+    },
+    options: {
+      globalConfigPath: "missing-global.yaml",
+      projectConfigPath: "missing-project.yaml",
+      envFilePath: "project.env",
+      isProjectTrusted: true,
+      env: {},
+    },
+    statusField: "envFileStatus",
+    rejectedSource: "project_env",
+    warningSource: /trusted project \.env/u,
+  },
+  {
+    name: "process environment",
+    files: {},
+    options: {
+      globalConfigPath: "missing-global.yaml",
+      isProjectTrusted: false,
+      env: {
+        OBSERVME_TENANT: "private-rejected-process-env",
+        OBSERVME_OTLP_TIMEOUT_MS: "private-invalid-timeout",
+        OBSERVME_CAPTURE_PROMPTS: "true",
+        OBSERVME_REDACTION_ENABLED: "false",
+        OBSERVME_ALLOW_UNSAFE_CAPTURE: "true",
+      },
+    },
+    statusField: "environmentStatus",
+    rejectedSource: "process_environment",
+    warningSource: /process environment/u,
+  },
+];
+
+for (const sourceCase of repairedRejectedLayerCases) {
+  test(`session loader excludes rejected ${sourceCase.name} values when runtime options repair the shape`, async () => {
+    const warnings = [];
+    const loaded = await loadSessionConfigWithDiagnostics({
+      ...sourceCase.options,
+      readText: createReader(sourceCase.files),
+      runtimeOptions: {
+        tenant: "accepted-runtime",
+        otlp: { timeoutMs: 4321 },
+      },
+      logger: { warn: message => warnings.push(message) },
+    });
+
+    assert.equal(loaded.config.tenant, "accepted-runtime");
+    assert.equal(loaded.config.otlp.timeoutMs, 4321);
+    assert.equal(loaded.config.capture.prompts, false);
+    assert.equal(loaded.config.privacy.redactionEnabled, true);
+    assert.equal(loaded.config.privacy.allowUnsafeCapture, false);
+    assert.equal(loaded.diagnostics[sourceCase.statusField], "rejected");
+    assert.equal(loaded.diagnostics.effectiveSource, "runtime_options");
+    assert.deepEqual(loaded.diagnostics.rejectedSources, [sourceCase.rejectedSource]);
+    assert.equal(loaded.diagnostics.safeFallbackApplied, false);
+    assert.deepEqual(loaded.diagnostics.rejection?.issueCodes, ["invalid_config_shape"]);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], sourceCase.warningSource);
+    assert.match(warnings[0], /accepted configuration remains effective/u);
+    assert.doesNotMatch(warnings[0], /safe defaults/u);
+    assert.doesNotMatch(JSON.stringify({ config: loaded.config, diagnostics: loaded.diagnostics, warnings }), /private-/u);
   });
 }
 
@@ -349,7 +641,7 @@ test("session diagnostics distinguish malformed, structurally rejected, and malf
   assert.equal(loaded.diagnostics.projectConfigStatus, "rejected");
   assert.equal(loaded.diagnostics.envFileStatus, "malformed");
   assert.equal(loaded.diagnostics.environmentStatus, "missing");
-  assert.deepEqual(loaded.diagnostics.rejection?.issueCodes, ["invalid_config_shape", "config_source_malformed"]);
+  assert.deepEqual(loaded.diagnostics.rejection?.issueCodes, ["config_source_malformed", "invalid_config_shape"]);
   assert.equal(warnings.length, 1);
   assert.doesNotMatch(JSON.stringify({ diagnostics: loaded.diagnostics, warnings }), /trailing-garbage|global\.yaml|project\.yaml|project\.env/u);
 });
@@ -380,7 +672,7 @@ test("session diagnostics distinguish unreadable config and .env sources without
     issueCount: 3,
   });
   assert.equal(warnings.length, 1);
-  assert.doesNotMatch(JSON.stringify({ diagnostics: loaded.diagnostics, warnings }), /EACCES|private|workspace|\.env/u);
+  assert.doesNotMatch(JSON.stringify({ diagnostics: loaded.diagnostics, warnings }), /EACCES|private|workspace/u);
 });
 
 test("session diagnostics classify malformed YAML separately from a missing source", async () => {
@@ -469,6 +761,86 @@ test("factory loader falls back for structurally invalid global config", async (
   assert.ok(warnings.some(message => message.includes("invalid_config_shape")));
   assert.doesNotMatch(warnings.join("\n"), /bad/u);
 });
+
+test("factory loader preserves explicit disablement from a structurally rejected global config", async () => {
+  const warnings = [];
+  const config = await loadFactoryConfig({
+    globalConfigPath: "global.yaml",
+    readText: createReader({
+      "global.yaml": "observme:\n  enabled: false\n  otlp:\n    timeoutMs: private-timeout\n",
+    }),
+    env: {},
+    logger: { warn: message => warnings.push(message) },
+  });
+
+  assert.equal(config.enabled, false);
+  assert.deepEqual({ ...config, enabled: true }, defaultObservMeConfig);
+  assert.equal(warnings.length, 1, "source rejection is distinct from whole-config fallback");
+  assert.equal(warnings.every(message => !message.includes("private-timeout")), true);
+  assert.equal(warnings.some(message => message.includes("Explicit disablement was preserved")), true);
+  assert.equal(warnings.some(message => message.includes("safe defaults")), false);
+});
+
+const factoryRejectedLayerCases = [
+  {
+    name: "global config",
+    files: {
+      "global.yaml": [
+        "observme:",
+        "  tenant: private-rejected-factory-global",
+        "  otlp:",
+        "    timeoutMs: private-invalid-timeout",
+        "  capture:",
+        "    responses: true",
+        "  privacy:",
+        "    redactionEnabled: false",
+        "    allowUnsafeCapture: true",
+      ].join("\n"),
+    },
+    options: { globalConfigPath: "global.yaml", env: {} },
+    warningSource: /global config/u,
+  },
+  {
+    name: "process environment",
+    files: {},
+    options: {
+      globalConfigPath: "missing-global.yaml",
+      env: {
+        OBSERVME_TENANT: "private-rejected-factory-process",
+        OBSERVME_OTLP_TIMEOUT_MS: "private-invalid-timeout",
+        OBSERVME_CAPTURE_RESPONSES: "true",
+        OBSERVME_REDACTION_ENABLED: "false",
+        OBSERVME_ALLOW_UNSAFE_CAPTURE: "true",
+      },
+    },
+    warningSource: /process environment/u,
+  },
+];
+
+for (const sourceCase of factoryRejectedLayerCases) {
+  test(`factory loader excludes rejected ${sourceCase.name} values when runtime options repair the shape`, async () => {
+    const warnings = [];
+    const config = await loadFactoryConfig({
+      ...sourceCase.options,
+      readText: createReader(sourceCase.files),
+      runtimeOptions: {
+        tenant: "accepted-factory-runtime",
+        otlp: { timeoutMs: 5432 },
+      },
+      logger: { warn: message => warnings.push(message) },
+    });
+
+    assert.equal(config.tenant, "accepted-factory-runtime");
+    assert.equal(config.otlp.timeoutMs, 5432);
+    assert.equal(config.capture.responses, false);
+    assert.equal(config.privacy.redactionEnabled, true);
+    assert.equal(config.privacy.allowUnsafeCapture, false);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], sourceCase.warningSource);
+    assert.doesNotMatch(warnings[0], /safe defaults/u);
+    assert.doesNotMatch(JSON.stringify({ config, warnings }), /private-/u);
+  });
+}
 
 test("config loaders derive global and project defaults from Pi's exported config directory", async () => {
   const factoryCalls = [];
@@ -565,7 +937,7 @@ test("session loader rejects out-of-root directory and environment file symlinks
       issueCount: 2,
     });
     assert.equal(warnings.length, 1);
-    assert.doesNotMatch(warnings[0], /observme-config-loader|outside-env|\.env/u);
+    assert.doesNotMatch(warnings[0], /observme-config-loader|outside-env/u);
   } finally {
     await Promise.all([removeTempConfigProject(cwd), removeTempConfigProject(outsideDirectory)]);
   }
@@ -1179,47 +1551,23 @@ observme:
   });
 });
 
-test("generated project starter parses with privacy-preserving capture defaults", () => {
+test("untouched generated project guide parses as an inactive configuration layer", () => {
   const parsed = parseObservMeConfigText(PROJECT_OBSERVME_YAML_TEMPLATE);
 
-  assert.deepEqual(parsed.capture, {
-    prompts: false,
-    responses: false,
-    thinking: false,
-    toolArguments: false,
-    toolResults: false,
-    bashCommands: false,
-    bashOutput: false,
-    filePaths: false,
-  });
-  assert.equal(parsed.privacy.redactionEnabled, true);
-  assert.equal(parsed.privacy.allowUnsafeCapture, false);
-  assert.equal(parsed.metrics.activeAgentLeaseDurationMillis, 60000);
-  assert.deepEqual(
-    {
-      childIdentityEnvelopeVersionEnv: parsed.agent.childIdentityEnvelopeVersionEnv,
-      displayNameEnv: parsed.agent.displayNameEnv,
-      roleEnv: parsed.agent.roleEnv,
-      capabilityEnv: parsed.agent.capabilityEnv,
-    },
-    {
-      childIdentityEnvelopeVersionEnv: "OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION",
-      displayNameEnv: "OBSERVME_AGENT_DISPLAY_NAME",
-      roleEnv: "OBSERVME_AGENT_ROLE",
-      capabilityEnv: "OBSERVME_AGENT_CAPABILITY",
-    },
-  );
+  assert.deepEqual(parsed, {});
 });
 
-test("generated project starter supports redacted explicit content-capture opt-in", () => {
-  const text = PROJECT_OBSERVME_YAML_TEMPLATE.replace("prompts: false", "prompts: true").replace(
-    "toolArguments: false",
-    "toolArguments: true",
-  );
+test("editing generated project guidance activates only explicitly adopted settings", () => {
+  const text = PROJECT_OBSERVME_YAML_TEMPLATE
+    .replace("# observme:", "observme:")
+    .replace("#   capture:", "  capture:")
+    .replace("#     prompts: false", "    prompts: true")
+    .replace("#     toolArguments: false", "    toolArguments: true")
+    .replace("#   privacy:", "  privacy:")
+    .replace("#     redactionEnabled: true", "    redactionEnabled: true")
+    .replace("#     allowUnsafeCapture: false", "    allowUnsafeCapture: false");
   const parsed = parseObservMeConfigText(text);
 
-  assert.equal(parsed.capture.prompts, true);
-  assert.equal(parsed.capture.toolArguments, true);
-  assert.equal(parsed.privacy.redactionEnabled, true);
-  assert.equal(parsed.privacy.allowUnsafeCapture, false);
+  assert.deepEqual(parsed.capture, { prompts: true, toolArguments: true });
+  assert.deepEqual(parsed.privacy, { redactionEnabled: true, allowUnsafeCapture: false });
 });

@@ -12,12 +12,17 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import type { ObservMeConfig, TraceBatchConfig } from "../config/schema.ts";
-import { appendOtlpSignalPath } from "./otlp-endpoint.ts";
-import { buildOtlpHttpAgentOptions, type OtlpHttpAgentOptions } from "./otlp-http-options.ts";
+import { normalizeNodeTimerMilliseconds } from "../config/timer-limits.ts";
+import { OTLP_SIGNAL_PATHS, resolveOtlpSignalEndpoint } from "./otlp-endpoint.ts";
+import {
+  buildOtlpHttpAgentOptions,
+  buildOtlpHttpHeaders,
+  type OtlpHttpAgentOptions,
+} from "./otlp-http-options.ts";
 import type { StartOtelSdkFactoryOptions } from "./sdk.ts";
 
 export const OBSERVME_TRACER_NAME = "@senad-d/observme";
-export const OTLP_TRACE_SIGNAL_PATH = "/v1/traces";
+export const OTLP_TRACE_SIGNAL_PATH = OTLP_SIGNAL_PATHS.traces;
 
 const noopTracer = new BasicTracerProvider({ sampler: new AlwaysOffSampler() }).getTracer(OBSERVME_TRACER_NAME);
 
@@ -117,7 +122,7 @@ export class ObservMeTraceSdk {
       resource: createTraceResource(this.#config),
       sampler: createTraceSampler(this.#config),
       spanProcessors: [this.#processor],
-      forceFlushTimeoutMillis: this.#config.shutdown.flushTimeoutMs,
+      forceFlushTimeoutMillis: normalizeNodeTimerMilliseconds(this.#config.shutdown.flushTimeoutMs),
     });
 
     this.#tracer = this.#provider.getTracer(this.#tracerName);
@@ -167,21 +172,25 @@ export function buildTraceExporterWiring(config: ObservMeConfig): TraceExporterW
   return {
     enabled: config.enabled && config.traces.enabled,
     exporter: buildOtlpTraceExporterOptions(config),
-    batch: { ...config.traces.batch },
+    batch: {
+      ...config.traces.batch,
+      scheduledDelayMillis: normalizeNodeTimerMilliseconds(config.traces.batch.scheduledDelayMillis),
+      exportTimeoutMillis: normalizeNodeTimerMilliseconds(config.traces.batch.exportTimeoutMillis),
+    },
   };
 }
 
 export function buildOtlpTraceExporterOptions(config: ObservMeConfig): OtlpTraceExporterOptions {
   return {
     url: resolveTraceEndpoint(config),
-    headers: { ...config.otlp.headers },
-    timeoutMillis: config.otlp.timeoutMs,
+    headers: buildOtlpHttpHeaders(config),
+    timeoutMillis: normalizeNodeTimerMilliseconds(config.otlp.timeoutMs),
     httpAgentOptions: buildOtlpHttpAgentOptions(config),
   };
 }
 
 export function resolveTraceEndpoint(config: ObservMeConfig): string {
-  return config.otlp.signalEndpoints?.traces ?? appendOtlpSignalPath(config.otlp.endpoint, OTLP_TRACE_SIGNAL_PATH);
+  return resolveOtlpSignalEndpoint(config, "traces");
 }
 
 function createOtlpTraceExporter(options: OtlpTraceExporterOptions): SpanExporter {

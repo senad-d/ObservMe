@@ -6,6 +6,8 @@ import {
   type ObsTransportSecuritySnapshot,
 } from "../config/transport-security.ts";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
+import { getEnabledOtlpSignalDestinations } from "../otel/otlp-endpoint.ts";
+import { createOtlpHealthFetch, createOtlpHealthRequestInit } from "../otel/otlp-health-transport.ts";
 import { getGrafanaHealth, type GrafanaFetch } from "../query/grafana.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { loadObsCommandConfig, normalizeObsCommandTimeoutMs, notifyObsCommand } from "./obs-command-support.ts";
@@ -54,14 +56,14 @@ interface HttpHealthTarget {
   readonly label: string;
   readonly kind: ObsHealthCheckKind;
   readonly url: string;
-  readonly headers?: Record<string, string>;
   readonly successMode: "ok" | "reachable";
 }
 
 const OBS_COMMAND_NAME = "obs";
 const OBS_HEALTH_SUBCOMMAND = "health";
 const OBS_HEALTH_CONFIG_NEXT_ACTION = "fix ObservMe config, then rerun /obs health.";
-const OBS_HEALTH_COLLECTOR_NEXT_ACTION = "verify the Collector is running and otlp.endpoint is reachable.";
+const OBS_HEALTH_COLLECTOR_NEXT_ACTION =
+  "verify the Collector is running and the enabled OTLP signal endpoint is reachable.";
 const OBS_HEALTH_GRAFANA_NEXT_ACTION = "check query.grafana.url and credentials, then rerun /obs health.";
 const OBS_HEALTH_TEMPO_NEXT_ACTION = "check Grafana credentials and query.grafana.datasourceUids.tempo, then rerun /obs health.";
 const OBS_HEALTH_LOKI_NEXT_ACTION = "check Grafana credentials and query.grafana.datasourceUids.loki, then rerun /obs health.";
@@ -111,15 +113,15 @@ export async function getObsHealthSnapshot(
 ): Promise<ObsHealthSnapshot> {
   const config = await loadObsHealthConfig(ctx, options);
   const timeoutMs = resolveObsHealthTimeout(config, options);
-  const collectorFetcher = resolveCollectorHealthFetch(options.fetch);
-  const [collectorCheck, grafanaHealth] = await Promise.all([
+  const collectorFetcher = resolveCollectorHealthFetch(config, options.fetch);
+  const [collectorChecks, grafanaHealth] = await Promise.all([
     checkCollectorReachability(config, collectorFetcher, timeoutMs),
     getGrafanaHealth(config, { fetch: options.fetch, timeoutMs }),
   ]);
 
   return {
     timeoutMs,
-    checks: [collectorCheck, ...grafanaHealth.checks],
+    checks: [...collectorChecks, ...grafanaHealth.checks],
     transportSecurity: createObsTransportSecuritySnapshot(config),
   };
 }
@@ -162,25 +164,25 @@ async function checkCollectorReachability(
   config: ObservMeConfig,
   fetcher: ObsHealthFetch,
   timeoutMs: number,
-): Promise<ObsHealthCheckResult> {
-  const target = {
-    label: "Collector",
+): Promise<ObsHealthCheckResult[]> {
+  const targets = getEnabledOtlpSignalDestinations(config).map(destination => ({
+    label: `Collector ${destination.signal}`,
     kind: "service" as const,
-    url: config.otlp.endpoint,
-    headers: filterConfiguredHeaders(config.otlp.headers),
+    url: destination.endpoint,
     successMode: "reachable" as const,
-  };
+  }));
 
-  return checkHttpHealthTarget(target, fetcher, timeoutMs);
+  return Promise.all(targets.map(target => checkHttpHealthTarget(target, config, fetcher, timeoutMs)));
 }
 
 async function checkHttpHealthTarget(
   target: HttpHealthTarget,
+  config: ObservMeConfig,
   fetcher: ObsHealthFetch,
   timeoutMs: number,
 ): Promise<ObsHealthCheckResult> {
   try {
-    const response = await fetchWithTimeout(target, fetcher, timeoutMs);
+    const response = await fetchWithTimeout(target, config, fetcher, timeoutMs);
     try {
       return responseToHealthResult(target, response);
     } finally {
@@ -191,16 +193,17 @@ async function checkHttpHealthTarget(
   }
 }
 
-async function fetchWithTimeout(target: HttpHealthTarget, fetcher: ObsHealthFetch, timeoutMs: number): Promise<Response> {
+async function fetchWithTimeout(
+  target: HttpHealthTarget,
+  config: ObservMeConfig,
+  fetcher: ObsHealthFetch,
+  timeoutMs: number,
+): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetcher(target.url, {
-      method: "GET",
-      headers: target.headers,
-      signal: controller.signal,
-    });
+    return await fetcher(target.url, createOtlpHealthRequestInit(config, controller.signal));
   } finally {
     clearTimeout(timeout);
   }
@@ -215,21 +218,6 @@ function ignoreHttpHealthResponseCancellationFailure(): void {
   // Status-only health checks cancel best-effort; the bounded request has already completed.
 }
 
-function filterConfiguredHeaders(headers: Record<string, string>): Record<string, string> | undefined {
-  const filtered: Record<string, string> = {};
-
-  for (const [name, value] of Object.entries(headers)) {
-    const trimmed = value.trim();
-    if (trimmed && !hasUnresolvedEnvironmentPlaceholder(trimmed)) filtered[name] = trimmed;
-  }
-
-  return Object.keys(filtered).length > 0 ? filtered : undefined;
-}
-
-function hasUnresolvedEnvironmentPlaceholder(value: string): boolean {
-  return /\$\{[A-Z0-9_]+\}/u.test(value);
-}
-
 function responseToHealthResult(target: HttpHealthTarget, response: Response): ObsHealthCheckResult {
   if (responseMatchesSuccessMode(target, response)) return { label: target.label, kind: target.kind, status: "ok" };
 
@@ -242,7 +230,7 @@ function responseToHealthResult(target: HttpHealthTarget, response: Response): O
 }
 
 function responseMatchesSuccessMode(target: HttpHealthTarget, response: Response): boolean {
-  if (target.successMode === "reachable") return response.status < 500;
+  if (target.successMode === "reachable") return response.status < 300 || (response.status >= 400 && response.status < 500);
   return response.ok;
 }
 
@@ -283,7 +271,7 @@ function formatObsHealthDetail(check: ObsHealthCheckResult): string | undefined 
 }
 
 function resolveObsHealthNextAction(check: ObsHealthCheckResult): string {
-  if (check.label === "Collector") return OBS_HEALTH_COLLECTOR_NEXT_ACTION;
+  if (check.label.startsWith("Collector")) return OBS_HEALTH_COLLECTOR_NEXT_ACTION;
   if (check.label === "Grafana") return OBS_HEALTH_GRAFANA_NEXT_ACTION;
   if (check.label === "Tempo datasource") return OBS_HEALTH_TEMPO_NEXT_ACTION;
   if (check.label === "Loki datasource") return OBS_HEALTH_LOKI_NEXT_ACTION;
@@ -300,8 +288,8 @@ function resolveObsHealthTimeout(config: ObservMeConfig, options: ObsHealthSnaps
 }
 
 
-function resolveCollectorHealthFetch(fetcher: ObsHealthFetch | undefined): ObsHealthFetch {
-  return fetcher ?? globalThis.fetch.bind(globalThis);
+function resolveCollectorHealthFetch(config: ObservMeConfig, fetcher: ObsHealthFetch | undefined): ObsHealthFetch {
+  return fetcher ?? createOtlpHealthFetch(config);
 }
 
 function isObsHealthRequest(args: string): boolean {

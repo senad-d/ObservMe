@@ -3,6 +3,8 @@ import { lstat, open, stat, unlink } from "node:fs/promises";
 import { basename } from "node:path";
 
 let activeCreate;
+let activeOperation = Promise.resolve();
+let parentDisconnected = false;
 
 if (process.send) {
   try {
@@ -20,7 +22,11 @@ if (process.send) {
   }
 }
 
-async function handleInitialMessage(message) {
+function handleInitialMessage(message) {
+  activeOperation = processInitialMessage(message);
+}
+
+async function processInitialMessage(message) {
   if (isCancelMessage(message)) {
     sendMessage({ type: "cancelled" });
     disconnectHelper();
@@ -41,8 +47,13 @@ async function handleInitialMessage(message) {
       fileHandle,
       fileName: message.fileName,
       identity: toFileIdentity(openedStats),
+      closed: false,
     };
     if (!openedStats.isFile()) throw createHelperError("EINVAL");
+    if (parentDisconnected) {
+      await cleanupActiveCreate();
+      return;
+    }
     process.once("message", handleOpenedMessage);
     sendMessage({ type: "opened", identity: activeCreate.identity });
   } catch (error) {
@@ -60,7 +71,11 @@ async function handleInitialMessage(message) {
   }
 }
 
-async function handleOpenedMessage(message) {
+function handleOpenedMessage(message) {
+  activeOperation = processOpenedMessage(message);
+}
+
+async function processOpenedMessage(message) {
   if (isAbortMessage(message)) {
     await abortActiveCreate();
     return;
@@ -70,20 +85,29 @@ async function handleOpenedMessage(message) {
     return;
   }
 
+  const create = activeCreate;
   try {
-    await activeCreate.fileHandle.writeFile(message.content, { encoding: "utf8" });
-    const writtenStats = await activeCreate.fileHandle.stat({ bigint: true });
-    if (!writtenStats.isFile() || !hasSameIdentity(activeCreate.identity, toFileIdentity(writtenStats))) {
+    await create.fileHandle.writeFile(message.content, { encoding: "utf8" });
+    const writtenStats = await create.fileHandle.stat({ bigint: true });
+    if (!writtenStats.isFile() || !hasSameIdentity(create.identity, toFileIdentity(writtenStats))) {
       throw createHelperError("EINVAL");
     }
+    if (parentDisconnected) {
+      await cleanupActiveCreate();
+      return;
+    }
     process.once("message", handleFinalizeMessage);
-    sendMessage({ type: "written", identity: activeCreate.identity });
+    sendMessage({ type: "written", identity: create.identity });
   } catch (error) {
     await failActiveCreate(error);
   }
 }
 
-async function handleFinalizeMessage(message) {
+function handleFinalizeMessage(message) {
+  activeOperation = processFinalizeMessage(message);
+}
+
+async function processFinalizeMessage(message) {
   if (isAbortMessage(message)) {
     await abortActiveCreate();
     return;
@@ -93,8 +117,14 @@ async function handleFinalizeMessage(message) {
     return;
   }
 
+  const create = activeCreate;
   try {
-    await activeCreate.fileHandle.close();
+    await create.fileHandle.close();
+    create.closed = true;
+    if (parentDisconnected) {
+      await cleanupActiveCreate();
+      return;
+    }
     activeCreate = undefined;
     sendMessage({ type: "committed" });
     disconnectHelper();
@@ -134,10 +164,13 @@ async function cleanupActiveCreate() {
   activeCreate = undefined;
   if (!create) return true;
 
-  try {
-    await create.fileHandle.close();
-  } catch {
-    return false;
+  if (!create.closed) {
+    try {
+      await create.fileHandle.close();
+      create.closed = true;
+    } catch {
+      return false;
+    }
   }
 
   try {
@@ -150,7 +183,17 @@ async function cleanupActiveCreate() {
   }
 }
 
-async function handleParentDisconnect() {
+function handleParentDisconnect() {
+  parentDisconnected = true;
+  activeOperation = cleanupAfterParentDisconnect(activeOperation);
+}
+
+async function cleanupAfterParentDisconnect(operation) {
+  try {
+    await operation;
+  } catch {
+    // The active protocol handler owns its failure response; disconnect cleanup still runs.
+  }
   await cleanupActiveCreate();
 }
 

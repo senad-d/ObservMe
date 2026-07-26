@@ -367,7 +367,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Rolling p95 comparison across user turns, LLMs, tools, bash, agent runs, spawns, waits, and joins for critical-path attribution. Sparse stages can jump or disappear; compare selected-range operation volume. Missing duration series are left absent rather than shown as a healthy zero.",
+      "description": "Rolling p95 comparison across user turns, LLMs, tools, bash, agent runs, launcher spawns, waits, and joins for critical-path attribution. Spawn latency ends at usable transport-handle acquisition or pre-handle failure; child execution and result delivery remain in wait/join signals. Sparse stages can jump or disappear; compare selected-range operation volume. Missing duration series are left absent rather than shown as a healthy zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -511,7 +511,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Selected-range p50/p95/p99 latency estimates for turns, LLMs, tools, bash, agent runs, subagent spawn, parent wait, and parent join. Each instant query uses histogram bucket increases over $__range and retains le. Compare Stage operation volume: low counts make percentile ranks sparse, while no value means no matching duration observations or missing instrumentation and is not converted to zero.",
+      "description": "Selected-range p50/p95/p99 latency estimates for turns, LLMs, tools, bash, agent runs, subagent launcher spawn, parent wait, and parent join. Spawn latency ends at usable transport-handle acquisition or pre-handle failure and excludes delayed child execution/result delivery. Each instant query uses histogram bucket increases over $__range and retains le. Compare Stage operation volume: low counts make percentile ranks sparse, while no value means no matching duration observations or missing instrumentation and is not converted to zero.",
       "fieldConfig": {
         "defaults": {
           "color": {

@@ -1,3 +1,5 @@
+import type { ObservMeConfig } from "../config/schema.ts";
+
 export type OtlpEndpointFailureClass =
   | "unresolved_placeholder"
   | "malformed_url"
@@ -5,6 +7,19 @@ export type OtlpEndpointFailureClass =
   | "embedded_credentials"
   | "query_not_supported"
   | "fragment_not_supported";
+
+export type OtlpSignalName = "traces" | "metrics" | "logs";
+
+export interface OtlpSignalDestination {
+  readonly signal: OtlpSignalName;
+  readonly endpoint: string;
+}
+
+export const OTLP_SIGNAL_PATHS = {
+  traces: "/v1/traces",
+  metrics: "/v1/metrics",
+  logs: "/v1/logs",
+} as const satisfies Record<OtlpSignalName, string>;
 
 export function classifyOtlpEndpointFailure(endpoint: string): OtlpEndpointFailureClass | undefined {
   if (endpoint.includes("${")) return "unresolved_placeholder";
@@ -17,6 +32,18 @@ export function classifyOtlpEndpointFailure(endpoint: string): OtlpEndpointFailu
   if (endpoint.includes("?")) return "query_not_supported";
   if (endpoint.includes("#")) return "fragment_not_supported";
   return undefined;
+}
+
+export function resolveOtlpSignalEndpoint(config: ObservMeConfig, signal: OtlpSignalName): string {
+  return config.otlp.signalEndpoints?.[signal] ?? appendOtlpSignalPath(config.otlp.endpoint, OTLP_SIGNAL_PATHS[signal]);
+}
+
+export function getEnabledOtlpSignalDestinations(config: ObservMeConfig): OtlpSignalDestination[] {
+  if (!config.enabled) return [];
+
+  return (Object.keys(OTLP_SIGNAL_PATHS) as OtlpSignalName[])
+    .filter(signal => config[signal].enabled)
+    .map(signal => ({ signal, endpoint: resolveOtlpSignalEndpoint(config, signal) }));
 }
 
 export function appendOtlpSignalPath(baseEndpoint: string, signalPath: string): string {

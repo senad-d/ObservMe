@@ -6,10 +6,13 @@ import {
   ALL_OBSERVME_METRIC_NAMES,
   LOG_EVENT_NAMES,
   OBSERVME_AGENT_LEASE_METRIC_OPTIONS,
+  OBSERVME_ORPHAN_AGENT_METRIC_LABEL_KEYS,
+  OBSERVME_ORPHAN_AGENT_METRIC_LABELS,
   OBSERVME_COUNTER_METRIC_NAMES,
   OBSERVME_GAUGE_METRIC_NAMES,
   OBSERVME_HISTOGRAM_METRIC_NAMES,
   OFFICIAL_GENAI_METRIC_NAMES,
+  createOrphanAgentMetricLabels,
 } from "../src/semconv/metrics.ts";
 
 const documentedMetricNames = [
@@ -145,6 +148,15 @@ test("exports every metric name documented in semantic convention section 12", (
   });
   assert.equal(OBSERVME_HISTOGRAM_METRIC_NAMES.AGENT_TREE_DEPTH, "observme_agent_tree_depth");
   assert.equal(OFFICIAL_GENAI_METRIC_NAMES.CLIENT_TOKEN_USAGE, "gen_ai.client.token.usage");
+});
+
+test("exports the exact orphan-agent metric label contract", () => {
+  assert.deepEqual(OBSERVME_ORPHAN_AGENT_METRIC_LABELS, { STATUS: "status", REASON: "reason" });
+  assert.deepEqual(OBSERVME_ORPHAN_AGENT_METRIC_LABEL_KEYS, ["status", "reason"]);
+  assert.deepEqual(createOrphanAgentMetricLabels("orphaned", "orphaned"), {
+    status: "orphaned",
+    reason: "orphaned",
+  });
 });
 
 test("exports every log event name documented in semantic convention section 14", () => {

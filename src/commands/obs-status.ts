@@ -6,6 +6,7 @@ import type {
   SessionConfigEnvFileStatus,
   SessionConfigEnvironmentStatus,
   SessionConfigProjectStatus,
+  SessionConfigRejectedSource,
 } from "../config/load-config.ts";
 import { loadSessionConfigWithDiagnostics } from "../config/load-config.ts";
 import type { CaptureConfig, ObservMeConfig } from "../config/schema.ts";
@@ -284,8 +285,17 @@ function formatConfigRejectionLines(diagnostics: SessionConfigDiagnostics): stri
   const rejection = diagnostics.rejection;
   if (!rejection) return [];
 
+  const rejectedSourceLines =
+    diagnostics.rejectedSources.length === 0
+      ? []
+      : [`Rejected config sources: ${diagnostics.rejectedSources.map(formatRejectedConfigSource).join(", ")}`];
+  const action = diagnostics.safeFallbackApplied
+    ? "safe defaults applied"
+    : "rejected sources ignored; accepted configuration retained";
+
   return [
-    `Config rejection: safe defaults applied (${rejection.issueCount} issue(s): ${rejection.issueCodes.join(", ")})`,
+    ...rejectedSourceLines,
+    `Config rejection: ${action} (${rejection.issueCount} issue(s): ${rejection.issueCodes.join(", ")})`,
   ];
 }
 
@@ -297,6 +307,13 @@ function formatConfigEffectiveSource(source: SessionConfigEffectiveSource): stri
   return "defaults";
 }
 
+function formatRejectedConfigSource(source: SessionConfigRejectedSource): string {
+  if (source === "global") return "global config";
+  if (source === "trusted_project") return "trusted project config (.pi/observme.yaml)";
+  if (source === "project_env") return "trusted project .env";
+  return "process environment";
+}
+
 function formatGlobalConfigStatus(diagnostics: SessionConfigDiagnostics): string[] {
   if (!diagnostics.globalConfigStatus) return [];
   return [`Global config: ${formatFileSourceStatus(diagnostics.globalConfigStatus, "global config")}`];
@@ -305,7 +322,7 @@ function formatGlobalConfigStatus(diagnostics: SessionConfigDiagnostics): string
 function formatProjectConfigStatus(status: SessionConfigProjectStatus): string {
   if (status === "loaded") return "loaded (trusted .pi/observme.yaml)";
   if (status === "skipped_untrusted") {
-    return "skipped (project is untrusted; safe defaults/global/env only)";
+    return "skipped (project is untrusted; defaults/global/environment only)";
   }
   if (status === "missing") return "missing (trusted project has no .pi/observme.yaml)";
   return formatFileSourceStatus(status, "trusted .pi/observme.yaml");

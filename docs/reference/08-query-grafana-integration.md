@@ -98,12 +98,14 @@ Last export error: none
 
 ### `/obs health`
 
-Checks Collector and Grafana reachability, and reports Grafana query auth/config readiness before datasource calls.
+Checks each enabled signal's effective OTLP endpoint and Grafana reachability, and reports Grafana query auth/config readiness before datasource calls. Collector probes use exporter-equivalent headers and TLS verification and do not follow redirects.
 
 ```text
 Collector transport security: TLS certificate verification enabled
 Grafana transport security: TLS certificate verification enabled
-Collector: reachable
+Collector traces: reachable
+Collector metrics: reachable
+Collector logs: reachable
 Grafana: reachable
 Tempo datasource: ok
 Loki datasource: ok
@@ -178,10 +180,10 @@ histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket[1h])) by (s
 ```
 
 ```promql
-sum(rate(observme_orphan_agents_total[1h])) by (agent_role, subagent_depth)
+sum(rate(observme_orphan_agents_total[1h])) by (status, reason)
 ```
 
-Per-agent and per-workflow drill-down should use Tempo/Loki attributes such as `pi_workflow_id`, `pi_agent_id`, `pi_agent_parent_id`, and trace/span IDs, not Prometheus labels.
+The orphan counter emits exactly the bounded `status` and `reason` labels. It does not emit role, depth, or execution IDs. Per-agent and per-workflow drill-down should use Tempo/Loki attributes such as `pi_workflow_id`, `pi_agent_id`, `pi_agent_parent_id`, and trace/span IDs, not Prometheus labels.
 
 ### `/obs tools`
 
@@ -250,7 +252,7 @@ Replays eligible entries from the current Pi session as OTEL **log records** onl
 
 The matching optional Tempo datasource placeholders are `{tempoDatasourceUid}`, `{{tempoDatasourceUid}}` (whitespace is allowed), `${tempoDatasourceUid}`, and `%TEMPO_DATASOURCE_UID%`. Trace IDs and datasource UIDs are URL-encoded before substitution.
 
-An empty template or a template containing `...` selects the structured Grafana Explore fallback. The fallback uses `query.grafana.url`, preserves any path prefix, and constructs the current `schemaVersion=1&panes=...` Tempo query with `query.grafana.datasourceUids.tempo`. This is the behavior used by the generated starter:
+An empty template or a template containing `...` selects the structured Grafana Explore fallback. The fallback uses `query.grafana.url`, preserves any path prefix, and constructs the current `schemaVersion=1&panes=...` Tempo query with `query.grafana.datasourceUids.tempo`. The inactive generated guide suggests this behavior for projects that explicitly adopt its local query settings:
 
 ```yaml
 traceUrlTemplate: http://localhost/explore?left=...

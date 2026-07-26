@@ -41,8 +41,31 @@
 
 ### Fixed
 
+- Reconciled the public integration API environment-key limit at 128 characters across runtime validation, boundary tests, and integration documentation.
+- Neutralized Unicode bidirectional controls in backend labels and final `/obs` notifications without stripping ordinary international text.
+- Disposed custom backfill exporters that settle after setup timeout without letting late failures replace the bounded timeout result.
+- Rolled back the shared integration event-bus listener when later extension factory initialization fails, preventing repeated failed Pi loads from accumulating stale providers.
+- Aligned orphan-agent producers, `/obs agents`, dashboards, reference queries, fixtures, and contract tests on the emitted bounded `status` and `reason` metric labels, replacing misleading role/depth attribution.
+- Recorded subagent spawn duration exactly once at usable launcher-handle acquisition or pre-handle failure, keeping delayed child completion, wait, and join time out of launcher-latency dashboards while preserving v1/v2 structural compatibility through an optional capability.
+- Prevented late child failure and recovery observations from being recounted after bounded accounting eviction with a fixed-size archive of evicted transition fingerprints.
+- Kept generated child, wait, and join lifecycle identifiers within the integration API's public bound so exact-boundary starts can echo every returned identity through completion while retaining deterministic duplicate detection.
+- Preserved exact `lead`, `helper`, `worker`, and `validator` lineage roles in integration API v2 `getContext()` results while keeping the legacy v1 role mapping unchanged.
+- Unified Grafana base-URL validation across config loading, status, readiness, health, and query transports, rejecting blank, unresolved, malformed, relative, credential-bearing, and non-HTTP(S) values with bounded diagnostics.
+- Closed diagnostic sanitization gaps for API-key and client-secret assignment variants, root/relative/home/Windows/UNC paths, and username-only or otherwise incomplete URL userinfo across command, OTEL, and Grafana failures.
+- Redacted complete POSIX, Windows drive, UNC, and local `file://` paths containing spaces in every non-`full` privacy path mode without changing ordinary URL or slash-separated prose handling.
+- Bounded configuration and programmatic timer values to Node's signed 32-bit maximum before command, query, backfill, shutdown, OTLP, and OpenTelemetry scheduler use.
+- Preserved full root `/obs` argument streams so `status`, `health`, and `session` reject unsupported extra, quoted, or repeated tokens before provider work.
+- Preserved fulfilled `/obs tools` and `/obs agents` Prometheus sections during sibling query failures, with section-specific bounded warnings and explicit all-failed unavailable states.
+- Required `/obs cost`, `/obs tools`, and `/obs agents` fixed Prometheus queries to return instant vectors, preserving valid empty vectors while surfacing scalar, string, and matrix contract failures.
+- Aligned `/obs health` Collector probes with every enabled effective OTLP signal endpoint, exporter headers and TLS verification, and no-follow redirect handling that prevents credential forwarding.
+- Bounded every anchored-create helper protocol response to two seconds and every disconnect/TERM/KILL reaping step to 250 ms, with identity-safe disconnect cleanup, forced termination, and fail-closed diagnostics for uncertain partial-file cleanup.
+- Made Pi handler error recorders and startup/UI notifications best-effort so secondary diagnostics cannot block tool middleware, reject handlers, or abort telemetry startup.
+- Guaranteed failed-start and session-shutdown controller cleanup despite throwing telemetry bookkeeping, retaining unresolved operations before best-effort export diagnostics so replacement startup remains fenced.
+- Changed the automatic trusted-project starter into an inactive commented setup guide so first start and reload retain active global defaults until project overrides are explicitly adopted.
+- Excluded every rejected configuration layer from merging and separated rejected-source provenance from the accepted effective source and whole-config fallback in logs, UI warnings, and `/obs status`.
+- Preserved explicit ObservMe disablement when unrelated configuration is invalid, keeping real session startup telemetry-free while reporting bounded rejection diagnostics.
 - Fixed dashboard and alert queries: removed a nonexistent lineage SLO matcher, guarded SLO indicators against empty-vector arithmetic, removed `for:` durations that prevented any-failure alerts from ever firing, and corrected node-graph value fields and label groupings.
-- Made multi-signal OpenTelemetry startup transactional with bounded rollback and clean recovery, kept failed signal shutdowns and timed-out flushes retryable, and integrated lease activation/deactivation with shutdown, reload, resume, and failed-start cleanup.
+- Made multi-signal OpenTelemetry startup transactional with bounded rollback and clean recovery, retained unresolved failed-start rollback behind a process-wide startup fence until late settlement or safe retry, kept failed signal shutdowns and timed-out flushes retryable, and integrated lease activation/deactivation with shutdown, reload, resume, and failed-start cleanup.
 - Hardened configuration and file I/O: bounded config/`.env` reads, symlink- and ancestor-swap-safe project file handling, rejection of credentials embedded in Grafana base URLs, and secret-free OTLP endpoint validation.
 - Bounded custom redaction names, matches, replacement size, and output so broad patterns fail closed, replaced regex heuristics with structural validation, and redacted complete PEM private-key blocks across live and backfilled capture.
 - Corrected telemetry accuracy for sessions, workflows, agents, turns (including `turnIndex: 0`), LLM requests, tools, interactive Bash, histograms, and failure/cancellation outcomes derived from Pi's typed terminal payloads.

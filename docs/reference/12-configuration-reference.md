@@ -148,7 +148,7 @@ observme:
 
 `otlp.endpoint` and every `otlp.signalEndpoints` value must be an absolute HTTP(S) URL without userinfo, unresolved placeholders, a query, or a fragment; credentials belong in `otlp.headers`. The base endpoint may contain an intentional path, to which ObservMe appends exactly one `/v1/{signal}` suffix using URL pathname semantics. Explicit signal endpoints must already end in their matching `/v1/traces`, `/v1/metrics`, or `/v1/logs` path.
 
-`query.grafana.url` must be an absolute HTTP(S) base URL without a username or password component. Authentication belongs only in `query.grafana.token` or the complete `query.grafana.username` and `query.grafana.password` pair. Credential-bearing base URLs fail configuration validation and query/transport preflight before network I/O. Diagnostics identify the bounded `embedded_credentials` failure class without rendering the rejected URL or either credential component.
+`query.grafana.url` must be an absolute HTTP(S) base URL without a username or password component; path-prefixed URLs such as `https://grafana.example.com/observability/team-a/` are supported. Blank values map to `missing_grafana_url` (`missing_url`), unresolved environment placeholders map to `unresolved_grafana_url` (`unresolved_placeholder`), malformed and relative values map to `invalid_grafana_url` (`malformed_url`), and non-HTTP(S) values such as `file:` and `ftp:` map to `invalid_grafana_url` (`unsupported_protocol`). Authentication belongs only in `query.grafana.token` or the complete `query.grafana.username` and `query.grafana.password` pair; URL userinfo maps to `embedded_grafana_url_credentials` (`embedded_credentials`). Primary config loading, `/obs status`, readiness, `/obs health`, and query/transport preflight use this same bounded, value-free policy before network I/O.
 
 `otlp.tls.enabled` is intentionally unsupported and rejected as an unknown setting: the `http://` or `https://` endpoint scheme is the single source of truth for whether TLS is used. The retained `otlp.tls.insecureSkipVerify` option is passed to every OTLP HTTP exporter as its certificate-verification behavior.
 
@@ -297,17 +297,18 @@ Project config, project `.env`, and starter-config creation use the same fail-cl
 - Reads and creates use opened file handles whose file identity, root identity, and canonical containment are verified before bytes are consumed or written. Concurrent replacement of a file, ancestor, or project root therefore rejects the operation instead of following the substituted target.
 - Global and project `observme.yaml` files are limited to 262,144 bytes (256 KiB), and project `.env` is limited to 131,072 bytes (128 KiB). Exact-limit files load; larger and sparse files are rejected from opened-file metadata before content allocation or parsing.
 - Normal missing in-root paths remain supported. Starter creation is exclusive and idempotent, never overwrites an existing file, and removes an unverified empty target if post-open validation fails.
-- Unsafe paths use `config_source_rejected`, while oversized files use `config_source_too_large`. Warnings and status diagnostics do not include canonical targets, external paths, file contents, or environment values; the rejected layer is skipped and other accepted layers continue to apply.
+- Unsafe paths use `config_source_rejected`, while oversized files use `config_source_too_large`. Warnings and status diagnostics do not include canonical targets, external paths, file contents, or environment values; the rejected layer contributes no values and other accepted layers continue to apply. Diagnostics name rejected sources separately from the accepted effective source and report a safe fallback only when whole-config validation actually replaced the merged result.
 
 Automatic project starter file:
 
 - On `session_start`, the extension creates `<cwd>/<CONFIG_DIR_NAME>/observme.yaml` (`<cwd>/.pi/observme.yaml` in the standard distribution) when the project is trusted and the file is missing.
 - The target is resolved as an absolute contained project path before mutation. The complete existence-check/create/write window uses Pi's per-file mutation queue, so concurrent starts create at most one starter.
 - Existing project config is never overwritten.
-- Edit the resolved project `observme.yaml` for custom setup: `otlp.endpoint` / signal-specific endpoints for the Collector, `resource.attributes` for service/project/tenant/environment labels, `capture` and `privacy` for content capture and redaction, and `query.grafana` / `query.links.traceUrlTemplate` for `/obs` query commands.
-- The generated starter mirrors the privacy-preserving local profile; raw content capture is disabled, redaction is enabled, and unsafe capture is disabled.
+- Every generated setting is commented out. The untouched guide contributes no project layer, so active global disablement, endpoints, environment, and transport policy remain effective across startup and reload.
+- To adopt project overrides, uncomment `observme:`, the required parent sections, and only the intended settings: `otlp.endpoint` / signal-specific endpoints for the Collector, `resource.attributes` for service/project/tenant/environment labels, `capture` and `privacy` for content capture and redaction, and `query.grafana` / `query.links.traceUrlTemplate` for `/obs` query commands.
+- The suggested profile is privacy-preserving when adopted; raw content capture is disabled, redaction is enabled, and unsafe capture is disabled.
 - Keep credentials out of YAML. Reference environment variables in YAML and set secrets through the shell or a trusted project `.env`.
-- Use `~/.pi/agent/observme.yaml` only for standard-distribution global defaults that should apply across projects; project `<CONFIG_DIR_NAME>/observme.yaml` overrides it after trust.
+- Use `~/.pi/agent/observme.yaml` for standard-distribution global defaults that should apply across projects. Only explicitly uncommented project settings override that global layer after trust.
 
 ## 5. Safe Production Defaults
 

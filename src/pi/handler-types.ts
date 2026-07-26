@@ -17,6 +17,7 @@ import type { ObservMeMetricSdk } from "../otel/metrics.ts";
 import type { ObservMeOtelSdkController } from "../otel/sdk.ts";
 import type { ObservMeTraceSdk } from "../otel/traces.ts";
 import type { BoundedMap } from "../util/bounded-map.ts";
+import type { BoundedMembershipFilter } from "../util/bounded-membership-filter.ts";
 import type { AgentLineageContext } from "./agent-lineage.ts";
 import type { ActiveAgentLeaseController } from "./active-agent-lease.ts";
 import type { AgentTreeTracker } from "./agent-tree-tracker.ts";
@@ -162,6 +163,7 @@ export interface ObservMeTelemetrySession {
   toolCallSequence: number;
   turnSequences: TurnSequenceRegistry;
   childFailureAccounting?: BoundedMap<string, ChildFailureAccountingState>;
+  childFailureAccountingArchive?: BoundedMembershipFilter;
 }
 
 export interface ObservMeMetrics {

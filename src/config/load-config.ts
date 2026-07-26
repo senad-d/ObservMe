@@ -53,6 +53,7 @@ interface ConfigSourceResult<T, TStatus extends string = BaseSessionConfigSource
   readonly status: TStatus;
   readonly value?: T;
   readonly issueCode?: ConfigSourceIssueCode;
+  readonly explicitEnablement?: boolean;
 }
 
 export interface ProjectTrustContext {
@@ -87,6 +88,7 @@ export type SessionConfigProjectStatus = BaseSessionConfigSourceStatus | "skippe
 export type SessionConfigEnvFileStatus = BaseSessionConfigSourceStatus | "skipped_disabled" | "skipped_untrusted";
 export type SessionConfigEnvironmentStatus = "loaded" | "missing" | "rejected";
 export type SessionConfigEffectiveSource = "runtime_options" | "environment" | "trusted_project" | "global" | "defaults";
+export type SessionConfigRejectedSource = "global" | "trusted_project" | "project_env" | "process_environment";
 
 export interface SessionConfigDiagnostics {
   readonly projectTrusted: boolean;
@@ -95,6 +97,8 @@ export interface SessionConfigDiagnostics {
   readonly envFileStatus?: SessionConfigEnvFileStatus;
   readonly environmentStatus?: SessionConfigEnvironmentStatus;
   readonly effectiveSource: SessionConfigEffectiveSource;
+  readonly rejectedSources: readonly SessionConfigRejectedSource[];
+  readonly safeFallbackApplied: boolean;
   readonly globalConfigLoaded: boolean;
   readonly environmentOverrides: boolean;
   readonly runtimeOptionsApplied: boolean;
@@ -116,11 +120,35 @@ const observmeYamlFileName = "observme.yaml";
 const yamlIndentPattern = /^ */u;
 
 export async function loadFactoryConfig(options: LoadConfigOptions = {}): Promise<ObservMeConfig> {
-  const globalConfig = await readConfigFile(resolveGlobalConfigPath(options), options);
+  const globalSource = classifyConfigSource(
+    await readConfigSource(resolveGlobalConfigPath(options), options),
+  );
   const environment = options.env ?? process.env;
-  const config = mergeConfigLayers([defaultObservMeConfig, globalConfig, envToConfig(options.env), options.runtimeOptions]);
-  const validConfig = ensureValidObservMeConfig(config, { env: options.env, logger: options.logger });
-  const tenantSaltEnvironment = selectTenantSaltEnvironment(validConfig, undefined, environment);
+  const environmentConfig = envToConfig(environment);
+  const environmentSource = classifyEnvironmentSource(environment, environmentConfig);
+  const preserveExplicitDisablement =
+    resolveExplicitEnablement([
+      globalSource.explicitEnablement,
+      environmentSource.explicitEnablement,
+      readExplicitEnablement(options.runtimeOptions),
+    ]) === false;
+  const configLayers = [
+    defaultObservMeConfig,
+    globalSource.value,
+    environmentSource.value,
+    options.runtimeOptions,
+  ];
+  const config = mergeConfigLayers(configLayers);
+  const validConfig = ensureValidObservMeConfig(config, {
+    env: options.env,
+    logger: options.logger,
+    preserveExplicitDisablement,
+  });
+  const disablementPreserved = preserveExplicitDisablement && validConfig.enabled === false;
+  logConfigSourceFailure("global config", globalSource, options.logger, disablementPreserved);
+  logConfigSourceFailure("process environment", environmentSource, options.logger, disablementPreserved);
+  const acceptedEnvironment = environmentSource.status === "loaded" ? environment : {};
+  const tenantSaltEnvironment = selectTenantSaltEnvironment(validConfig, undefined, acceptedEnvironment);
 
   return registerTenantSaltEnvironment(validConfig, tenantSaltEnvironment);
 }
@@ -139,43 +167,63 @@ export async function loadSessionConfigWithDiagnostics(options: LoadSessionConfi
   const processEnvironment = options.env ?? process.env;
   const envFileConfig = envFileSource.value ? envToConfig(envFileSource.value) : undefined;
   const classifiedEnvFileSource = classifyConfigSource(envFileSource, envFileConfig);
+  const acceptedEnvFileConfig = classifiedEnvFileSource.status === "loaded" ? envFileConfig : undefined;
   const environmentConfig = envToConfig(processEnvironment);
   const environmentSource = classifyEnvironmentSource(processEnvironment, environmentConfig);
-  const config = mergeConfigLayers([
+  const preserveExplicitDisablement =
+    resolveExplicitEnablement([
+      globalSource.explicitEnablement,
+      projectSource.explicitEnablement,
+      classifiedEnvFileSource.explicitEnablement,
+      environmentSource.explicitEnablement,
+      readExplicitEnablement(options.runtimeOptions),
+    ]) === false;
+  const configLayers = [
     defaultObservMeConfig,
     globalSource.value,
     projectSource.value,
-    envFileConfig,
-    environmentConfig,
+    acceptedEnvFileConfig,
+    environmentSource.value,
     options.runtimeOptions,
-  ]);
+  ];
+  const config = mergeConfigLayers(configLayers);
   const validation = ensureValidObservMeConfigWithDiagnostics(config, {
     env: processEnvironment,
     isProjectTrusted: projectTrusted,
     projectConfigWasRead: projectSource.value !== undefined,
+    preserveExplicitDisablement,
   });
-  const rejection = combineConfigRejections(validation.rejection, [
+  const sources = [globalSource, projectSource, classifiedEnvFileSource, environmentSource];
+  const rejection = combineConfigRejections(validation.rejection, sources);
+  const rejectedSources = collectRejectedConfigSources(
     globalSource,
     projectSource,
     classifiedEnvFileSource,
     environmentSource,
-  ]);
-  logSessionConfigRejection(rejection, options.logger);
+  );
   const diagnostics = createSessionConfigDiagnostics({
     globalSource,
     projectSource,
     envFileSource: classifiedEnvFileSource,
     environmentSource,
     projectTrusted,
-    envFileConfig,
-    environmentConfig,
+    envFileConfig: acceptedEnvFileConfig,
+    environmentConfig: environmentSource.value,
     runtimeOptions: options.runtimeOptions,
+    rejectedSources,
+    safeFallbackApplied: validation.rejection !== undefined,
     rejection,
   });
+  logSessionConfigRejection(
+    diagnostics,
+    options.logger,
+    preserveExplicitDisablement && validation.config.enabled === false,
+  );
+  const acceptedEnvironment = environmentSource.status === "loaded" ? processEnvironment : {};
   const tenantSaltEnvironment = selectTenantSaltEnvironment(
     validation.config,
     classifiedEnvFileSource.value,
-    processEnvironment,
+    acceptedEnvironment,
   );
 
   return {
@@ -252,8 +300,10 @@ function createSessionConfigDiagnostics(options: {
   readonly environmentSource: ConfigSourceResult<DeepPartial<ObservMeConfig>, SessionConfigEnvironmentStatus>;
   readonly projectTrusted: boolean;
   readonly envFileConfig?: DeepPartial<ObservMeConfig>;
-  readonly environmentConfig: DeepPartial<ObservMeConfig>;
+  readonly environmentConfig?: DeepPartial<ObservMeConfig>;
   readonly runtimeOptions?: DeepPartial<ObservMeConfig>;
+  readonly rejectedSources: readonly SessionConfigRejectedSource[];
+  readonly safeFallbackApplied: boolean;
   readonly rejection?: ConfigRejectionDiagnostic;
 }): SessionConfigDiagnostics {
   const environmentOverrides = hasConfigLayer(options.envFileConfig) || hasConfigLayer(options.environmentConfig);
@@ -271,6 +321,8 @@ function createSessionConfigDiagnostics(options: {
       environmentOverrides,
       runtimeOptionsApplied,
     }),
+    rejectedSources: options.rejectedSources,
+    safeFallbackApplied: options.safeFallbackApplied,
     globalConfigLoaded: options.globalSource.status === "loaded",
     environmentOverrides,
     runtimeOptionsApplied,
@@ -295,6 +347,24 @@ function hasConfigLayer(layer: DeepPartial<ObservMeConfig> | undefined): boolean
   return layer !== undefined && Object.keys(layer).length > 0;
 }
 
+function resolveExplicitEnablement(decisions: Array<boolean | undefined>): boolean {
+  let enabled: boolean = defaultObservMeConfig.enabled;
+
+  for (const decision of decisions) {
+    if (decision !== undefined) enabled = decision;
+  }
+
+  return enabled;
+}
+
+function readExplicitEnablement(layer: DeepPartial<ObservMeConfig> | undefined): boolean | undefined {
+  try {
+    return typeof layer?.enabled === "boolean" ? layer.enabled : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function classifyConfigSource<T, TStatus extends string>(
   source: ConfigSourceResult<T, TStatus>,
   configLayer?: DeepPartial<ObservMeConfig>,
@@ -302,12 +372,13 @@ function classifyConfigSource<T, TStatus extends string>(
   if (source.status !== "loaded") return source;
 
   const layer = configLayer ?? (source.value as DeepPartial<ObservMeConfig> | undefined);
-  if (!layer || !isConfigLayerStructurallyInvalid(layer)) return source;
+  const explicitEnablement = readExplicitEnablement(layer);
+  if (!layer || !isConfigLayerStructurallyInvalid(layer)) return { ...source, explicitEnablement };
 
   return {
-    ...source,
     status: "rejected" as TStatus,
     issueCode: "invalid_config_shape",
+    explicitEnablement,
   };
 }
 
@@ -315,11 +386,16 @@ function classifyEnvironmentSource(
   environment: NodeJS.ProcessEnv,
   config: DeepPartial<ObservMeConfig>,
 ): ConfigSourceResult<DeepPartial<ObservMeConfig>, SessionConfigEnvironmentStatus> {
+  const explicitEnablement = readExplicitEnablement(config);
   if (!hasObservMeEnvironmentInput(environment)) return { status: "missing", value: config };
   if (isConfigLayerStructurallyInvalid(config)) {
-    return { status: "rejected", value: config, issueCode: "invalid_config_shape" };
+    return {
+      status: "rejected",
+      issueCode: "invalid_config_shape",
+      explicitEnablement,
+    };
   }
-  return { status: "loaded", value: config };
+  return { status: "loaded", value: config, explicitEnablement };
 }
 
 function hasObservMeEnvironmentInput(environment: NodeJS.ProcessEnv): boolean {
@@ -335,6 +411,20 @@ function isConfigLayerStructurallyInvalid(layer: DeepPartial<ObservMeConfig>): b
   } catch {
     return true;
   }
+}
+
+function collectRejectedConfigSources(
+  globalSource: ConfigSourceResult<unknown, string>,
+  projectSource: ConfigSourceResult<unknown, string>,
+  envFileSource: ConfigSourceResult<unknown, string>,
+  environmentSource: ConfigSourceResult<unknown, string>,
+): SessionConfigRejectedSource[] {
+  const rejectedSources: SessionConfigRejectedSource[] = [];
+  if (globalSource.issueCode) rejectedSources.push("global");
+  if (projectSource.issueCode) rejectedSources.push("trusted_project");
+  if (envFileSource.issueCode) rejectedSources.push("project_env");
+  if (environmentSource.issueCode) rejectedSources.push("process_environment");
+  return rejectedSources;
 }
 
 function combineConfigRejections(
@@ -353,29 +443,64 @@ function combineConfigRejections(
 }
 
 function logSessionConfigRejection(
-  rejection: ConfigRejectionDiagnostic | undefined,
+  diagnostics: SessionConfigDiagnostics,
   logger: ConfigLogSink | undefined,
+  disablementPreserved: boolean,
 ): void {
+  const rejection = diagnostics.rejection;
   if (!rejection || !logger?.warn) return;
+
+  const sourceDescription = describeRejectedConfigSources(diagnostics.rejectedSources);
+  const actionDescription = describeConfigRejectionAction(
+    diagnostics.safeFallbackApplied,
+    disablementPreserved,
+  );
 
   try {
     logger.warn(
-      `ObservMe config rejected (${rejection.issueCodes.join(", ")}); ${rejection.issueCount} issue(s), safe defaults applied.`,
+      `ObservMe rejected ${sourceDescription} (${rejection.issueCodes.join(", ")}); ${rejection.issueCount} issue(s), ${actionDescription}.`,
     );
   } catch {
     return;
   }
 }
 
+function describeRejectedConfigSources(sources: readonly SessionConfigRejectedSource[]): string {
+  if (sources.length === 0) return "merged configuration";
+  const sourceNames = sources.map(formatRejectedConfigSource).join(", ");
+  return `${sourceNames} ${sources.length === 1 ? "source" : "sources"}`;
+}
+
+function describeConfigRejectionAction(safeFallbackApplied: boolean, disablementPreserved: boolean): string {
+  if (safeFallbackApplied && disablementPreserved) {
+    return "safe defaults applied with explicit disablement preserved; telemetry remains disabled";
+  }
+  if (safeFallbackApplied) return "safe defaults applied";
+  if (disablementPreserved) return "rejected layers ignored with explicit disablement preserved; telemetry remains disabled";
+  return "rejected layers ignored; accepted configuration remains effective";
+}
+
+function formatRejectedConfigSource(source: SessionConfigRejectedSource): string {
+  if (source === "global") return "global config";
+  if (source === "trusted_project") return "trusted project config";
+  if (source === "project_env") return "trusted project .env";
+  return "process environment";
+}
+
 function logConfigSourceFailure(
   label: string,
   source: ConfigSourceResult<unknown, string>,
   logger: ConfigLogSink | undefined,
+  disablementPreserved: boolean,
 ): void {
   if (!source.issueCode || !logger?.warn) return;
 
+  const disablementDescription = disablementPreserved
+    ? " Explicit disablement was preserved; telemetry remains disabled."
+    : "";
+
   try {
-    logger.warn(`ObservMe ${label} source was ignored (${source.issueCode}); safe defaults applied.`);
+    logger.warn(`ObservMe ${label} source was ignored (${source.issueCode}).${disablementDescription}`);
   } catch {
     return;
   }
@@ -387,15 +512,6 @@ export function parseObservMeConfigText(text: string): DeepPartial<ObservMeConfi
 
   if (isPlainObject(observmeConfig)) return observmeConfig as unknown as DeepPartial<ObservMeConfig>;
   return parsed as unknown as DeepPartial<ObservMeConfig>;
-}
-
-async function readConfigFile(
-  path: string,
-  options: LoadConfigOptions,
-): Promise<DeepPartial<ObservMeConfig> | undefined> {
-  const source = classifyConfigSource(await readConfigSource(path, options));
-  logConfigSourceFailure("global config", source, options.logger);
-  return source.value;
 }
 
 async function readConfigSource(

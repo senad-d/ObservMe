@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../query/prometheus.ts";
-import { createPrometheusQueryClient } from "../query/prometheus.ts";
+import { assertPrometheusVectorResult, createPrometheusQueryClient } from "../query/prometheus.ts";
 import {
   boundObsCommandOutput,
   normalizeObsBackendLabel,
@@ -10,7 +10,12 @@ import {
 } from "../safety/display-bounds.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { loadObsCommandConfig, notifyObsCommand } from "./obs-command-support.ts";
-import { appendObsRecoveryHint, formatObsCommandFailure } from "./obs-diagnostics.ts";
+import {
+  appendObsRecoveryHint,
+  formatObsCommandDiagnostic,
+  formatObsCommandFailure,
+  sanitizeObsDiagnosticText,
+} from "./obs-diagnostics.ts";
 
 export interface ObsToolsCommandContext {
   readonly cwd?: string;
@@ -33,12 +38,20 @@ export interface ObsToolFailureRow {
   readonly timestampUnixSeconds?: string;
 }
 
+export type ObsToolsQuerySection = "calls" | "failures";
+
+export interface ObsToolsQueryWarning {
+  readonly section: ObsToolsQuerySection;
+  readonly message: string;
+}
+
 export interface ObsToolsSnapshot {
   readonly window: "1h";
   readonly callQuery: string;
   readonly failureQuery: string;
   readonly calls: readonly ObsToolCallRow[];
   readonly failures: readonly ObsToolFailureRow[];
+  readonly queryWarnings?: readonly ObsToolsQueryWarning[];
 }
 
 export type ObsToolsConfigLoader = (options: LoadSessionConfigOptions) => Promise<ObservMeConfig>;
@@ -63,14 +76,22 @@ const OBS_TOOLS_SUBCOMMAND = "tools";
 const OBS_TOOLS_WINDOW = "1h";
 const OBS_TOOLS_USAGE = "Usage: /obs tools";
 const OBS_TOOLS_ERROR_NEXT_ACTION = "run /obs health and verify query.grafana.url, Grafana credentials, and the Metrics datasource UID.";
+const OBS_TOOLS_CALLS_ERROR_NEXT_ACTION = "verify the Metrics datasource and observme_tool_calls_total with /obs health, then rerun /obs tools.";
+const OBS_TOOLS_FAILURES_ERROR_NEXT_ACTION = "verify the Metrics datasource and observme_tool_failures_total with /obs health, then rerun /obs tools.";
 const OBS_TOOLS_NO_CALLS_NEXT_ACTION = "run tool activity, then verify the Metrics datasource with /obs health.";
 const OBS_TOOLS_NO_FAILURES_NEXT_ACTION = "check after a failing tool call, then verify Metrics labels with /obs health.";
 
 type ObsToolsRequestStatus = "tools" | "usage";
 
+interface ObsToolsQueryOutcome {
+  readonly result: QueryResult;
+  readonly warning?: ObsToolsQueryWarning;
+}
+
 interface ObsToolsQueryResults {
   readonly calls: QueryResult;
   readonly failures: QueryResult;
+  readonly warnings: readonly ObsToolsQueryWarning[];
 }
 
 export function registerObsToolsCommand(pi: ExtensionAPI, options: RegisterObsToolsCommandOptions = {}): void {
@@ -95,7 +116,7 @@ export async function handleObsToolsCommand(
 
   try {
     const snapshot = await resolveObsToolsSnapshot(ctx, options);
-    await notifyObsCommand(ctx, renderObsTools(snapshot), "info");
+    await notifyObsCommand(ctx, renderObsTools(snapshot), resolveObsToolsNotificationType(snapshot));
   } catch (error) {
     await notifyObsCommand(
       ctx,
@@ -125,6 +146,7 @@ export async function getObsToolsSnapshot(
     failureQuery: OBS_TOOLS_FAILURES_PROMQL,
     calls: result.calls.series.map(toObsToolCallRow).filter(isObsToolCallRow),
     failures: result.failures.series.map(toObsToolFailureRow).filter(isObsToolFailureRow),
+    queryWarnings: result.warnings,
   };
 }
 
@@ -134,9 +156,13 @@ export function renderObsTools(snapshot: ObsToolsSnapshot): string {
   const callSelection = selectObsCommandRows(calls);
   const failureSelection = selectObsCommandRows(failures);
   const window = normalizeObsBackendLabel(snapshot.window) ?? OBS_TOOLS_WINDOW;
+  const callsWarning = findObsToolsQueryWarning(snapshot, "calls");
+  const failuresWarning = findObsToolsQueryWarning(snapshot, "failures");
   const lines = [`Tool calls by tool (last ${window})`];
 
-  if (calls.length === 0) {
+  if (callsWarning) {
+    lines.push(renderObsToolsQueryWarning("Tool calls", callsWarning));
+  } else if (calls.length === 0) {
     lines.push(appendObsRecoveryHint("No tool call metrics found.", OBS_TOOLS_NO_CALLS_NEXT_ACTION));
   } else {
     lines.push(...callSelection.rows.map(renderObsToolCallRow));
@@ -144,7 +170,9 @@ export function renderObsTools(snapshot: ObsToolsSnapshot): string {
   }
 
   lines.push(`Tool failures by tool/error (last ${window})`);
-  if (failures.length === 0) {
+  if (failuresWarning) {
+    lines.push(renderObsToolsQueryWarning("Tool failures", failuresWarning));
+  } else if (failures.length === 0) {
     lines.push(appendObsRecoveryHint("No tool failure metrics found.", OBS_TOOLS_NO_FAILURES_NEXT_ACTION));
   } else {
     lines.push(...failureSelection.rows.map(renderObsToolFailureRow));
@@ -187,9 +215,45 @@ async function queryObsTools(config: ObservMeConfig, options: ObsToolsSnapshotOp
     client.queryPrometheus(OBS_TOOLS_FAILURES_PROMQL, undefined, { resultLimit: "metricSeries" }),
   ]);
 
-  if (callsResult.status === "rejected") throw callsResult.reason;
-  if (failuresResult.status === "rejected") throw failuresResult.reason;
-  return { calls: callsResult.value, failures: failuresResult.value };
+  const calls = resolveObsToolsQueryOutcome(callsResult, "calls");
+  const failures = resolveObsToolsQueryOutcome(failuresResult, "failures");
+  const warnings = [calls.warning, failures.warning].filter(isObsToolsQueryWarning);
+
+  return { calls: calls.result, failures: failures.result, warnings };
+}
+
+function resolveObsToolsQueryOutcome(
+  settled: PromiseSettledResult<QueryResult>,
+  section: ObsToolsQuerySection,
+): ObsToolsQueryOutcome {
+  if (settled.status === "rejected") {
+    return createUnavailableObsToolsQueryOutcome(section, settled.reason);
+  }
+
+  try {
+    assertPrometheusVectorResult(settled.value);
+    return { result: settled.value };
+  } catch (error) {
+    return createUnavailableObsToolsQueryOutcome(section, error);
+  }
+}
+
+function createUnavailableObsToolsQueryOutcome(
+  section: ObsToolsQuerySection,
+  error: unknown,
+): ObsToolsQueryOutcome {
+  const nextAction = section === "calls" ? OBS_TOOLS_CALLS_ERROR_NEXT_ACTION : OBS_TOOLS_FAILURES_ERROR_NEXT_ACTION;
+  return {
+    result: createEmptyObsToolsQueryResult(),
+    warning: {
+      section,
+      message: formatObsCommandDiagnostic(error, nextAction),
+    },
+  };
+}
+
+function createEmptyObsToolsQueryResult(): QueryResult {
+  return { resultType: "vector", series: [] };
 }
 
 function toObsToolCallRow(series: PrometheusMetricSeries): ObsToolCallRow | undefined {
@@ -254,6 +318,24 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   return normalizeObsBackendLabel(value);
 }
 
+function resolveObsToolsNotificationType(snapshot: ObsToolsSnapshot): "info" | "warning" | "error" {
+  const callsUnavailable = findObsToolsQueryWarning(snapshot, "calls") !== undefined;
+  const failuresUnavailable = findObsToolsQueryWarning(snapshot, "failures") !== undefined;
+  if (callsUnavailable && failuresUnavailable) return "error";
+  return callsUnavailable || failuresUnavailable ? "warning" : "info";
+}
+
+function findObsToolsQueryWarning(
+  snapshot: ObsToolsSnapshot,
+  section: ObsToolsQuerySection,
+): ObsToolsQueryWarning | undefined {
+  return snapshot.queryWarnings?.find(warning => warning.section === section);
+}
+
+function renderObsToolsQueryWarning(label: string, warning: ObsToolsQueryWarning): string {
+  return `${label} unavailable: ${sanitizeObsDiagnosticText(warning.message)}`;
+}
+
 function renderObsToolCallRow(row: ObsToolCallRow): string {
   return `${row.toolName}: ${formatRatePerSecond(row.ratePerSecond)}`;
 }
@@ -268,6 +350,10 @@ function isObsToolCallRow(row: ObsToolCallRow | undefined): row is ObsToolCallRo
 
 function isObsToolFailureRow(row: ObsToolFailureRow | undefined): row is ObsToolFailureRow {
   return row !== undefined;
+}
+
+function isObsToolsQueryWarning(warning: ObsToolsQueryWarning | undefined): warning is ObsToolsQueryWarning {
+  return warning !== undefined;
 }
 
 function parseObsToolsRequest(args: string): ObsToolsRequestStatus {

@@ -6,12 +6,17 @@ import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import type { IMetricReader, PushMetricExporter } from "@opentelemetry/sdk-metrics";
 import { MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import type { MetricsConfig, ObservMeConfig } from "../config/schema.ts";
-import { appendOtlpSignalPath } from "./otlp-endpoint.ts";
-import { buildOtlpHttpAgentOptions, type OtlpHttpAgentOptions } from "./otlp-http-options.ts";
+import { normalizeNodeTimerMilliseconds } from "../config/timer-limits.ts";
+import { OTLP_SIGNAL_PATHS, resolveOtlpSignalEndpoint } from "./otlp-endpoint.ts";
+import {
+  buildOtlpHttpAgentOptions,
+  buildOtlpHttpHeaders,
+  type OtlpHttpAgentOptions,
+} from "./otlp-http-options.ts";
 import type { StartOtelSdkFactoryOptions } from "./sdk.ts";
 
 export const OBSERVME_METER_NAME = "@senad-d/observme";
-export const OTLP_METRIC_SIGNAL_PATH = "/v1/metrics";
+export const OTLP_METRIC_SIGNAL_PATH = OTLP_SIGNAL_PATHS.metrics;
 
 export const DOCUMENTED_METRIC_EXPORT_DEFAULTS = {
   exportIntervalMillis: 15000,
@@ -161,8 +166,8 @@ export function buildMetricExporterWiring(config: ObservMeConfig): MetricExporte
     enabled: config.enabled && config.metrics.enabled,
     exporter: buildOtlpMetricExporterOptions(config),
     reader: {
-      exportIntervalMillis: config.metrics.exportIntervalMillis,
-      exportTimeoutMillis: config.metrics.exportTimeoutMillis,
+      exportIntervalMillis: normalizeNodeTimerMilliseconds(config.metrics.exportIntervalMillis),
+      exportTimeoutMillis: normalizeNodeTimerMilliseconds(config.metrics.exportTimeoutMillis),
     },
   };
 }
@@ -170,14 +175,14 @@ export function buildMetricExporterWiring(config: ObservMeConfig): MetricExporte
 export function buildOtlpMetricExporterOptions(config: ObservMeConfig): OtlpMetricExporterOptions {
   return {
     url: resolveMetricEndpoint(config),
-    headers: { ...config.otlp.headers },
-    timeoutMillis: config.otlp.timeoutMs,
+    headers: buildOtlpHttpHeaders(config),
+    timeoutMillis: normalizeNodeTimerMilliseconds(config.otlp.timeoutMs),
     httpAgentOptions: buildOtlpHttpAgentOptions(config),
   };
 }
 
 export function resolveMetricEndpoint(config: ObservMeConfig): string {
-  return config.otlp.signalEndpoints?.metrics ?? appendOtlpSignalPath(config.otlp.endpoint, OTLP_METRIC_SIGNAL_PATH);
+  return resolveOtlpSignalEndpoint(config, "metrics");
 }
 
 function createOtlpMetricExporter(options: OtlpMetricExporterOptions): PushMetricExporter {

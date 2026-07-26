@@ -14,6 +14,7 @@ import {
   LineageValidationError,
 } from "../src/pi/agent-lineage.ts";
 import { AgentTreeTracker, assertNoHighCardinalityMetricLabels } from "../src/pi/agent-tree-tracker.ts";
+import { OBSERVME_ORPHAN_AGENT_METRIC_LABEL_KEYS } from "../src/semconv/metrics.ts";
 
 let generatedIdCounter = 0;
 
@@ -457,6 +458,7 @@ test("agent tree metric labels exclude lineage identifiers", () => {
   const labels = tracker.metricLabels("active", false);
 
   assert.deepEqual(labels, { status: "active", reason: "attached" });
+  assert.deepEqual(Object.keys(labels), OBSERVME_ORPHAN_AGENT_METRIC_LABEL_KEYS);
   assert.doesNotThrow(() => assertNoHighCardinalityMetricLabels(labels));
   assert.throws(() => assertNoHighCardinalityMetricLabels({ "pi.workflow.id": "workflow-1" }), /High-cardinality/u);
 });

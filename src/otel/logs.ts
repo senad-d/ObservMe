@@ -6,12 +6,17 @@ import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
 import type { LogRecordExporter, LogRecordProcessor } from "@opentelemetry/sdk-logs";
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
 import type { LogsBatchConfig, ObservMeConfig } from "../config/schema.ts";
-import { appendOtlpSignalPath } from "./otlp-endpoint.ts";
-import { buildOtlpHttpAgentOptions, type OtlpHttpAgentOptions } from "./otlp-http-options.ts";
+import { normalizeNodeTimerMilliseconds } from "../config/timer-limits.ts";
+import { OTLP_SIGNAL_PATHS, resolveOtlpSignalEndpoint } from "./otlp-endpoint.ts";
+import {
+  buildOtlpHttpAgentOptions,
+  buildOtlpHttpHeaders,
+  type OtlpHttpAgentOptions,
+} from "./otlp-http-options.ts";
 import type { StartOtelSdkFactoryOptions } from "./sdk.ts";
 
 export const OBSERVME_LOGGER_NAME = "@senad-d/observme";
-export const OTLP_LOG_SIGNAL_PATH = "/v1/logs";
+export const OTLP_LOG_SIGNAL_PATH = OTLP_SIGNAL_PATHS.logs;
 
 export const DOCUMENTED_LOG_BATCH_DEFAULTS = {
   maxQueueSize: 2048,
@@ -108,7 +113,7 @@ export class ObservMeLogSdk {
     this.#provider = this.#loggerProviderFactory({
       resource: createLogResource(this.#config),
       processors: [this.#processor],
-      forceFlushTimeoutMillis: this.#config.shutdown.flushTimeoutMs,
+      forceFlushTimeoutMillis: normalizeNodeTimerMilliseconds(this.#config.shutdown.flushTimeoutMs),
     });
 
     this.#logger = this.#provider.getLogger(this.#loggerName);
@@ -158,21 +163,24 @@ export function buildLogExporterWiring(config: ObservMeConfig): LogExporterWirin
   return {
     enabled: config.enabled && config.logs.enabled,
     exporter: buildOtlpLogExporterOptions(config),
-    batch: { ...config.logs.batch },
+    batch: {
+      ...config.logs.batch,
+      scheduledDelayMillis: normalizeNodeTimerMilliseconds(config.logs.batch.scheduledDelayMillis),
+    },
   };
 }
 
 export function buildOtlpLogExporterOptions(config: ObservMeConfig): OtlpLogExporterOptions {
   return {
     url: resolveLogEndpoint(config),
-    headers: { ...config.otlp.headers },
-    timeoutMillis: config.otlp.timeoutMs,
+    headers: buildOtlpHttpHeaders(config),
+    timeoutMillis: normalizeNodeTimerMilliseconds(config.otlp.timeoutMs),
     httpAgentOptions: buildOtlpHttpAgentOptions(config),
   };
 }
 
 export function resolveLogEndpoint(config: ObservMeConfig): string {
-  return config.otlp.signalEndpoints?.logs ?? appendOtlpSignalPath(config.otlp.endpoint, OTLP_LOG_SIGNAL_PATH);
+  return resolveOtlpSignalEndpoint(config, "logs");
 }
 
 function createOtlpLogExporter(options: OtlpLogExporterOptions): LogRecordExporter {

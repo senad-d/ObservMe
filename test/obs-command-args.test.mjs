@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { handleObsBackfillCommand } from "../src/commands/obs-backfill.ts";
-import { handleObsHealthCommand } from "../src/commands/obs-health.ts";
 import { handleObsTraceCommand } from "../src/commands/obs-trace.ts";
 import {
   OBS_COMMAND_OUTPUT_MAX_CHARS,
@@ -41,7 +40,7 @@ function createFakeCommandPi() {
 }
 
 const oversizedProviderError = new Error(
-  `${"unsafe\u001b\u0007\u0085\u2028\u2029\n".repeat(OBS_COMMAND_OUTPUT_MAX_ROWS + 10)}${"x".repeat(OBS_COMMAND_OUTPUT_MAX_CHARS)}`,
+  `${"unsafe\u061C\u200E\u200F\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069\u001b\u0007\u0085\u2028\u2029\n".repeat(OBS_COMMAND_OUTPUT_MAX_ROWS + 10)}${"x".repeat(OBS_COMMAND_OUTPUT_MAX_CHARS)}`,
 );
 
 function throwOversizedProviderError() {
@@ -248,7 +247,10 @@ test("every root /obs subcommand applies the shared final notification policy", 
   for (const notification of notifications) {
     assert.ok(notification.message.length <= OBS_COMMAND_OUTPUT_MAX_CHARS);
     assert.ok(notification.message.split("\n").length <= OBS_COMMAND_OUTPUT_MAX_ROWS);
-    assert.doesNotMatch(notification.message.replaceAll("\n", ""), /[\p{Cc}\p{Zl}\p{Zp}]/u);
+    assert.doesNotMatch(
+      notification.message.replaceAll("\n", ""),
+      /[\p{Cc}\p{Zl}\p{Zp}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u,
+    );
   }
   assert.ok(notifications.some(notification => /… output truncated$/u.test(notification.message)));
 });
@@ -290,19 +292,33 @@ test("root /obs dispatch treats quoted-like raw values as whitespace tokens", as
   assert.match(notifications[1].message, /Invalid --since duration: '1h'\./u);
 });
 
-test("simple /obs subcommands reject unknown extra arguments before resolving snapshots", async () => {
+test("exact root /obs subcommands reject extra, quoted, and repeated tokens before provider work", async () => {
+  const pi = createFakeCommandPi();
+  const calls = [];
   const notifications = [];
-  let snapshotCalls = 0;
+  const malformedRequests = [
+    { subcommand: "status", args: "status --verbose" },
+    { subcommand: "status", args: 'status "extra value"' },
+    { subcommand: "status", args: "status status" },
+    { subcommand: "health", args: "health --verbose" },
+    { subcommand: "health", args: 'health "extra value"' },
+    { subcommand: "health", args: "health health" },
+    { subcommand: "session", args: "session --verbose" },
+    { subcommand: "session", args: 'session "extra value"' },
+    { subcommand: "session", args: "session session" },
+  ];
 
-  await handleObsHealthCommand("health --verbose", createCommandContext(notifications), {
-    getHealth: () => {
-      snapshotCalls += 1;
-      throw new Error("should not resolve invalid health command");
-    },
-  });
+  registerObsCommand(pi, createRootDispatchOptions(calls));
+  const command = pi.commands.get("obs");
+  for (const request of malformedRequests) {
+    await command.handler(request.args, createCommandContext(notifications));
+  }
 
-  assert.equal(snapshotCalls, 0);
-  assert.deepEqual(notifications, [{ message: "Usage: /obs health", type: "warning" }]);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(
+    notifications,
+    malformedRequests.map(request => ({ message: `Usage: /obs ${request.subcommand}`, type: "warning" })),
+  );
 });
 
 test("/obs trace parser reports unknown options, missing values, and repeated options without querying", async () => {

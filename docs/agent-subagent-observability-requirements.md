@@ -237,16 +237,18 @@ The required parent-side flow is:
 4. ObservMe creates a spawn id: `pi.agent.spawn.id`.
 5. ObservMe builds child environment variables containing workflow, parent/root agent, depth, spawn, session, and trace context.
 6. The subagent launcher must pass that environment to `child_process.spawn` or an equivalent process runner.
-7. Parent records spawn completion or failure.
-8. Parent records `pi.agent.wait` when it waits for the child.
-9. Parent records `pi.agent.join` when it receives the child result/status.
-10. Parent updates the in-memory agent tree and `/obs agents` runtime state.
+7. Parent records launcher completion immediately after obtaining a usable transport handle, or launcher failure before a handle exists.
+8. Parent records the later terminal child completion separately.
+9. Parent records `pi.agent.wait` when it waits for the child.
+10. Parent records `pi.agent.join` when it receives the child result/status.
+11. Parent updates the in-memory agent tree and `/obs agents` runtime state.
 
 External extensions use the versioned API documented in [`extension-integration.md`](extension-integration.md):
 
 - `requestObservMeIntegration(pi)` for legacy metadata-free v1;
 - `requestObservMeIntegrationV2(pi)` for required v2 child identity;
 - `startSubagent(...)`
+- optional additive `completeSubagentLaunch(...)`, capability-detected on compatible v1/v2 providers;
 - `completeSubagent(...)`
 - `failSubagent(...)`
 - `startWait(...)` / `endWait(...)`
@@ -265,8 +267,8 @@ Required flow:
 3. Start tmux with an explicit command that injects that environment into the child Pi process.
 4. Do not rely on the tmux server's cached global environment; it may be stale if the tmux server was started earlier.
 5. Store the tmux session/window/pane identifiers in local orchestration state and in safe span/log attributes when low-cardinality or hashed.
-6. Mark spawn `completed` only when the tmux session/pane and child command were created successfully.
-7. Mark spawn `failed` if tmux cannot be started, the pane exits before Pi starts, or the command cannot be delivered.
+6. Call `completeSubagentLaunch()` immediately when the tmux session/pane and child command were created successfully.
+7. Call `failSubagent()` if tmux cannot be started, the pane exits before Pi starts, or the command cannot be delivered.
 8. Record `wait` while the orchestrator is waiting for child completion or a child status signal.
 9. Record `join` when the orchestrator collects a child result, sees a terminal child status, or times out.
 
@@ -850,12 +852,13 @@ Minimum identity-aware adapter behavior:
 1. Request API v2 with `requestObservMeIntegrationV2(pi)`; do not fall back to v1 when child identity is required.
 2. Before spawning child Pi, call `startSubagent` with a complete fresh descriptor, spawn type/reason, and safe command metadata.
 3. Pass the returned `env` into `child_process.spawn`.
-4. On launcher error before the child runs, call `failSubagent`.
-5. Around blocking waits, call `startWait` and `endWait`.
-6. When the child reaches a terminal state, call `completeSubagent` once with matching `completed`, `failed`, or `cancelled` status/outcome fields.
-7. When child output is collected, call `startJoin` and `endJoin` with child status.
-8. Ensure the child command loads ObservMe as an extension/package.
-9. Ensure the child ObservMe runtime receives the complete propagated parent context.
+4. Immediately after obtaining a usable child handle, capability-detect and call `completeSubagentLaunch`.
+5. On launcher error before a handle exists, call `failSubagent`.
+6. Around blocking waits, call `startWait` and `endWait`.
+7. When the child reaches a terminal state, call `completeSubagent` once with matching `completed`, `failed`, or `cancelled` status/outcome fields.
+8. When child output is collected, call `startJoin` and `endJoin` with child status.
+9. Ensure the child command loads ObservMe as an extension/package.
+10. Ensure the child ObservMe runtime receives the complete propagated parent context.
 
 Without that adapter, parent tool metrics may show a `subagent` tool call, but the agent-tree dashboard will not have reliable spawn/depth/fan-out/wait/join lineage.
 
@@ -893,7 +896,7 @@ Use this checklist before expecting subagents to appear correctly in Grafana.
 - [ ] Parent passes returned env into the child Pi process.
 - [ ] In tmux mode, parent injects env explicitly into the tmux child command and does not rely on stale tmux server env.
 - [ ] Parent records tmux session/pane status in a bounded local registry.
-- [ ] Parent records spawn completion/failure.
+- [ ] Parent records launcher completion immediately after a usable handle, or pre-handle launcher failure.
 - [ ] Parent records wait/join if it waits for child output, process exit, status marker, or operator action.
 
 ### Child process
@@ -970,7 +973,7 @@ These checkpoints reflect the current code and dashboards after source-review re
 - Valid W3C context explicitly parents the child `pi.session`; unavailable continuation uses a validated span link or bounded propagation-failure fallback.
 - Bounded agent-tree tracking exists in `src/pi/agent-tree-tracker.ts`.
 - Spawn/wait/join helper functions exist in `src/pi/subagent-spawn.ts` and are exposed to other loaded extensions through the versioned `@senad-d/observme/integration` event-bus API.
-- Spawn duration is recorded on completion and launcher failure. Child completion/join records child failure and confirmed parent recovery once through bounded deduplication state.
+- Spawn duration is recorded exactly once on immediate launcher completion or pre-handle launcher failure; delayed child completion, wait, and join transitions do not re-record it. The launcher-success method is an optional additive v1/v2 capability, preserving existing structural API compatibility. Child completion/join records child failure and confirmed parent recovery once through exact bounded state plus a fixed-size, no-false-negative archive for evicted transition fingerprints. Late evicted duplicates cannot recount, and failure/recovery are tracked separately so a first recovery can follow an archived failure; archive collisions can only conservatively suppress novel transitions under accounting pressure.
 - Session, agent-run/turn, LLM, tool/bash, and session metadata/tree handlers are split under `src/pi/event-handlers/` behind the stable `src/pi/handlers.ts` facade.
 - Root workflow duration is recorded at shutdown, and failed agent runs increment `observme_agent_run_errors_total`.
 - `/obs agents` is implemented and uses local runtime state, Prometheus aggregates, and Tempo drill-down attributes.
@@ -1010,7 +1013,7 @@ Required decisions:
 4. **Child ObservMe loading:** decide whether child Pi commands rely on installed ObservMe packages or receive explicit `-e` extension loading.
 5. **Descriptor ownership:** require each v2 launcher to supply display name, exact role, and capability explicitly; do not infer them from Pi markdown definitions, commands, prompts, tools, or depth.
 6. **Metric label contract:** align the remaining active-agent, spawn-failure, and orphan dashboard dimensions while keeping high-cardinality ids out of labels.
-7. **Duration/failure accounting:** use the implemented elapsed spawn duration and deduplicated child failure/recovery counters at completion/join transitions.
+7. **Duration/failure accounting:** record elapsed spawn duration at immediate launcher success or pre-handle failure, and use deduplicated child failure/recovery counters at later completion/join transitions.
 8. **Packaging:** ensure both parent and child Pi processes load ObservMe and share compatible config/export endpoints.
 9. **Management command surface:** define commands/tools for list, start, status, attach, send, wait, join, stop, and cleanup.
 

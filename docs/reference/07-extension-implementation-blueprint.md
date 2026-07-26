@@ -250,7 +250,7 @@ if (started?.ok) {
 }
 ```
 
-The returned environment contains validated ObservMe lineage, complete child-identity envelope version 1, and W3C `traceparent`/`tracestate` when enabled. The launcher must pass it unchanged and must not log command lines or environment values. Display name and capability are resource/span/log/UI attributes, never metric labels; role is descriptive and grants no authority. Launcher failure uses `failSubagent()`; terminal child completion uses `completeSubagent()`. See [`../extension-integration.md`](../extension-integration.md) for the complete transition contract.
+The returned environment contains validated ObservMe lineage, complete child-identity envelope version 1, and W3C `traceparent`/`tracestate` when enabled. The launcher must pass it unchanged and must not log command lines or environment values. Display name and capability are resource/span/log/UI attributes, never metric labels; role is descriptive and grants no authority. Successful transport-handle acquisition uses optional `completeSubagentLaunch()` immediately, launcher failure before a handle uses `failSubagent()`, and terminal child completion later uses `completeSubagent()`. See [`../extension-integration.md`](../extension-integration.md) for the complete transition contract.
 
 When the parent waits for a child or receives child results, create `pi.agent.wait` and `pi.agent.join` spans/events with child status, propagated-failure status, active-child count, and join status. These spans make the critical path visible in orchestrator traces.
 

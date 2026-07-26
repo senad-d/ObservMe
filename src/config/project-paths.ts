@@ -6,9 +6,11 @@ import type { BigIntStats } from "node:fs";
 import { lstat, mkdir, open, realpath, stat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { setTimeout as wait } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { AnchoredCreateCommand } from "./anchored-exclusive-create-helper.ts";
 import { readBoundedOpenSourceFileText } from "./read-source-file.ts";
+import { normalizeNodeTimerMilliseconds } from "./timer-limits.ts";
 
 export interface ProjectLocalFilePathOptions {
   readonly cwd?: string;
@@ -19,9 +21,17 @@ export interface ProjectLocalFilePathOptions {
   readonly inputLabel: string;
 }
 
+export interface AnchoredCreateHelperProcessOptions {
+  readonly modulePath?: string;
+  readonly arguments?: readonly string[];
+  readonly phaseTimeoutMillis?: number;
+  readonly shutdownStepTimeoutMillis?: number;
+}
+
 export interface ProjectLocalFileOperationHooks {
   readonly beforeOpen?: () => Promise<void> | void;
   readonly afterOpen?: () => Promise<void> | void;
+  readonly anchoredCreateHelper?: AnchoredCreateHelperProcessOptions;
 }
 
 export type ExclusiveProjectLocalFileCreateStatus = "created" | "exists";
@@ -39,10 +49,24 @@ interface CanonicalProjectPathSnapshot {
   readonly inputLabel: string;
 }
 
+interface AnchoredCreateHelperOwner {
+  readonly process: ChildProcess;
+  readonly phaseTimeoutMillis: number;
+  readonly shutdownStepTimeoutMillis: number;
+  directoryIdentity?: FileIdentity;
+  processError?: unknown;
+  shutdownPromise?: Promise<boolean>;
+}
+
 const parentSegment = "..";
 const unsafeProjectPathErrorCode = "OBSERVME_UNSAFE_PROJECT_PATH";
 const unsafeProjectPathCleanupErrorCode = "OBSERVME_UNSAFE_PROJECT_PATH_CLEANUP_FAILED";
 const anchoredCreateHelperPath = fileURLToPath(new URL("./anchored-exclusive-create-helper.mjs", import.meta.url));
+
+/** Maximum wait for each ready/open/write/commit/abort/cancel helper protocol response. */
+export const ANCHORED_CREATE_HELPER_PHASE_TIMEOUT_MILLIS = 2_000;
+/** Maximum wait after disconnect and after each TERM/KILL reaping step. */
+export const ANCHORED_CREATE_HELPER_SHUTDOWN_STEP_TIMEOUT_MILLIS = 250;
 
 export function resolveProjectLocalFilePath(options: ProjectLocalFilePathOptions): string {
   const root = resolve(options.cwd ?? process.cwd());
@@ -96,72 +120,100 @@ export async function createCanonicalProjectLocalFileExclusively(
   await mkdir(dirname(initialSnapshot.canonicalCandidatePath), { recursive: true });
   const snapshot = await createCanonicalProjectPathSnapshot(options);
   if (await projectFileAlreadyExists(snapshot)) return "exists";
-  const helper = await startAnchoredCreateHelper(snapshot);
+  const helper = await startAnchoredCreateHelper(snapshot, hooks.anchoredCreateHelper);
+  let createRequested = false;
   let openedIdentity: FileIdentity | undefined;
 
   try {
     await assertMissingProjectPathIsSafe(snapshot);
     await hooks.beforeOpen?.();
-    sendHelperMessage(helper, { type: "create", fileName: basename(snapshot.canonicalCandidatePath) });
+    createRequested = true;
     const openResult = await receiveAnchoredOpenResult(helper, snapshot);
     if (openResult === "exists") {
       await assertExistingProjectFileIsSafe(options);
+      await assertAnchoredCreateHelperReaped(helper, snapshot.inputLabel);
       return "exists";
     }
 
     openedIdentity = openResult;
     await hooks.afterOpen?.();
     await assertAnchoredProjectFileIsStable(snapshot, openedIdentity);
-    sendHelperMessage(helper, { type: "write", content });
-    await receiveAnchoredWriteResult(helper, snapshot, openedIdentity);
+    await receiveAnchoredWriteResult(helper, snapshot, openedIdentity, content);
     await assertAnchoredProjectFileIsStable(snapshot, openedIdentity);
-    sendHelperMessage(helper, { type: "commit" });
     await receiveAnchoredCommitResult(helper, snapshot);
     openedIdentity = undefined;
+    await assertAnchoredCreateHelperReaped(helper, snapshot.inputLabel);
     return "created";
   } catch (error) {
-    if (openedIdentity && !await abortAnchoredCreate(helper)) {
+    if (!await cleanupFailedAnchoredCreate(helper, snapshot, createRequested, openedIdentity, error)) {
       throw createUnsafeProjectPathCleanupError(snapshot.inputLabel);
     }
-    if (!openedIdentity) await cancelAnchoredCreate(helper);
     throw error;
-  } finally {
-    disconnectAnchoredCreateHelper(helper);
   }
 }
 
-async function startAnchoredCreateHelper(snapshot: CanonicalProjectPathSnapshot): Promise<ChildProcess> {
+async function assertAnchoredCreateHelperReaped(
+  helper: AnchoredCreateHelperOwner,
+  inputLabel: string,
+): Promise<void> {
+  if (!await terminateAndReapAnchoredCreateHelper(helper)) {
+    throw createUnsafeProjectPathCleanupError(inputLabel);
+  }
+}
+
+async function startAnchoredCreateHelper(
+  snapshot: CanonicalProjectPathSnapshot,
+  options: AnchoredCreateHelperProcessOptions | undefined,
+): Promise<AnchoredCreateHelperOwner> {
   const canonicalParentPath = dirname(snapshot.canonicalCandidatePath);
   assertProjectContainment(snapshot.canonicalRootPath, canonicalParentPath, snapshot.inputLabel);
   const parentStats = await stat(canonicalParentPath, { bigint: true });
   if (!parentStats.isDirectory()) throw createUnsafeProjectPathError(snapshot.inputLabel);
 
-  const helper = fork(anchoredCreateHelperPath, [], {
+  const helperProcess = fork(options?.modulePath ?? anchoredCreateHelperPath, [...(options?.arguments ?? [])], {
     cwd: canonicalParentPath,
     execArgv: [],
     serialization: "json",
     stdio: ["ignore", "ignore", "ignore", "ipc"],
   });
+  const helper: AnchoredCreateHelperOwner = {
+    process: helperProcess,
+    phaseTimeoutMillis: normalizeHelperTimeout(
+      options?.phaseTimeoutMillis,
+      ANCHORED_CREATE_HELPER_PHASE_TIMEOUT_MILLIS,
+    ),
+    shutdownStepTimeoutMillis: normalizeHelperTimeout(
+      options?.shutdownStepTimeoutMillis,
+      ANCHORED_CREATE_HELPER_SHUTDOWN_STEP_TIMEOUT_MILLIS,
+    ),
+  };
+  helperProcess.on("error", recordAnchoredCreateHelperError.bind(undefined, helper));
 
   try {
-    const message = await receiveHelperMessage(helper);
+    const message = await exchangeHelperMessage(helper);
     if (readHelperMessageType(message) !== "ready") throwHelperFailure(message, snapshot.inputLabel);
     const directoryIdentity = readSerializedFileIdentity(message);
     if (!directoryIdentity || !hasSameIdentity(toFileIdentity(parentStats), directoryIdentity)) {
       throw createUnsafeProjectPathError(snapshot.inputLabel);
     }
+    helper.directoryIdentity = directoryIdentity;
     return helper;
   } catch (error) {
-    disconnectAnchoredCreateHelper(helper);
+    if (!await terminateAndReapAnchoredCreateHelper(helper)) {
+      throw createUnsafeProjectPathCleanupError(snapshot.inputLabel);
+    }
     throw error;
   }
 }
 
 async function receiveAnchoredOpenResult(
-  helper: ChildProcess,
+  helper: AnchoredCreateHelperOwner,
   snapshot: CanonicalProjectPathSnapshot,
 ): Promise<"exists" | FileIdentity> {
-  const message = await receiveHelperMessage(helper);
+  const message = await exchangeHelperMessage(helper, {
+    type: "create",
+    fileName: basename(snapshot.canonicalCandidatePath),
+  });
   if (readHelperMessageType(message) === "exists") return "exists";
   if (readHelperMessageType(message) !== "opened") throwHelperFailure(message, snapshot.inputLabel);
 
@@ -171,11 +223,12 @@ async function receiveAnchoredOpenResult(
 }
 
 async function receiveAnchoredWriteResult(
-  helper: ChildProcess,
+  helper: AnchoredCreateHelperOwner,
   snapshot: CanonicalProjectPathSnapshot,
   openedIdentity: FileIdentity,
+  content: string,
 ): Promise<void> {
-  const message = await receiveHelperMessage(helper);
+  const message = await exchangeHelperMessage(helper, { type: "write", content });
   if (readHelperMessageType(message) !== "written") throwHelperFailure(message, snapshot.inputLabel);
 
   const writtenIdentity = readSerializedFileIdentity(message);
@@ -185,51 +238,141 @@ async function receiveAnchoredWriteResult(
 }
 
 async function receiveAnchoredCommitResult(
-  helper: ChildProcess,
+  helper: AnchoredCreateHelperOwner,
   snapshot: CanonicalProjectPathSnapshot,
 ): Promise<void> {
-  const message = await receiveHelperMessage(helper);
+  const message = await exchangeHelperMessage(helper, { type: "commit" });
   if (readHelperMessageType(message) !== "committed") throwHelperFailure(message, snapshot.inputLabel);
 }
 
-async function abortAnchoredCreate(helper: ChildProcess): Promise<boolean> {
-  if (!helper.connected) return false;
+async function cleanupFailedAnchoredCreate(
+  helper: AnchoredCreateHelperOwner,
+  snapshot: CanonicalProjectPathSnapshot,
+  createRequested: boolean,
+  openedIdentity: FileIdentity | undefined,
+  error: unknown,
+): Promise<boolean> {
+  let protocolCleanupConfirmed = false;
+  if (!isAnchoredCreateTimeout(error)) {
+    protocolCleanupConfirmed = openedIdentity
+      ? await abortAnchoredCreate(helper)
+      : !createRequested && await cancelAnchoredCreate(helper);
+  }
+
+  const reaped = await terminateAndReapAnchoredCreateHelper(helper);
+  if (!reaped) return false;
+  if (protocolCleanupConfirmed || !createRequested) return true;
+  return isAnchoredTargetVerifiedMissing(snapshot, helper.directoryIdentity);
+}
+
+async function abortAnchoredCreate(helper: AnchoredCreateHelperOwner): Promise<boolean> {
+  if (!helper.process.connected) return false;
 
   try {
-    sendHelperMessage(helper, { type: "abort" });
-    const message = await receiveHelperMessage(helper);
+    const message = await exchangeHelperMessage(helper, { type: "abort" });
     return readHelperMessageType(message) === "aborted";
   } catch {
     return false;
   }
 }
 
-async function cancelAnchoredCreate(helper: ChildProcess): Promise<void> {
-  if (!helper.connected) return;
+async function cancelAnchoredCreate(helper: AnchoredCreateHelperOwner): Promise<boolean> {
+  if (!helper.process.connected) return false;
 
   try {
-    sendHelperMessage(helper, { type: "cancel" });
-    await receiveHelperMessage(helper);
+    const message = await exchangeHelperMessage(helper, { type: "cancel" });
+    return readHelperMessageType(message) === "cancelled";
   } catch {
-    return;
+    return false;
   }
 }
 
-async function receiveHelperMessage(helper: ChildProcess): Promise<unknown> {
+async function exchangeHelperMessage(
+  helper: AnchoredCreateHelperOwner,
+  command?: AnchoredCreateCommand,
+): Promise<unknown> {
+  if (helper.processError) throw createAnchoredCreateFailure("EPIPE");
   const controller = new AbortController();
 
   try {
-    const messageEvent = once(helper, "message", { signal: controller.signal });
-    const exitEvent = once(helper, "exit", { signal: controller.signal }).then(rejectUnexpectedHelperExit);
-    const [message] = await Promise.race([messageEvent, exitEvent]);
+    const messageEvent = once(helper.process, "message", { signal: controller.signal });
+    const exitEvent = once(helper.process, "exit", { signal: controller.signal }).then(rejectUnexpectedHelperExit);
+    const timeoutEvent = wait(helper.phaseTimeoutMillis, undefined, {
+      ref: false,
+      signal: controller.signal,
+    }).then(rejectAnchoredCreateTimeout);
+    if (command) sendHelperMessage(helper.process, command);
+    const [message] = await Promise.race([messageEvent, exitEvent, timeoutEvent]);
     return message;
   } finally {
     controller.abort();
   }
 }
 
+async function terminateAndReapAnchoredCreateHelper(helper: AnchoredCreateHelperOwner): Promise<boolean> {
+  helper.shutdownPromise ??= disconnectTerminateAndReapAnchoredCreateHelper(helper);
+  return helper.shutdownPromise;
+}
+
+async function disconnectTerminateAndReapAnchoredCreateHelper(
+  helper: AnchoredCreateHelperOwner,
+): Promise<boolean> {
+  disconnectAnchoredCreateHelper(helper.process);
+  if (await waitForAnchoredCreateHelperExit(helper)) return true;
+
+  signalAnchoredCreateHelper(helper.process, "SIGTERM");
+  if (await waitForAnchoredCreateHelperExit(helper)) return true;
+
+  signalAnchoredCreateHelper(helper.process, "SIGKILL");
+  return waitForAnchoredCreateHelperExit(helper);
+}
+
+async function waitForAnchoredCreateHelperExit(helper: AnchoredCreateHelperOwner): Promise<boolean> {
+  if (hasAnchoredCreateHelperExited(helper.process)) return true;
+  const controller = new AbortController();
+
+  try {
+    const exitEvent = once(helper.process, "exit", { signal: controller.signal });
+    const timeoutEvent = wait(helper.shutdownStepTimeoutMillis, false, {
+      ref: false,
+      signal: controller.signal,
+    });
+    const result = await Promise.race([exitEvent, timeoutEvent]);
+    return result !== false || hasAnchoredCreateHelperExited(helper.process);
+  } finally {
+    controller.abort();
+  }
+}
+
+async function isAnchoredTargetVerifiedMissing(
+  snapshot: CanonicalProjectPathSnapshot,
+  directoryIdentity: FileIdentity | undefined,
+): Promise<boolean> {
+  if (!directoryIdentity) return false;
+
+  try {
+    await assertCanonicalRootIsStable(snapshot);
+    const currentParentStats = await stat(dirname(snapshot.canonicalCandidatePath), { bigint: true });
+    if (!currentParentStats.isDirectory()) return false;
+    if (!hasSameIdentity(directoryIdentity, toFileIdentity(currentParentStats))) return false;
+  } catch {
+    return false;
+  }
+
+  try {
+    await lstat(snapshot.canonicalCandidatePath);
+    return false;
+  } catch (error) {
+    return isMissingPathError(error);
+  }
+}
+
 function rejectUnexpectedHelperExit(): never {
   throw createAnchoredCreateFailure("EPIPE");
+}
+
+function rejectAnchoredCreateTimeout(): never {
+  throw createAnchoredCreateFailure("ETIMEDOUT");
 }
 
 function sendHelperMessage(helper: ChildProcess, message: AnchoredCreateCommand): void {
@@ -245,6 +388,31 @@ function disconnectAnchoredCreateHelper(helper: ChildProcess): void {
   } catch {
     return;
   }
+}
+
+function signalAnchoredCreateHelper(helper: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    helper.kill(signal);
+  } catch {
+    return;
+  }
+}
+
+function hasAnchoredCreateHelperExited(helper: ChildProcess): boolean {
+  return helper.exitCode !== null || helper.signalCode !== null;
+}
+
+function recordAnchoredCreateHelperError(helper: AnchoredCreateHelperOwner, error: unknown): void {
+  helper.processError ??= error;
+}
+
+function normalizeHelperTimeout(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return fallback;
+  return normalizeNodeTimerMilliseconds(value);
+}
+
+function isAnchoredCreateTimeout(error: unknown): boolean {
+  return isErrorWithCode(error) && error.code === "ETIMEDOUT";
 }
 
 function readHelperMessageType(message: unknown): string | undefined {
@@ -279,7 +447,10 @@ function throwHelperFailure(message: unknown, inputLabel: string): never {
 }
 
 function createAnchoredCreateFailure(code: string): NodeJS.ErrnoException {
-  const error = new Error("Anchored ObservMe project file creation failed.") as NodeJS.ErrnoException;
+  const message = code === "ETIMEDOUT"
+    ? "Anchored ObservMe project file helper protocol timed out."
+    : "Anchored ObservMe project file creation failed.";
+  const error = new Error(message) as NodeJS.ErrnoException;
   error.code = code;
   return error;
 }

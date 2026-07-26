@@ -3,6 +3,7 @@ import type {
   ExtensionContext,
   SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
+import { notifyBestEffort } from "../diagnostics/notify.ts";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
 import { RESOURCE_ATTRIBUTES } from "../semconv/attributes.ts";
 import {
@@ -51,8 +52,19 @@ interface ProjectConfigBootstrapPiApi {
 }
 
 const observmeYamlFileName = "observme.yaml";
+const inactiveProjectConfigHeader = `# ObservMe project setup guide (inactive until explicitly adopted).
+# Every setting below is commented, so global configuration and built-in defaults remain effective.
+# To add project overrides, uncomment observme: plus only the sections and settings you want to adopt.
+#
+`;
 
-export const PROJECT_OBSERVME_YAML_TEMPLATE = `observme:
+function renderInactiveProjectConfigStarter(profile: string): string {
+  let starter = inactiveProjectConfigHeader;
+  for (const line of profile.trimEnd().split("\n")) starter += line.length > 0 ? `# ${line}\n` : "#\n";
+  return starter;
+}
+
+const PROJECT_OBSERVME_YAML_PROFILE = `observme:
   enabled: true
   environment: development
   tenant: local-dev
@@ -196,6 +208,10 @@ export const PROJECT_OBSERVME_YAML_TEMPLATE = `observme:
     flushTimeoutMs: 3000
 `;
 
+export const PROJECT_OBSERVME_YAML_TEMPLATE = renderInactiveProjectConfigStarter(
+  PROJECT_OBSERVME_YAML_PROFILE,
+);
+
 export function registerProjectConfigBootstrap(
   pi: unknown,
   options: RegisterProjectConfigBootstrapOptions = {},
@@ -238,10 +254,10 @@ export async function bootstrapProjectObservMeConfig(
 
   try {
     const result = await resolveProjectConfigBootstrapResult(ctx, options);
-    await notifyProjectConfigCreated(ctx, result);
+    notifyProjectConfigCreated(ctx, result);
     return result;
   } catch (error) {
-    await notifyProjectConfigBootstrapFailed(ctx, error);
+    notifyProjectConfigBootstrapFailed(ctx, error);
     return undefined;
   }
 }
@@ -262,16 +278,24 @@ function resolveProjectConfigBootstrapResult(
   });
 }
 
-async function notifyProjectConfigCreated(
+function notifyProjectConfigCreated(
   ctx: ProjectConfigBootstrapContext,
   result: ProjectConfigBootstrapResult,
-): Promise<void> {
+): void {
   if (result.status !== "created") return;
-  await ctx.ui?.notify?.(`ObservMe created ${result.path}. Edit this file for custom setup.`, "info");
+  notifyBestEffort(
+    ctx,
+    `ObservMe created an inactive project setup guide at ${result.path}. Uncomment only settings you want to override.`,
+    "info",
+  );
 }
 
-async function notifyProjectConfigBootstrapFailed(ctx: ProjectConfigBootstrapContext, error: unknown): Promise<void> {
-  await ctx.ui?.notify?.(`ObservMe could not create the project config file: ${formatError(error)}`, "warning");
+function notifyProjectConfigBootstrapFailed(ctx: ProjectConfigBootstrapContext, error: unknown): void {
+  notifyBestEffort(
+    ctx,
+    `ObservMe could not create the project config file: ${formatError(error)}`,
+    "warning",
+  );
 }
 
 async function createProjectObservMeConfigFile(

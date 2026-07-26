@@ -17,6 +17,7 @@ export interface SubagentSpawnState {
   readonly childAgentId: string;
   readonly childDescriptor?: ObservMeChildDescriptor;
   readonly startedAtMs: number;
+  launcherCompleted: boolean;
   readonly labels: Record<string, string>;
   readonly spawnReason: SubagentSpawnReason;
   readonly traceContextPropagated: boolean;

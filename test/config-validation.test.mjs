@@ -175,6 +175,32 @@ test("unknown privacy path modes fail structural validation and fall back safely
   assert.deepEqual(ensureValidObservMeConfig(config, { env: {} }), defaultObservMeConfig);
 });
 
+test("validation fallback preserves explicit top-level disablement", () => {
+  const warnings = [];
+  const config = cloneDefault({
+    enabled: false,
+    otlp: { timeoutMs: "private-invalid-timeout" },
+  });
+  const fallback = ensureValidObservMeConfig(config, {
+    env: {},
+    logger: { warn: message => warnings.push(message) },
+  });
+
+  assert.equal(fallback.enabled, false);
+  assert.deepEqual({ ...fallback, enabled: true }, defaultObservMeConfig);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /explicit disablement preserved/u);
+  assert.match(warnings[0], /telemetry remains disabled/u);
+  assert.doesNotMatch(warnings[0], /private-invalid-timeout/u);
+
+  const validatedFallback = ensureValidObservMeConfig(defaultObservMeConfig, {
+    env: {},
+    preserveExplicitDisablement: true,
+  });
+  assert.equal(validatedFallback.enabled, false);
+  assert.deepEqual({ ...validatedFallback, enabled: true }, defaultObservMeConfig);
+});
+
 test("validation rejects content capture without redaction unless unsafe capture is explicit", () => {
   assertValid(cloneDefault({ capture: { prompts: true }, privacy: { allowUnsafeCapture: true, redactionEnabled: false } }));
   assertInvalid(
@@ -220,6 +246,66 @@ test("validation rejects insecure production transport unless explicitly allowed
       privacy: { allowInsecureTransport: false },
     }),
     "insecure_production_transport",
+  );
+});
+
+test("validation applies the shared Grafana URL rejection policy and accepts path-prefixed HTTP(S) URLs", () => {
+  const rejectedUrls = [
+    {
+      name: "blank",
+      url: "  ",
+      code: "missing_grafana_url",
+      message: "query.grafana.url is not configured. Configure an absolute http:// or https:// URL.",
+    },
+    {
+      name: "unresolved",
+      url: "https://${PRIVATE_GRAFANA_HOST}/observability",
+      code: "unresolved_grafana_url",
+      message:
+        "query.grafana.url is unresolved. Set the referenced environment variable before running Grafana-backed queries.",
+    },
+    {
+      name: "malformed",
+      url: "https://[private-malformed-grafana",
+      code: "invalid_grafana_url",
+      message: "query.grafana.url must be a valid http:// or https:// URL (malformed_url).",
+    },
+    {
+      name: "relative",
+      url: "private/relative/grafana",
+      code: "invalid_grafana_url",
+      message: "query.grafana.url must be a valid http:// or https:// URL (malformed_url).",
+    },
+    {
+      name: "file protocol",
+      url: "file:///private/grafana",
+      code: "invalid_grafana_url",
+      message: "query.grafana.url must be a valid http:// or https:// URL (unsupported_protocol).",
+    },
+    {
+      name: "FTP protocol",
+      url: "ftp://private-grafana.example.test/observability",
+      code: "invalid_grafana_url",
+      message: "query.grafana.url must be a valid http:// or https:// URL (unsupported_protocol).",
+    },
+  ];
+
+  for (const rejected of rejectedUrls) {
+    const result = validateObservMeConfig(
+      cloneDefault({ query: { grafana: { url: rejected.url } } }),
+      { env: {} },
+    );
+
+    assert.equal(result.valid, false, rejected.name);
+    assert.deepEqual(result.issues, [{ code: rejected.code, message: rejected.message }], rejected.name);
+    assert.equal(JSON.stringify(result).includes("private"), false, rejected.name);
+  }
+
+  assertValid(
+    cloneDefault({
+      query: { grafana: { url: "https://grafana.example.test/observability/team-a/", token: "bearer-token" } },
+    }),
+    { env: {} },
   );
 });
 
@@ -700,6 +786,24 @@ test("unsafe capture warning describes redaction state only when unsafe capture 
   assert.match(notifications[1].message, /redaction disabled/u);
   assert.match(notifications[1].message, /Unredacted sensitive prompt, response, tool, bash, or path content may be exported\./u);
   assert.doesNotMatch(JSON.stringify(notifications), /secret-token|password|api_key/u);
+});
+
+test("unsafe capture warning is best effort for throwing and rejecting notification adapters", async () => {
+  const config = cloneDefault({ capture: { prompts: true }, privacy: { allowUnsafeCapture: true } });
+  const notificationFailures = [
+    () => {
+      throw new Error("notification failed");
+    },
+    () => Promise.reject(new Error("notification rejected")),
+  ];
+
+  for (const failNotification of notificationFailures) {
+    await assert.doesNotReject(() =>
+      emitUnsafeCaptureWarning(config, {
+        ui: { notify: failNotification },
+      }),
+    );
+  }
 });
 
 test("invalid loaded config falls back to safe defaults and logs rejection reasons", async () => {

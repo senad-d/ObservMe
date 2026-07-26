@@ -32,7 +32,7 @@ import {
 const observme: ObservMeIntegrationApiV2 | undefined = requestObservMeIntegrationV2(pi);
 ```
 
-The unsuffixed exports remain the source-compatible v1 surface. `OBSERVME_INTEGRATION_VERSION`, `ObservMeIntegrationApi`, `ObservMeStartSubagentOptions`, and `requestObservMeIntegration()` still mean v1 and do not require child identity. V2 is opt-in through `OBSERVME_INTEGRATION_VERSION_V2`, suffixed v2 types, and `requestObservMeIntegrationV2()`.
+The unsuffixed exports remain the source-compatible v1 surface. `OBSERVME_INTEGRATION_VERSION`, `ObservMeIntegrationApi`, `ObservMeIntegrationContext`, `ObservMeStartSubagentOptions`, and `requestObservMeIntegration()` still mean v1 and do not require child identity. V2 is opt-in through `OBSERVME_INTEGRATION_VERSION_V2`, `ObservMeIntegrationContextV2`, `ObservMeIntegrationContextSuccessV2`, other suffixed v2 types, and `requestObservMeIntegrationV2()`. V2 `getContext()` preserves the current lineage role, including each exact `lead`, `helper`, `worker`, and `validator` value. V1 retains its compatibility mapping: `lead`, `helper`, and `validator` are returned as `subagent`, while `worker` and existing v1 roles remain unchanged.
 
 | Helper | Versions advertised | Return behavior |
 | --- | --- | --- |
@@ -65,7 +65,7 @@ The request is an object with a `supportedVersions` array of positive safe integ
 - `childIdentityEnvelopeVersion: 1`;
 - callable `getContext`, `startSubagent`, `completeSubagent`, `failSubagent`, `startWait`, `endWait`, `startJoin`, and `endJoin` methods.
 
-A v1 response has `version: 1` and the same lifecycle methods, but no `childRoles` or `childIdentityEnvelopeVersion` field and no required `child` option. Package-decoupled consumers should validate fields structurally and treat accessor errors or malformed candidates as absent providers.
+A v1 response has `version: 1` and the same required lifecycle methods, but no `childRoles` or `childIdentityEnvelopeVersion` field and no required `child` option. Either version may additionally expose callable `completeSubagentLaunch`; it is capability-detected rather than required so existing v1/v2 providers remain structurally compatible. Package-decoupled consumers should validate fields structurally and treat accessor errors or malformed candidates as absent providers.
 
 Discovery and selection are synchronous. Collect valid responses only until `pi.events.emit()` returns, select the highest version, use the first response in Pi load order only to break a same-version tie, and ignore every late callback. V2-aware clients advertise `[2, 1]`; array order does not force a provider to return a lower version. Request the API when the user or tool starts orchestration, not from the extension factory. If a `session_start` handler must launch work automatically, account for extension handler ordering and retry only after ObservMe has an active session.
 
@@ -89,18 +89,20 @@ Use this order for each child process:
 1. Request the v2 ObservMe integration API when child identity is required.
 2. Call `startSubagent()` with one complete child descriptor immediately before launching the child.
 3. Pass the returned `env` as the child process environment without logging it.
-4. Call `failSubagent()` only when the launcher fails before the child is running.
-5. Call `startWait()`/`endWait()` around time spent waiting for child completion.
-6. Call `completeSubagent()` once with the matching terminal `childStatus` and `outcome` (`completed`, `failed`, or `cancelled`).
-7. Call `startJoin()`/`endJoin()` when collecting a child status or result.
+4. Immediately after the launcher returns a usable transport handle, call optional `completeSubagentLaunch()` once. Current ObservMe providers expose this additive v1/v2 capability; older compatible providers may omit it.
+5. Call `failSubagent()` only when the launcher fails before returning a usable handle.
+6. Call `startWait()`/`endWait()` around time spent waiting for child completion.
+7. Call `completeSubagent()` once with the matching terminal `childStatus` and `outcome` (`completed`, `failed`, or `cancelled`).
+8. Call `startJoin()`/`endJoin()` when collecting a child status or result.
 
 Classify launcher and wait outcomes before changing child state:
 
 | Transport outcome | Child state | Join state | Required ownership |
 | --- | --- | --- | --- |
 | Launcher rejects before returning a handle | `failed` | No join | Call `failSubagent()`; no child is running. |
+| Launcher returns a usable handle | `active` | No join yet | Call `completeSubagentLaunch()` immediately; this records launcher latency exactly once. |
 | Launcher is cancelled before returning a handle | `cancelled` | No join | End the cancelled launch attempt without recording child failure. |
-| Wait returns `completed`, `failed`, or `cancelled` | Matching terminal state | Matching terminal state | Call `completeSubagent()` exactly once. |
+| Wait returns `completed`, `failed`, or `cancelled` | Matching terminal state | Matching terminal state | Call `completeSubagent()` exactly once; it does not re-record launcher latency. |
 | Wait returns `timeout` | Keep `active` | `timeout` | Retain the handle and wait again, or explicitly cancel through the owning transport. |
 | Wait throws an abort/cancellation error | Keep `active` | `cancelled` | The caller stopped waiting; do not infer that the child stopped. |
 | Wait throws a transport/read error | Keep `active` | `unknown` | Repair/retry result delivery; do not infer child failure. |
@@ -138,6 +140,9 @@ try {
   });
   throw error;
 }
+observme.completeSubagentLaunch?.(started.spawnId, {
+  childAgentId: started.childAgentId,
+});
 
 const result = await waitForChildPi(child);
 if (result.status !== "timeout") {
@@ -157,10 +162,11 @@ Do not put raw tasks, prompts, command lines, environment values, child output, 
 
 | Method | Use |
 | --- | --- |
-| `getContext()` | Read the current workflow, root/parent/current agent, role, depth, session, and trace identifiers for local orchestration correlation. These are high-cardinality values and must not become metric labels. |
+| `getContext()` | Read the current workflow, root/parent/current agent, role, depth, session, and trace identifiers for local orchestration correlation. V2 returns exact lineage roles; v1 retains the compatibility mapping documented above. These are high-cardinality values and must not become metric labels. |
 | `startSubagent(options)` | Starts `pi.agent.spawn`, records spawn metrics/logs, creates bounded parent tree state, and returns a sanitized propagation environment. |
-| `completeSubagent(spawnId, options)` | Ends the active child lifecycle with one coherent `completed`, `failed`, or `cancelled` status/outcome pair. |
-| `failSubagent(spawnId, options)` | Ends a launcher failure and records bounded failure telemetry. |
+| `completeSubagentLaunch?(spawnId, options)` | Additive v1/v2 capability that marks a usable transport handle as obtained and records spawn latency exactly once. Call immediately after launch; older compatible providers may omit it. |
+| `completeSubagent(spawnId, options)` | Ends the active child lifecycle with one coherent `completed`, `failed`, or `cancelled` status/outcome pair without re-recording a completed launch. |
+| `failSubagent(spawnId, options)` | Ends a pre-handle launcher failure and records bounded failure telemetry once. |
 | `startWait(options)` / `endWait(id, options)` | Measures time the parent is blocked on a child or dependency. |
 | `startJoin(options)` / `endJoin(id, options)` | Measures result collection and records child failure propagation or confirmed parent recovery. |
 
@@ -177,9 +183,9 @@ Do not put raw tasks, prompts, command lines, environment values, child output, 
 | `env` | Base child environment. ObservMe removes stale lineage/W3C/identity keys and returns the replacement environment. |
 | `child` | Required in v2 and absent from v1: exact `displayName`, `role`, and `capability` descriptor defined above. |
 
-Runtime callers are validated even when JavaScript bypasses the TypeScript types. Caller-provided lifecycle identifiers must match `[A-Za-z0-9._:-]{1,128}`. Commands and individual arguments are capped at 4096 characters, argument lists at 256 items, environment objects at 4096 entries, environment keys at 256 characters, and `errorClass` at 256 characters. Environment keys must be non-empty and contain neither `=` nor NUL; values may be strings or explicit `undefined` tombstones and must not contain NUL. Durations must be finite, non-negative safe milliseconds. Invalid or duplicate active operations return a failure without replacing an existing span. Child placeholders, including generated placeholders, are collision-checked before span, tree, metric, or propagation state is created; do not reuse a terminal placeholder while its bounded tree node remains retained.
+Runtime callers are validated even when JavaScript bypasses the TypeScript types. Caller-provided lifecycle identifiers must match `[A-Za-z0-9._:-]{1,128}`. Commands and individual arguments are capped at 4096 characters, argument lists at 256 items, environment objects at 4096 entries, environment keys at 128 characters, and `errorClass` at 256 characters. Environment keys must be non-empty and contain neither `=` nor NUL; values may be strings or explicit `undefined` tombstones and must not contain NUL. Durations must be finite, non-negative safe milliseconds. Invalid or duplicate active operations return a failure without replacing an existing span. Child placeholders, including generated placeholders, are collision-checked before span, tree, metric, or propagation state is created; do not reuse a terminal placeholder while its bounded tree node remains retained.
 
-Completion accepts only terminal child states (`completed`, `failed`, `cancelled`), and any supplied outcome must match. Wait/join methods use bounded child states (`starting`, `active`, `completed`, `failed`, `cancelled`, `orphaned`), join states (`waiting`, `completed`, `failed`, `cancelled`, `timeout`, `unknown`), and wait reasons (`dependency`, `rate_limit`, `child_running`, `unknown`). Spawn type is `command`, `tool`, `extension`, or `unknown`; spawn reason is `delegated_task`, `parallel_search`, `review`, `tool_wrapper`, or `unknown`. `failurePropagated=false` on a completed join confirms that the parent recovered from a failed child.
+Launcher completion accepts only the matching optional `childAgentId` and is idempotent while the child lifecycle remains active. Once launcher completion succeeds, `failSubagent()` is no longer a valid transition. For source and wire compatibility, v1/v2 clients that do not see the optional method remain accepted; their later terminal call is the fallback launcher settlement point, so only capability-aware launchers provide precise spawn latency. Completion accepts only terminal child states (`completed`, `failed`, `cancelled`), and any supplied outcome must match. Wait/join methods use bounded child states (`starting`, `active`, `completed`, `failed`, `cancelled`, `orphaned`), join states (`waiting`, `completed`, `failed`, `cancelled`, `timeout`, `unknown`), and wait reasons (`dependency`, `rate_limit`, `child_running`, `unknown`). Spawn type is `command`, `tool`, `extension`, or `unknown`; spawn reason is `delegated_task`, `parallel_search`, `review`, `tool_wrapper`, or `unknown`. `failurePropagated=false` on a completed join confirms that the parent recovered from a failed child.
 
 Lifecycle results are structural discriminated unions:
 
@@ -336,7 +342,7 @@ Task, attempt, instance, spawn, and child-agent placeholders remain OrcMe lifecy
 
 OrcMe's launch contract remains transport-owned: build and sanitize its managed base environment, pass that base to `startSubagent()`, preserve every returned ObservMe value, and carry explicit `undefined` tombstones so Pi RPC's `process.env` overlay cannot restore keys ObservMe removed. Never log, persist, hash, display, or snapshot complete environments or unrelated values. Keep `spawnType: "extension"` and `spawnReason: "delegated_task"`. A duplicate requested `spawnId` or `childAgentId` may be retried once without those technical identifiers, but with the byte-identical descriptor.
 
-Lifecycle ordering remains start immediately before launch, `failSubagent()` once only for pre-handle launch failure, wait calls around actual blocking, `completeSubagent()` exactly once for confirmed terminal child state, and join calls around terminal evidence collection. Export or telemetry failure after a valid launch stays fail-open and never replaces OrcMe task state.
+Lifecycle ordering remains start immediately before launch, optional `completeSubagentLaunch()` immediately after a usable handle, `failSubagent()` once only for pre-handle launch failure, wait calls around actual blocking, `completeSubagent()` exactly once for confirmed terminal child state, and join calls around terminal evidence collection. Export or telemetry failure after a valid launch stays fail-open and never replaces OrcMe task state.
 
 Policy stays explicit: `disabled` performs no ObservMe negotiation; `inherit` follows effective OrcMe configuration; after v2 adoption, `enabled` requires a v2 root provider and an explicitly pinned envelope-compatible child ObservMe release under `--no-extensions`. Each nested delegation must supply a fresh descriptor and use the immediate parent's newly returned environment.
 
@@ -349,7 +355,7 @@ The example imports `@senad-d/observme/integration` because it ships inside the 
 
 Pi packages can have separate module roots. Do not assume that an independently installed ObservMe package is automatically resolvable as a Node module from another package, and do not load a bundled second ObservMe extension accidentally. Runtime negotiation determines whether one compatible ObservMe integration provider is actually loaded.
 
-Integration API v1 remains stable and metadata-free. Integration API v2 and child-identity envelope version 1 first appear in `@senad-d/observme` 0.1.8. Adding, removing, renaming, or changing the meaning of a v2 role requires a later integration API version; the v2 role catalog is not runtime-configurable.
+Integration API v1 remains stable and metadata-free. `completeSubagentLaunch()` is an optional additive capability on both existing API versions, so structural v1/v2 providers without it remain valid and callers must use optional capability detection. Integration API v2 and child-identity envelope version 1 first appear in `@senad-d/observme` 0.1.8. Adding, removing, renaming, or changing the meaning of a v2 role requires a later integration API version; the v2 role catalog is not runtime-configurable.
 
 ## Related documentation
 

@@ -1,6 +1,7 @@
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
 import { loadSessionConfig } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
+import { normalizeNodeTimerMilliseconds } from "../config/timer-limits.ts";
 import { boundObsCommandOutput } from "../safety/display-bounds.ts";
 
 export type ObsCommandNotificationType = "info" | "warning" | "error";
@@ -39,6 +40,8 @@ export async function notifyObsCommand(
 
 export function normalizeObsCommandTimeoutMs(value: number | undefined, fallback: number, invalidFallback = fallback): number {
   const timeoutMs = value ?? fallback;
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 1) return invalidFallback;
-  return Math.trunc(timeoutMs);
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1) {
+    return normalizeNodeTimerMilliseconds(invalidFallback);
+  }
+  return normalizeNodeTimerMilliseconds(timeoutMs);
 }

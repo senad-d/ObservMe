@@ -34,8 +34,17 @@ function createCommandContext(notifications) {
   };
 }
 
-function createGeneratedStarterConfig() {
-  const parsed = parseObservMeConfigText(PROJECT_OBSERVME_YAML_TEMPLATE);
+function createAdoptedGeneratedStarterConfig() {
+  const adoptedProfile = PROJECT_OBSERVME_YAML_TEMPLATE
+    .replace("# observme:", "observme:")
+    .replace("#   query:", "  query:")
+    .replace("#     links:", "    links:")
+    .replace("#       traceUrlTemplate: http://localhost/explore?left=...", "      traceUrlTemplate: http://localhost/explore?left=...")
+    .replace("#     grafana:", "    grafana:")
+    .replace("#       url: http://localhost", "      url: http://localhost")
+    .replace("#       datasourceUids:", "      datasourceUids:")
+    .replace("#         tempo: tempo", "        tempo: tempo");
+  const parsed = parseObservMeConfigText(adoptedProfile);
   const config = cloneDefaultConfig();
   config.query.links.traceUrlTemplate = parsed.query.links.traceUrlTemplate;
   config.query.grafana.url = parsed.query.grafana.url;
@@ -78,9 +87,9 @@ function assertBoundedTraceLinkDiagnostic(notification) {
   assert.ok(notification.message.length <= 700, `diagnostic length was ${notification.message.length}`);
 }
 
-test("generated starter fallback produces one structured Grafana Explore link for session, trace, and link commands", async t => {
+test("an explicitly adopted generated profile produces one structured Grafana Explore link for every command", async t => {
   t.after(clearObsSessionRuntimeState);
-  const notifications = await renderTraceLinksForAllCommands(createGeneratedStarterConfig());
+  const notifications = await renderTraceLinksForAllCommands(createAdoptedGeneratedStarterConfig());
   const link = assertCanonicalCommandLinks(notifications);
   const url = new URL(link);
   const panes = JSON.parse(url.searchParams.get("panes"));
@@ -110,7 +119,7 @@ for (const placeholderCase of placeholderCases) {
 
 test("ellipsis fallback preserves a path-prefixed Grafana base URL for every command", async t => {
   t.after(clearObsSessionRuntimeState);
-  const config = createGeneratedStarterConfig();
+  const config = createAdoptedGeneratedStarterConfig();
   config.query.grafana.url = "https://grafana.local/observability/";
 
   const notifications = await renderTraceLinksForAllCommands(config);

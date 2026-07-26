@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
+import { OBSERVME_ORPHAN_AGENT_METRIC_LABEL_KEYS } from "../src/semconv/metrics.ts";
 import {
   CANONICAL_ACTIVE_AGENT_BY_DEPTH_PROMQL,
   CANONICAL_ACTIVE_AGENT_BY_ENVIRONMENT_PROMQL,
@@ -251,7 +252,7 @@ const agentTopTableRequirements = [
     metricNames: ["observme_subagent_spawn_failures_total"],
   },
   {
-    title: "Orphan-prone depths",
+    title: "Orphans by status and reason",
     metricNames: ["observme_orphan_agents_total"],
   },
   {
@@ -1344,6 +1345,21 @@ async function agentDashboardShowsLineageRatiosThresholdsAndDrilldowns() {
     assertPanelExpressionsContainMetrics(agentDashboardFile, panel, requirement.metricNames);
   }
 
+  const orphanTrendPanel = assertAgentDashboardPanel(dashboard, "Orphan agents");
+  const orphanBreakdownPanel = assertAgentDashboardPanel(dashboard, "Orphans by status and reason");
+  const orphanGrouping = OBSERVME_ORPHAN_AGENT_METRIC_LABEL_KEYS.join(", ");
+
+  assert.deepEqual(expressionsForPanel(orphanTrendPanel), [
+    `sum(rate(observme_orphan_agents_total[$__rate_interval])) by (${orphanGrouping})`,
+  ]);
+  assert.deepEqual(expressionsForPanel(orphanBreakdownPanel), [
+    `topk(10, sum(increase(observme_orphan_agents_total[$__range])) by (${orphanGrouping}))`,
+  ]);
+  for (const panel of [orphanTrendPanel, orphanBreakdownPanel]) {
+    assert.match(panel.description ?? "", /emitted bounded status and reason labels/iu);
+    assert.doesNotMatch(expressionsForPanel(panel).join("\n"), /agent_role|subagent_depth/u);
+  }
+
   for (const { title, reference } of agentThresholdReferences) {
     const panel = assertAgentDashboardPanel(dashboard, title);
     const expressionText = expressionsForPanel(panel).join("\n");
@@ -1377,6 +1393,19 @@ async function nodeGraphDashboardUsesCountsAndHealthSignals() {
     assert.ok(expressionText.includes('"mainStat"'), `${nodeGraphDashboardFile}: ${panel.title} must expose node/edge mainStat fields`);
     assert.ok(expressionText.includes('"secondaryStat"'), `${nodeGraphDashboardFile}: ${panel.title} must expose secondary status fields`);
     assert.ok(expressionText.includes('"color", "red"'), `${nodeGraphDashboardFile}: ${panel.title} must color health-risk nodes or edges red`);
+  }
+
+  const orphanGrouping = OBSERVME_ORPHAN_AGENT_METRIC_LABEL_KEYS.join(", ");
+  const orphanExpressions = panels
+    .flatMap(expressionsForPanel)
+    .filter(expression => expression.includes("observme_orphan_agents_total"));
+
+  assert.equal(orphanExpressions.length, 2, `${nodeGraphDashboardFile}: orphan nodes and edges are required`);
+  for (const expression of orphanExpressions) {
+    assert.ok(
+      expression.includes(`sum(increase(observme_orphan_agents_total[$__range])) by (${orphanGrouping})`),
+      `${nodeGraphDashboardFile}: orphan node-graph queries must group by the exact emitted labels`,
+    );
   }
 
   assert.ok(rootTopologyPanel, `${nodeGraphDashboardFile}: root topology panel is required`);
@@ -1632,6 +1661,11 @@ async function repairedLifecycleMetricsMatchDashboardNamesAndGroupingLabels() {
     spawnDurationExpression,
     /by\s*\(agent_role,\s*spawn_type,\s*spawn_reason,\s*le\)/u,
     `${agentDashboardFile}: spawn duration grouping must match production labels`,
+  );
+  assert.match(
+    spawnDurationPanel.description ?? "",
+    /launcher latency.*transport-handle.*child execution.*excluded/iu,
+    `${agentDashboardFile}: spawn duration panel must describe launcher-only latency`,
   );
   assert.ok(
     childFailureExpressions.some(expression => expression.includes("observme_child_agent_failures_total")),

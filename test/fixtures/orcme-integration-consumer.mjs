@@ -115,6 +115,10 @@ export async function runFutureOrcMePiRpcLifecycle(api, input) {
     throw error;
   }
 
+  api.completeSubagentLaunch?.(started.spawnId, {
+    childAgentId: started.childAgentId,
+  });
+
   const wait = api.startWait({
     spawnId: started.spawnId,
     childAgentId: started.childAgentId,

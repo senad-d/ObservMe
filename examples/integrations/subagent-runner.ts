@@ -74,6 +74,7 @@ export class ObservableSubagentRunner<Request, Handle, Value> {
 
     try {
       const handle = await this.#transport.launch(options.request, context, options.signal);
+      recordObservMeLaunchSuccess(observme, started);
       return new ObservableSubagentExecution(this.#transport, handle, observme, started);
     } catch (error) {
       const outcome = classifyObservMeRunnerOutcome({ type: "error", phase: "launch", error, signal: options.signal });
@@ -159,6 +160,14 @@ function createLaunchContext(
     childAgentId: started?.childAgentId,
     traceContextPropagated: started?.traceContextPropagated ?? false,
   };
+}
+
+function recordObservMeLaunchSuccess(
+  observme: ObservMeIntegrationApiV2 | undefined,
+  started: ObservMeStartedSubagent | undefined,
+): void {
+  if (!observme || !started) return;
+  observme.completeSubagentLaunch?.(started.spawnId, { childAgentId: started.childAgentId });
 }
 
 function completeObservMeChild(

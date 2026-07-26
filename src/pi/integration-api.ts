@@ -4,12 +4,14 @@ import {
   OBSERVME_INTEGRATION_CHANNEL,
   OBSERVME_INTEGRATION_VERSION,
   OBSERVME_INTEGRATION_VERSION_V2,
+  type ObservMeCompleteSubagentLaunchOptions,
   type ObservMeCompleteSubagentOptions,
   type ObservMeFailSubagentOptions,
   type ObservMeIntegrationApi,
   type ObservMeIntegrationApiV2,
   type ObservMeIntegrationContext,
   type ObservMeIntegrationContextSuccess,
+  type ObservMeIntegrationContextSuccessV2,
   type ObservMeIntegrationFailure,
   type ObservMeIntegrationResponseV2,
   type ObservMeIntegrationSuccess,
@@ -22,10 +24,13 @@ import {
 import { SESSION_ATTRIBUTES } from "../semconv/attributes.ts";
 import { validateObservMeChildDescriptor } from "./child-identity.ts";
 import {
+  completeSubagentLaunch,
   completeSubagentSpawn,
   endAgentJoin,
   endAgentWait,
   failSubagentSpawn,
+  OBSERVME_LIFECYCLE_IDENTIFIER_MAX_CHARACTERS,
+  resolveAgentWaitJoinId,
   resolveSubagentSpawnIdentity,
   startAgentJoin,
   startAgentWait,
@@ -58,7 +63,7 @@ interface ValidatedStartSubagentRequest {
   readonly childIdentity: ChildIdentityPropagation;
 }
 
-const integrationIdentifierPattern = /^[A-Za-z0-9._:-]{1,128}$/u;
+const integrationIdentifierPattern = /^[A-Za-z0-9._:-]+$/u;
 const maximumIntegrationCommandLength = 4096;
 const maximumIntegrationArgumentCount = 256;
 const maximumIntegrationArgumentLength = 4096;
@@ -84,26 +89,16 @@ class SessionBackedObservMeIntegrationOperations {
     this.#state = state;
   }
 
-  getContext(): ObservMeIntegrationContextSuccess | ObservMeIntegrationFailure {
+  getContextV1(): ObservMeIntegrationContextSuccess | ObservMeIntegrationFailure {
     const availability = resolveIntegrationSession(this.#state);
     if (!availability.ok) return availability;
-    const { session } = availability;
+    return createV1IntegrationContextSuccess(availability.session);
+  }
 
-    return {
-      ok: true,
-      context: {
-        workflowId: session.lineage.workflowId,
-        workflowRootAgentId: session.lineage.workflowRootAgentId,
-        agentId: session.lineage.agentId,
-        parentAgentId: session.lineage.parentAgentId,
-        rootAgentId: session.lineage.rootAgentId,
-        depth: session.lineage.depth,
-        role: resolveV1IntegrationContextRole(session.lineage.role),
-        capability: session.lineage.capability,
-        sessionId: readSessionId(session),
-        traceId: readSessionTraceId(session),
-      },
-    };
+  getContextV2(): ObservMeIntegrationContextSuccessV2 | ObservMeIntegrationFailure {
+    const availability = resolveIntegrationSession(this.#state);
+    if (!availability.ok) return availability;
+    return createV2IntegrationContextSuccess(availability.session);
   }
 
   startSubagentV1(options: unknown = {}): ObservMeStartedSubagent | ObservMeIntegrationFailure {
@@ -145,6 +140,24 @@ class SessionBackedObservMeIntegrationOperations {
         env: started.env,
         traceContextPropagated: started.traceContextPropagated,
       };
+    } catch {
+      return integrationFailure("operation_failed");
+    }
+  }
+
+  completeSubagentLaunch(
+    spawnId: string,
+    options: ObservMeCompleteSubagentLaunchOptions = {},
+  ): ObservMeIntegrationSuccess | ObservMeIntegrationFailure {
+    const availability = resolveIntegrationSession(this.#state);
+    if (!availability.ok) return availability;
+    const { session } = availability;
+    try {
+      if (!isValidIntegrationIdentifier(spawnId) || !isValidCompleteSubagentLaunchOptions(options)) {
+        return integrationFailure("invalid_request");
+      }
+      const result = completeSubagentLaunch(session, spawnId, options);
+      return result.ok ? integrationSuccess() : integrationFailure(result.reason);
     } catch {
       return integrationFailure("operation_failed");
     }
@@ -218,13 +231,14 @@ class SessionBackedObservMeIntegrationOperations {
     try {
       if (!isValidWaitJoinOptions(options)) return integrationFailure("invalid_request");
 
-      const requestedId = resolveRequestedWaitJoinId(options, kind);
+      const requestedId = resolveAgentWaitJoinId(options, kind);
       const registry = kind === "wait" ? session.spans.activeAgentWaits : session.spans.activeAgentJoins;
-      if (requestedId && registry.has(requestedId)) {
+      if (registry.has(requestedId)) {
         return integrationFailure(kind === "wait" ? "wait_already_exists" : "join_already_exists");
       }
 
-      const started = kind === "wait" ? startAgentWait(session, options) : startAgentJoin(session, options);
+      const startOptions = { ...options, id: requestedId };
+      const started = kind === "wait" ? startAgentWait(session, startOptions) : startAgentJoin(session, startOptions);
       return { ok: true, id: started.id };
     } catch {
       return integrationFailure("operation_failed");
@@ -280,8 +294,9 @@ export class SessionBackedObservMeIntegrationProvider {
 function createIntegrationApiV1(operations: SessionBackedObservMeIntegrationOperations): ObservMeIntegrationApi {
   return Object.freeze({
     version: OBSERVME_INTEGRATION_VERSION,
-    getContext: operations.getContext.bind(operations),
+    getContext: operations.getContextV1.bind(operations),
     startSubagent: operations.startSubagentV1.bind(operations),
+    completeSubagentLaunch: operations.completeSubagentLaunch.bind(operations),
     completeSubagent: operations.completeSubagent.bind(operations),
     failSubagent: operations.failSubagent.bind(operations),
     startWait: operations.startWait.bind(operations),
@@ -296,8 +311,9 @@ function createIntegrationApiV2(operations: SessionBackedObservMeIntegrationOper
     version: OBSERVME_INTEGRATION_VERSION_V2,
     childRoles: OBSERVME_CHILD_ROLES,
     childIdentityEnvelopeVersion: OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION,
-    getContext: operations.getContext.bind(operations),
+    getContext: operations.getContextV2.bind(operations),
     startSubagent: operations.startSubagentV2.bind(operations),
+    completeSubagentLaunch: operations.completeSubagentLaunch.bind(operations),
     completeSubagent: operations.completeSubagent.bind(operations),
     failSubagent: operations.failSubagent.bind(operations),
     startWait: operations.startWait.bind(operations),
@@ -411,8 +427,14 @@ function isValidStartSubagentOptions(value: unknown): value is ObservMeStartSuba
   );
 }
 
-function isValidCompleteSubagentOptions(value: unknown): value is ObservMeCompleteSubagentOptions {
+function isValidCompleteSubagentLaunchOptions(value: unknown): value is ObservMeCompleteSubagentLaunchOptions {
   if (!isIntegrationRecord(value)) return false;
+  const options = value as Partial<ObservMeCompleteSubagentLaunchOptions>;
+  return isOptionalIntegrationIdentifier(options.childAgentId);
+}
+
+function isValidCompleteSubagentOptions(value: unknown): value is ObservMeCompleteSubagentOptions {
+  if (!isValidCompleteSubagentLaunchOptions(value)) return false;
   const options = value as Partial<ObservMeCompleteSubagentOptions>;
   return (
     isOptionalIntegrationIdentifier(options.childAgentId) &&
@@ -447,7 +469,11 @@ function isIntegrationRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isValidIntegrationIdentifier(value: unknown): value is string {
-  return typeof value === "string" && integrationIdentifierPattern.test(value);
+  return (
+    typeof value === "string" &&
+    value.length <= OBSERVME_LIFECYCLE_IDENTIFIER_MAX_CHARACTERS &&
+    integrationIdentifierPattern.test(value)
+  );
 }
 
 function isOptionalIntegrationIdentifier(value: unknown): value is string | undefined {
@@ -547,8 +573,40 @@ function isValidDuration(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 }
 
-function resolveRequestedWaitJoinId(options: ObservMeWaitJoinOptions, kind: "wait" | "join"): string | undefined {
-  return options.id ?? (options.spawnId ? `${kind}-${options.spawnId}` : undefined);
+function createV1IntegrationContextSuccess(session: ObservMeTelemetrySession): ObservMeIntegrationContextSuccess {
+  return {
+    ok: true,
+    context: {
+      ...createIntegrationContextFields(session),
+      role: resolveV1IntegrationContextRole(session.lineage.role),
+    },
+  };
+}
+
+function createV2IntegrationContextSuccess(session: ObservMeTelemetrySession): ObservMeIntegrationContextSuccessV2 {
+  return {
+    ok: true,
+    context: {
+      ...createIntegrationContextFields(session),
+      role: session.lineage.role,
+    },
+  };
+}
+
+function createIntegrationContextFields(
+  session: ObservMeTelemetrySession,
+): Omit<ObservMeIntegrationContext, "role"> {
+  return {
+    workflowId: session.lineage.workflowId,
+    workflowRootAgentId: session.lineage.workflowRootAgentId,
+    agentId: session.lineage.agentId,
+    parentAgentId: session.lineage.parentAgentId,
+    rootAgentId: session.lineage.rootAgentId,
+    depth: session.lineage.depth,
+    capability: session.lineage.capability,
+    sessionId: readSessionId(session),
+    traceId: readSessionTraceId(session),
+  };
 }
 
 function resolveV1IntegrationContextRole(role: AgentRole): ObservMeIntegrationContext["role"] {

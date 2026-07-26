@@ -84,6 +84,17 @@ function createEmptyCostResponse() {
   );
 }
 
+function createNonVectorCostResponse(resultType) {
+  const result = resultType === "matrix"
+    ? [{ metric: { model: "claude-sonnet", provider: "anthropic" }, values: [[1783422000.25, "1.42"]] }]
+    : [1783422000.25, resultType === "scalar" ? "1.42" : "ready"];
+
+  return new Response(
+    JSON.stringify({ status: "success", data: { resultType, result } }),
+    { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
+  );
+}
+
 test("renderObsCost reports aggregate cost rows and total", () => {
   const output = renderObsCost({
     window: "24h",
@@ -226,6 +237,28 @@ test("/obs cost keeps no-data recovery hints for legitimate empty Prometheus res
       type: "info",
     },
   ]);
+});
+
+test("/obs cost rejects scalar, string, and matrix envelopes as fixed-vector contract failures", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+
+  for (const resultType of ["scalar", "string", "matrix"]) {
+    const notifications = [];
+    await handleObsCostCommand("cost", createCommandContext(notifications), {
+      loadConfig: async () => config,
+      fetch: async () => createNonVectorCostResponse(resultType),
+    });
+
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].type, "error");
+    assert.ok(notifications[0].message.length <= OBS_COMMAND_OUTPUT_MAX_CHARS);
+    assert.match(notifications[0].message, /Prometheus query contract error: expected an instant-vector result/u);
+    assert.match(notifications[0].message, new RegExp(`backend returned ${resultType}`, "u"));
+    assert.match(notifications[0].message, /update the PromQL or datasource response to return a vector/u);
+    assert.doesNotMatch(notifications[0].message, /No cost metrics found/u);
+  }
 });
 
 test("/obs cost rejects session-scoped Prometheus cost queries by default before fetching", async () => {

@@ -4,9 +4,10 @@ import type { RequestOptions as HttpsRequestOptions } from "node:https";
 import { request as requestHttps } from "node:https";
 import { Readable } from "node:stream";
 import type { ObservMeConfig } from "../config/schema.ts";
+import { normalizeNodeTimerMilliseconds } from "../config/timer-limits.ts";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
 import { hasUnresolvedEnvironmentPlaceholder } from "../safety/sensitive-input.ts";
-import { assertCredentialFreeGrafanaUrl } from "./grafana-url.ts";
+import { assertValidGrafanaUrl } from "./grafana-url.ts";
 
 export type GrafanaFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 export type GrafanaAuthMode = "bearer" | "basic" | "none";
@@ -111,7 +112,7 @@ export class GrafanaTransportClient {
   }
 
   async fetch(input: string | URL, options: GrafanaTransportFetchOptions = {}): Promise<Response> {
-    assertCredentialFreeGrafanaUrl(input);
+    assertValidGrafanaUrl(input);
     return fetchGrafanaRequest(
       this.#fetcher,
       input,
@@ -142,8 +143,9 @@ export function createGrafanaTransport(
 }
 
 export function buildGrafanaApiUrl(baseUrl: string, apiPath: string): URL {
-  const url = new URL(baseUrl.trim());
-  assertCredentialFreeGrafanaUrl(url);
+  const trimmedBaseUrl = baseUrl.trim();
+  assertValidGrafanaUrl(trimmedBaseUrl);
+  const url = new URL(trimmedBaseUrl);
   const basePath = removeTrailingSlashes(url.pathname);
   const path = removeLeadingSlashes(apiPath);
   url.pathname = `${basePath}/${path}`;
@@ -181,7 +183,7 @@ export function buildGrafanaDatasourceProxyUrl(baseUrl: string, datasourceUid: s
 export function resolveGrafanaTimeoutMs(config: ObservMeConfig, overrideMs?: number): number {
   const timeoutMs = overrideMs ?? config.query.timeoutMs;
   if (!Number.isFinite(timeoutMs) || timeoutMs < minimumTimeoutMs) return minimumTimeoutMs;
-  return Math.trunc(timeoutMs);
+  return normalizeNodeTimerMilliseconds(timeoutMs, minimumTimeoutMs);
 }
 
 export function createGrafanaHeaders(config: ObservMeConfig): Record<string, string> {
@@ -389,9 +391,8 @@ export async function fetchGrafanaWithNode(
   input: string | URL,
   init?: RequestInit,
 ): Promise<Response> {
+  assertValidGrafanaUrl(input);
   const url = new URL(input);
-  assertSupportedGrafanaUrl(url);
-  assertCredentialFreeGrafanaUrl(url);
 
   const requestOptions = createGrafanaNodeRequestOptions(config, init);
   const body = normalizeRequestBody(init?.body);
@@ -486,11 +487,6 @@ function normalizeRequestBody(body: BodyInit | null | undefined): string | Buffe
   if (body instanceof Uint8Array) return Buffer.from(body);
   if (body instanceof ArrayBuffer) return Buffer.from(body);
   throw new Error("Grafana custom transport supports string or binary request bodies only.");
-}
-
-function assertSupportedGrafanaUrl(url: URL): void {
-  if (url.protocol === "http:" || url.protocol === "https:") return;
-  throw new Error(`Grafana custom transport supports http:// and https:// URLs only: ${url.protocol}`);
 }
 
 async function requestNodeUrl(

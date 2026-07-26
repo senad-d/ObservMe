@@ -40,7 +40,7 @@ Inside the active Pi session, run:
 Expected output:
 
 - `/obs status` shows `ObservMe: enabled`, the intended Grafana URL, and `Grafana query readiness: ready`.
-- `/obs health` shows `Collector: reachable`, `Grafana: reachable`, and Tempo/Loki/Metrics datasource checks as `ok`.
+- `/obs health` shows `Collector traces: reachable`, `Collector metrics: reachable`, `Collector logs: reachable`, `Grafana: reachable`, and Tempo/Loki/Metrics datasource checks as `ok`.
 - `/obs session` shows a concrete session id instead of `unknown`.
 - `/obs logs` shows session logs or a clear label/export failure hint.
 - `/obs trace` returns a Grafana trace link. During an active session, child spans can appear before the root `pi.session` span; the root is exported after `session_shutdown`.

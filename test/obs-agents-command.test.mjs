@@ -20,6 +20,7 @@ import {
 import { AgentTreeTracker } from "../src/pi/agent-tree-tracker.ts";
 import { findForbiddenPrometheusLabels } from "../src/query/prometheus.ts";
 import { OBS_BACKEND_LABEL_MAX_CHARS, OBS_COMMAND_OUTPUT_MAX_CHARS } from "../src/safety/display-bounds.ts";
+import { OBSERVME_ORPHAN_AGENT_METRIC_LABEL_KEYS } from "../src/semconv/metrics.ts";
 
 const traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
 const remoteTraceId = "11111111111111111111111111111111";
@@ -172,6 +173,24 @@ function createPrometheusResponse(labels, value) {
   );
 }
 
+function createEmptyPrometheusVectorResponse() {
+  return new Response(
+    JSON.stringify({ status: "success", data: { resultType: "vector", result: [] } }),
+    { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
+  );
+}
+
+function createNonVectorAgentsResponse(resultType) {
+  const result = resultType === "matrix"
+    ? [{ metric: { agent_role: "worker" }, values: [[1783422000.25, "0.5"]] }]
+    : [1783422000.25, resultType === "scalar" ? "0.5" : "ready"];
+
+  return new Response(
+    JSON.stringify({ status: "success", data: { resultType, result } }),
+    { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
+  );
+}
+
 function createTempoSearchResponse() {
   return new Response(
     JSON.stringify({
@@ -204,6 +223,27 @@ function responseForPrometheusQuery(query) {
   if (query === OBS_AGENTS_ORPHAN_PROMQL) return createPrometheusResponse({ status: "orphaned", reason: "orphaned" }, "0");
   throw new Error(`Unexpected PromQL query: ${query}`);
 }
+
+const agentPartialFailureCases = [
+  {
+    failedQuery: OBS_AGENTS_SPAWNED_PROMQL,
+    summary: /spawn_series=unavailable fanout_series=2 orphan_series=2/u,
+    failedWarning: /Spawned metrics unavailable:/u,
+    siblingWarnings: [/Fanout p95 metrics unavailable:/u, /Orphan metrics unavailable:/u],
+  },
+  {
+    failedQuery: OBS_AGENTS_FANOUT_P95_PROMQL,
+    summary: /spawn_series=2 fanout_series=unavailable orphan_series=2/u,
+    failedWarning: /Fanout p95 metrics unavailable:/u,
+    siblingWarnings: [/Spawned metrics unavailable:/u, /Orphan metrics unavailable:/u],
+  },
+  {
+    failedQuery: OBS_AGENTS_ORPHAN_PROMQL,
+    summary: /spawn_series=2 fanout_series=2 orphan_series=unavailable/u,
+    failedWarning: /Orphan metrics unavailable:/u,
+    siblingWarnings: [/Spawned metrics unavailable:/u, /Fanout p95 metrics unavailable:/u],
+  },
+];
 
 function createChildRows(count) {
   return Array.from({ length: count }, (_value, index) => ({
@@ -256,7 +296,7 @@ function createRenderSnapshot(children, recentChildrenLimit = 4) {
     aggregateRows: {
       spawned: [{ labels: { agent_role: "orchestrator" }, value: 0.5 }],
       fanoutP95: [{ labels: { subagent_depth: "1" }, value: 4 }],
-      orphaned: [{ labels: { agent_role: "worker" }, value: 0 }],
+      orphaned: [{ labels: { status: "orphaned", reason: "orphaned" }, value: 0 }],
     },
     tempoSearchAttributes: { "pi.agent.id": "agent-root", "pi.workflow.id": "workflow-1" },
     traces: [{ traceId: ` ${remoteTraceId} `, rootServiceName: "observme-pi-extension" }],
@@ -407,6 +447,10 @@ test("/obs agents queries low-cardinality PromQL and Tempo lineage attributes", 
 
   assert.equal(prometheusCalls.length, 3);
   assert.equal(tempoCalls.length, 1);
+  assert.equal(
+    OBS_AGENTS_ORPHAN_PROMQL,
+    `sum(rate(observme_orphan_agents_total[1h])) by (${OBSERVME_ORPHAN_AGENT_METRIC_LABEL_KEYS.join(", ")})`,
+  );
   assert.deepEqual(
     prometheusCalls.map(call => new URL(call.input).searchParams.get("query")).sort(),
     [OBS_AGENTS_FANOUT_P95_PROMQL, OBS_AGENTS_ORPHAN_PROMQL, OBS_AGENTS_SPAWNED_PROMQL].sort(),
@@ -431,8 +475,91 @@ test("/obs agents queries low-cardinality PromQL and Tempo lineage attributes", 
   assert.equal(snapshot.aggregateRows.spawned.length, 1);
   assert.equal(snapshot.aggregateRows.fanoutP95.length, 1);
   assert.equal(snapshot.aggregateRows.orphaned.length, 1);
+  assert.deepEqual(snapshot.aggregateRows.orphaned[0].labels, { status: "orphaned", reason: "orphaned" });
   assert.equal(snapshot.traces[0].traceId, remoteTraceId);
   assert.deepEqual(snapshot.tempoSearchAttributes, { "pi.agent.id": "agent-root", "pi.workflow.id": "workflow-1" });
+});
+
+test("/obs agents preserves successful empty vectors for every aggregate query", async () => {
+  const config = createReadyQueryConfig();
+  const snapshot = await getObsAgentsSnapshot(createCommandContext([]), {
+    loadConfig: async () => config,
+    fetch: async input => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/api/v1/query")) return createEmptyPrometheusVectorResponse();
+      if (url.pathname.endsWith("/api/search")) return createTempoSearchResponse();
+      throw new Error(`Unexpected query URL: ${url.toString()}`);
+    },
+    getRuntime: () => createRuntimeSnapshot(),
+  });
+
+  assert.deepEqual(snapshot.aggregateRows, { spawned: [], fanoutP95: [], orphaned: [] });
+  assert.deepEqual(snapshot.enrichmentWarnings, []);
+});
+
+test("/obs agents preserves fulfilled aggregate siblings when one query violates its vector contract", async () => {
+  const config = createReadyQueryConfig();
+
+  for (const resultType of ["scalar", "string", "matrix"]) {
+    for (const failureCase of agentPartialFailureCases) {
+      const notifications = [];
+      await handleObsAgentsCommand("agents", createCommandContext(notifications), {
+        loadConfig: async () => config,
+        fetch: async input => {
+          const url = new URL(String(input));
+          if (url.pathname.endsWith("/api/search")) return createTempoSearchResponse();
+
+          const query = url.searchParams.get("query");
+          if (query === failureCase.failedQuery) return createNonVectorAgentsResponse(resultType);
+          return responseForPrometheusQuery(query);
+        },
+        getRuntime: () => createRuntimeSnapshot(),
+      });
+
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].type, "warning");
+      assert.ok(notifications[0].message.length <= OBS_COMMAND_OUTPUT_MAX_CHARS);
+      assert.match(notifications[0].message, /Workflow: workflow-1 root=agent-root/u);
+      assert.match(notifications[0].message, failureCase.summary);
+      assert.match(notifications[0].message, failureCase.failedWarning);
+      for (const siblingWarning of failureCase.siblingWarnings) {
+        assert.doesNotMatch(notifications[0].message, siblingWarning);
+      }
+      assert.match(notifications[0].message, /Prometheus query contract error: expected an instant-vector result/u);
+      assert.match(notifications[0].message, new RegExp(`backend returned ${resultType}`, "u"));
+      assert.match(notifications[0].message, /update the PromQL or datasource response to return a vector/u);
+      assert.doesNotMatch(notifications[0].message, /Tempo unavailable/u);
+    }
+  }
+});
+
+test("/obs agents preserves every fulfilled aggregate section when one independent query fails", async () => {
+  const config = createReadyQueryConfig();
+
+  for (const failureCase of agentPartialFailureCases) {
+    const notifications = [];
+    await handleObsAgentsCommand("agents", createCommandContext(notifications), {
+      loadConfig: async () => config,
+      fetch: async input => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/api/search")) return createTempoSearchResponse();
+
+        const query = url.searchParams.get("query");
+        if (query === failureCase.failedQuery) throw new Error(`token=private ${"x".repeat(20_000)}`);
+        return responseForPrometheusQuery(query);
+      },
+      getRuntime: () => createRuntimeSnapshot(),
+    });
+
+    assert.equal(notifications[0].type, "warning");
+    assert.ok(notifications[0].message.length <= OBS_COMMAND_OUTPUT_MAX_CHARS);
+    assert.match(notifications[0].message, failureCase.summary);
+    assert.match(notifications[0].message, failureCase.failedWarning);
+    for (const siblingWarning of failureCase.siblingWarnings) {
+      assert.doesNotMatch(notifications[0].message, siblingWarning);
+    }
+    assert.doesNotMatch(notifications[0].message, /private|Tempo unavailable/u);
+  }
 });
 
 test("/obs agents completes delayed independent enrichment within one request timeout budget", async () => {
@@ -520,7 +647,10 @@ test("/obs agents keeps local state when Grafana enrichment is not ready", async
   assert.equal(fetchCalls, 0);
   assert.equal(notifications[0].type, "warning");
   assert.match(notifications[0].message, /Current tree: depth=2 width=4 active=1 orphaned=0/u);
-  assert.match(notifications[0].message, /Prometheus unavailable: Grafana query configuration is not ready/u);
+  assert.match(notifications[0].message, /spawn_series=unavailable fanout_series=unavailable orphan_series=unavailable/u);
+  assert.match(notifications[0].message, /Spawned metrics unavailable: Grafana query configuration is not ready/u);
+  assert.match(notifications[0].message, /Fanout p95 metrics unavailable: Grafana query configuration is not ready/u);
+  assert.match(notifications[0].message, /Orphan metrics unavailable: Grafana query configuration is not ready/u);
   assert.match(notifications[0].message, /Tempo unavailable: Grafana query configuration is not ready/u);
   assert.doesNotMatch(notifications[0].message, /OBSERVME_GRAFANA_TOKEN/u);
 });
@@ -590,9 +720,16 @@ test("/obs agents always renders local state when every backend request fails", 
   assert.match(notifications[0].message, /Workflow: workflow-1 root=agent-root/u);
   assert.match(notifications[0].message, /Current tree: depth=2 width=4 active=1 orphaned=0/u);
   assert.match(notifications[0].message, /Wait\/join hints: .*join:agent-child-b/u);
-  assert.match(notifications[0].message, /Prometheus unavailable: Prometheus query failed: HTTP 503 Backend unavailable/u);
+  assert.ok(notifications[0].message.length <= OBS_COMMAND_OUTPUT_MAX_CHARS);
+  assert.match(notifications[0].message, /spawn_series=unavailable fanout_series=unavailable orphan_series=unavailable/u);
+  assert.match(notifications[0].message, /Spawned metrics unavailable: Prometheus query failed: HTTP 503 Backend unavailable/u);
+  assert.match(notifications[0].message, /Fanout p95 metrics unavailable: Prometheus query failed: HTTP 503 Backend unavailable/u);
+  assert.match(notifications[0].message, /Orphan metrics unavailable: Prometheus query failed: HTTP 503 Backend unavailable/u);
   assert.match(notifications[0].message, /Tempo unavailable: Tempo search failed: HTTP 503 Backend unavailable/u);
-  assert.doesNotMatch(notifications[0].message, /backend-secret|ObservMe agents unavailable/u);
+  assert.doesNotMatch(
+    notifications[0].message,
+    /spawn_series=0|fanout_series=0|orphan_series=0|backend-secret|ObservMe agents unavailable/u,
+  );
 });
 
 test("local agents runtime snapshots current tree state without importing query clients", t => {

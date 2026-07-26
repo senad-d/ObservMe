@@ -497,9 +497,11 @@ function createRejectedConfigLoadResult(config, issueCodes = ["unsafe_capture_wi
     diagnostics: {
       projectTrusted: false,
       projectConfigStatus: "skipped_untrusted",
-      effectiveSource: "environment",
+      effectiveSource: "defaults",
+      rejectedSources: ["process_environment"],
+      safeFallbackApplied: false,
       globalConfigLoaded: false,
-      environmentOverrides: true,
+      environmentOverrides: false,
       runtimeOptionsApplied: false,
       rejection: {
         issueCodes,
@@ -988,6 +990,104 @@ test("top-level disablement keeps every lifecycle path telemetry-free and clears
   assert.equal(getLocalObsAgentsRuntimeSnapshot().lineage, undefined);
 });
 
+const disabledInvalidSessionStartCases = [
+  {
+    name: "OTLP",
+    env: {
+      OBSERVME_ENABLED: "false",
+      OBSERVME_OTLP_ENDPOINT: "private-invalid-otlp-endpoint",
+    },
+    expectedCode: "invalid_otlp_endpoint",
+    sensitiveFragment: "private-invalid-otlp-endpoint",
+  },
+  {
+    name: "Grafana",
+    env: {
+      OBSERVME_ENABLED: "false",
+      OBSERVME_GRAFANA_URL: "https://private-user:private-password@grafana.example.test",
+    },
+    expectedCode: "embedded_grafana_url_credentials",
+    sensitiveFragment: "private-password",
+  },
+  {
+    name: "capture",
+    env: {
+      OBSERVME_ENABLED: "false",
+      OBSERVME_CAPTURE_PROMPTS: "true",
+      OBSERVME_REDACTION_ENABLED: "false",
+    },
+    expectedCode: "unsafe_capture_without_redaction",
+  },
+  {
+    name: "lineage",
+    env: {
+      OBSERVME_ENABLED: "false",
+      OBSERVME_WORKFLOW_ID: "private-lineage/unsafe",
+    },
+    expectedCode: "malformed_lineage_value",
+    sensitiveFragment: "private-lineage",
+  },
+  {
+    name: "timeout",
+    env: {
+      OBSERVME_ENABLED: "false",
+      OBSERVME_OTLP_TIMEOUT_MS: "private-timeout",
+    },
+    expectedCode: "invalid_config_shape",
+    sensitiveFragment: "private-timeout",
+  },
+];
+
+test("real session_start preserves explicit disablement when sibling settings are invalid", async t => {
+  t.after(() => {
+    clearObsSessionRuntimeState();
+    clearObsAgentsRuntimeState();
+    resetObsStatusRuntimeState();
+  });
+
+  for (const invalidCase of disabledInvalidSessionStartCases) {
+    clearObsSessionRuntimeState();
+    clearObsAgentsRuntimeState();
+    resetObsStatusRuntimeState();
+
+    const pi = createFakePi();
+    const notifications = [];
+    let startTelemetryCalls = 0;
+    registerHandlers(pi, {
+      env: invalidCase.env,
+      startTelemetry: async () => {
+        startTelemetryCalls += 1;
+        throw new Error("disabled invalid configuration must not start telemetry");
+      },
+    });
+
+    await t.test(`does not start telemetry for invalid ${invalidCase.name} settings`, async () => {
+      await pi.handlers.get("session_start")(
+        { sessionId: `session-disabled-invalid-${invalidCase.name}` },
+        createNotificationContext(notifications),
+      );
+
+      const statusState = getObsStatusRuntimeState();
+      assert.equal(startTelemetryCalls, 0);
+      assert.equal(statusState.config?.enabled, false);
+      assert.ok(statusState.configDiagnostics?.rejection?.issueCodes.includes(invalidCase.expectedCode));
+      assert.equal(getLocalObsSessionSnapshot().sessionId, undefined);
+      assert.equal(getLocalObsAgentsRuntimeSnapshot().lineage, undefined);
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].type, "warning");
+      assert.match(notifications[0].message, /ObservMe remains disabled/u);
+      assert.match(notifications[0].message, /telemetry was not started/u);
+      assert.doesNotMatch(notifications[0].message, /enabled successfully|telemetry started/u);
+      if (invalidCase.sensitiveFragment) {
+        assert.doesNotMatch(
+          JSON.stringify({ diagnostics: statusState.configDiagnostics, notifications }),
+          new RegExp(invalidCase.sensitiveFragment, "u"),
+        );
+      }
+    });
+  }
+});
+
 function createNotificationContext(notifications) {
   return {
     cwd: "/workspace/demo",
@@ -1021,6 +1121,51 @@ test("safeHandler catches throwing handlers and records observme_handler_errors_
   ]);
 });
 
+test("safeHandler fulfills when both the handler and error recorder fail", async () => {
+  const syncRecorderFailure = safeHandler(
+    "throwing.sync-recorder",
+    () => {
+      throw new Error("handler failed");
+    },
+    () => {
+      throw new Error("recorder failed");
+    },
+  );
+  const asyncRecorderFailure = safeHandler(
+    "throwing.async-recorder",
+    () => {
+      throw new Error("handler failed");
+    },
+    () => Promise.reject(new Error("recorder rejected")),
+  );
+
+  await assert.doesNotReject(() => syncRecorderFailure({}, {}));
+  await assert.doesNotReject(() => asyncRecorderFailure({}, {}));
+});
+
+test("Pi tool_call continues to later middleware when ObservMe error reporting fails", async () => {
+  const { runner, telemetry } = await createToolMiddlewareRuntimeHarness(defaultObservMeConfig);
+  const toolCall = {
+    type: "tool_call",
+    toolCallId: "tool-middleware-a",
+    toolName: "read",
+    input: { value: "before-a", password: "pre-middleware-secret" },
+  };
+  telemetry.metrics.toolCalls.add = () => {
+    throw new Error("tool recorder failed");
+  };
+  telemetry.metrics.handlerErrors.add = () => {
+    throw new Error("handler error metric failed");
+  };
+  telemetry.logger.emit = () => {
+    throw new Error("handler error log failed");
+  };
+
+  await assert.doesNotReject(() => runner.emitToolCall(toolCall));
+
+  assert.deepEqual(toolCall.input, { value: "after-a" });
+});
+
 test("session lifecycle handlers tolerate missing trust and partial UI capabilities", async () => {
   const pi = createFakePi();
   let telemetry;
@@ -1040,6 +1185,60 @@ test("session lifecycle handlers tolerate missing trust and partial UI capabilit
   assert.equal(telemetry.tracer.spans[0].ended, true);
   assert.deepEqual(telemetry.controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
   assert.deepEqual(telemetry.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+});
+
+test("throwing and rejecting notification adapters cannot stop config load or telemetry startup", async () => {
+  const notificationFailures = [
+    () => {
+      throw new Error("notification failed");
+    },
+    () => Promise.reject(new Error("notification rejected")),
+  ];
+
+  for (const failNotification of notificationFailures) {
+    const pi = createFakePi();
+    const config = structuredClone(defaultObservMeConfig);
+    config.capture.prompts = true;
+    config.privacy.allowUnsafeCapture = true;
+    const order = [];
+    let notificationCalls = 0;
+    let telemetry;
+
+    registerHandlers(pi, {
+      ensureProjectConfig: async () => {
+        order.push("ensure");
+        throw new Error("bootstrap failed");
+      },
+      loadConfig: async () => {
+        order.push("load");
+        return config;
+      },
+      startTelemetry: async ({ lineage }) => {
+        order.push("start");
+        telemetry = createFakeTelemetry(lineage);
+        return telemetry;
+      },
+    });
+    const ctx = {
+      cwd: "/workspace/demo",
+      isProjectTrusted: () => true,
+      ui: {
+        notify: () => {
+          notificationCalls += 1;
+          return failNotification();
+        },
+      },
+    };
+
+    await assert.doesNotReject(() =>
+      pi.handlers.get("session_start")({ sessionId: "session-notification-failure" }, ctx),
+    );
+
+    assert.deepEqual(order, ["ensure", "load", "start"]);
+    assert.equal(notificationCalls, 2);
+    assert.ok(telemetry.sessionSpan);
+    await pi.handlers.get("session_shutdown")({ status: "ok" }, ctx);
+  }
 });
 
 test("OTEL startup failure clears runtime state, surfaces a sanitized UI diagnostic, and allows a later session", async t => {
@@ -1236,7 +1435,11 @@ test("session_start emits one sanitized structured config rejection diagnostic",
   const records = telemetry.logger.records.filter(record => record.body === LOG_EVENT_NAMES.CONFIG_REJECTED);
   assert.equal(records.length, 1);
   assert.equal(records[0].attributes[LOG_ATTRIBUTES.EVENT_CATEGORY], "config");
-  assert.equal(records[0].attributes[CONFIG_ATTRIBUTES.OBSERVME_CONFIG_SOURCE], "environment");
+  assert.equal(records[0].attributes[CONFIG_ATTRIBUTES.OBSERVME_CONFIG_SOURCE], "defaults");
+  assert.deepEqual(records[0].attributes[CONFIG_ATTRIBUTES.OBSERVME_CONFIG_REJECTED_SOURCES], [
+    "process_environment",
+  ]);
+  assert.equal(records[0].attributes[CONFIG_ATTRIBUTES.OBSERVME_CONFIG_SAFE_FALLBACK_APPLIED], false);
   assert.deepEqual(records[0].attributes[CONFIG_ATTRIBUTES.OBSERVME_CONFIG_REJECTION_ISSUE_CODES], [
     "unsafe_capture_without_redaction",
     "high_cardinality_metric_label",
@@ -1246,7 +1449,9 @@ test("session_start emits one sanitized structured config rejection diagnostic",
   assert.equal(records[0].attributes[LOG_ATTRIBUTES.SPAN_ID], "2222222222222222");
   assert.equal(notifications.length, 1);
   assert.equal(notifications[0].type, "warning");
-  assert.match(notifications[0].message, /safe defaults/u);
+  assert.match(notifications[0].message, /process environment/u);
+  assert.match(notifications[0].message, /accepted configuration remains effective/u);
+  assert.doesNotMatch(notifications[0].message, /safe defaults/u);
   assert.deepEqual(getObsStatusRuntimeState().configDiagnostics?.rejection?.issueCodes, [
     "unsafe_capture_without_redaction",
     "high_cardinality_metric_label",
@@ -2266,6 +2471,158 @@ test("session_shutdown isolates lease-observation and exporter shutdown failures
   assert.equal(telemetry.activeAgentLease.callbackRegistered, false);
 });
 
+test("failed session initialization still flushes and shuts down when cleanup bookkeeping throws", async () => {
+  const pi = createFakePi();
+  let telemetry;
+  registerHandlers(pi, {
+    loadConfig,
+    startTelemetry: async ({ lineage }) => {
+      telemetry = createFakeTelemetry(lineage);
+      telemetry.metrics.sessionsStarted.add = () => {
+        throw new Error("session-start metric failed");
+      };
+      telemetry.metrics.activeSpans.add = value => {
+        if (value < 0) throw new Error("active-span cleanup metric failed");
+      };
+      return telemetry;
+    },
+  });
+
+  await assert.doesNotReject(() =>
+    pi.handlers.get("session_start")(
+      { type: "session_start", reason: "startup", sessionId: "failed-initialization-cleanup" },
+      { cwd: "/workspace/demo" },
+    ),
+  );
+
+  assert.deepEqual(telemetry.controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.deepEqual(telemetry.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+  assert.equal(telemetry.sessionSpan.ended, true);
+  assert.equal(telemetry.activeAgentLease.disposed, true);
+});
+
+test("session shutdown attempts controller cleanup despite metric, logger, and span failures", async t => {
+  const scenarios = [
+    {
+      name: "metric bookkeeping",
+      inject: telemetry => {
+        telemetry.metrics.sessionsShutdown.add = () => {
+          throw new Error("shutdown metric failed");
+        };
+      },
+    },
+    {
+      name: "lifecycle logging",
+      inject: telemetry => {
+        telemetry.logger.emit = () => {
+          throw new Error("shutdown logger failed");
+        };
+      },
+    },
+    {
+      name: "span bookkeeping",
+      inject: telemetry => {
+        telemetry.sessionSpan.addEvent = () => {
+          throw new Error("shutdown span event failed");
+        };
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async () => {
+      const pi = createFakePi();
+      let telemetry;
+      registerHandlers(pi, {
+        loadConfig,
+        startTelemetry: async ({ lineage }) => {
+          telemetry = createFakeTelemetry(lineage);
+          return telemetry;
+        },
+      });
+
+      await pi.handlers.get("session_start")(
+        { type: "session_start", reason: "startup", sessionId: `shutdown-${scenario.name}` },
+        { cwd: "/workspace/demo" },
+      );
+      scenario.inject(telemetry);
+      await pi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, {});
+
+      assert.deepEqual(telemetry.controller.flushCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+      assert.deepEqual(telemetry.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+      assert.equal(telemetry.activeAgentLease.disposed, true);
+    });
+  }
+});
+
+test("unresolved controller cleanup is retained before throwing export diagnostics and fences startup", async () => {
+  const ownership = createOtelOperationOwnership();
+  const transitions = [];
+  const trackedOwnership = {
+    get hasUnresolvedOperations() {
+      return ownership.hasUnresolvedOperations;
+    },
+    retain(result, retry, observeSettlement) {
+      transitions.push(`retain:${result.operation}`);
+      ownership.retain(result, retry, observeSettlement);
+    },
+    resolveBeforeStart: ownership.resolveBeforeStart.bind(ownership),
+    takeStartupDiagnostic: ownership.takeStartupDiagnostic.bind(ownership),
+  };
+  const neverSettles = new Promise(() => undefined);
+  const sessions = [];
+  const startTelemetry = async ({ lineage }) => {
+    const telemetry = createFakeTelemetry(lineage);
+    sessions.push(telemetry);
+    if (sessions.length === 1) {
+      telemetry.controller.flush = async timeoutMs => {
+        telemetry.controller.flushCalls.push(timeoutMs);
+        transitions.push("controller:flush");
+        return {
+          operation: "flush",
+          completed: false,
+          timedOut: true,
+          settlement: neverSettles,
+        };
+      };
+      telemetry.controller.shutdown = async timeoutMs => {
+        telemetry.controller.shutdownCalls.push(timeoutMs);
+        transitions.push("controller:shutdown");
+        return { operation: "shutdown", completed: true, timedOut: false };
+      };
+      telemetry.metrics.exportErrors.add = () => {
+        transitions.push("diagnostic:flush");
+        throw new Error("export diagnostic metric failed");
+      };
+    }
+    return telemetry;
+  };
+  const options = { loadConfig, otelOperationOwnership: trackedOwnership, startTelemetry };
+  const firstPi = createFakePi();
+  const reboundPi = createFakePi();
+
+  registerHandlers(firstPi, options);
+  await firstPi.handlers.get("session_start")(
+    { type: "session_start", reason: "startup", sessionId: "diagnostic-fence-first" },
+    { cwd: "/workspace/demo" },
+  );
+  await firstPi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, {});
+
+  assert.equal(ownership.hasUnresolvedOperations, true);
+  assert.ok(transitions.indexOf("retain:flush") < transitions.indexOf("diagnostic:flush"));
+  assert.ok(transitions.indexOf("diagnostic:flush") < transitions.indexOf("controller:shutdown"));
+  assert.deepEqual(sessions[0].controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
+
+  registerHandlers(reboundPi, options);
+  await reboundPi.handlers.get("session_start")(
+    { type: "session_start", reason: "reload", sessionId: "diagnostic-fence-blocked" },
+    { cwd: "/workspace/demo" },
+  );
+
+  assert.equal(sessions.length, 1);
+  assert.equal(ownership.hasUnresolvedOperations, true);
+});
+
 test("shutdown fences cached integration mutations and cancels active orchestration before flush", async t => {
   clearObsAgentsRuntimeState();
   t.after(clearObsAgentsRuntimeState);
@@ -2642,6 +2999,131 @@ test("duplicate session_start flushes and shuts down the previous telemetry sess
   assert.deepEqual(secondSession.controller.shutdownCalls, [defaultObservMeConfig.shutdown.flushTimeoutMs]);
   assert.deepEqual(secondSession.activeAgentLease.transitions, ["activate", "deactivate", "dispose"]);
   assert.equal(sessions.filter(session => session.activeAgentLease.active).length, 0);
+});
+
+test("rebound extension defers provider startup until failed-start cleanup settles successfully", async () => {
+  const ownership = createOtelOperationOwnership();
+  const failedPi = createFakePi();
+  const reboundPi = createFakePi();
+  const cleanupSettlement = createDeferred();
+  const sessions = [];
+  const transitions = [];
+  let startTelemetryCalls = 0;
+  let cleanupRetryCalls = 0;
+  const startTelemetry = async ({ lineage }) => {
+    startTelemetryCalls += 1;
+    if (startTelemetryCalls === 1) {
+      transitions.push("failed-provider-start");
+      throw toOtelStartupError(
+        new Error("log startup failed"),
+        {
+          operation: "shutdown",
+          completed: false,
+          timedOut: true,
+          settlement: cleanupSettlement.promise,
+        },
+        async () => {
+          cleanupRetryCalls += 1;
+          return { operation: "shutdown", completed: true, timedOut: false };
+        },
+      );
+    }
+
+    transitions.push("replacement-provider-start");
+    const telemetry = createFakeTelemetry(lineage);
+    sessions.push(telemetry);
+    return telemetry;
+  };
+  const options = { loadConfig, otelOperationOwnership: ownership, startTelemetry };
+  const ctx = { cwd: "/workspace/demo" };
+
+  registerHandlers(failedPi, options);
+  await failedPi.handlers.get("session_start")({ sessionId: "session-failed-startup" }, ctx);
+
+  registerHandlers(reboundPi, options);
+  await reboundPi.handlers.get("session_start")({ sessionId: "session-blocked-by-startup-cleanup" }, ctx);
+
+  assert.equal(ownership.hasUnresolvedOperations, true);
+  assert.equal(startTelemetryCalls, 1);
+  assert.equal(cleanupRetryCalls, 0);
+  assert.deepEqual(transitions, ["failed-provider-start"]);
+
+  cleanupSettlement.resolve({ operation: "shutdown", completed: true, timedOut: false });
+  await cleanupSettlement.promise;
+  await Promise.resolve();
+
+  assert.equal(ownership.hasUnresolvedOperations, false);
+  await reboundPi.handlers.get("session_start")({ sessionId: "session-after-startup-cleanup" }, ctx);
+
+  assert.equal(startTelemetryCalls, 2);
+  assert.equal(cleanupRetryCalls, 0);
+  assert.deepEqual(transitions, ["failed-provider-start", "replacement-provider-start"]);
+  await reboundPi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "shutdown" }, ctx);
+});
+
+test("late failed-start cleanup settlement is retained and retried exactly once before provider startup", async () => {
+  const ownership = createOtelOperationOwnership();
+  const failedPi = createFakePi();
+  const reboundPi = createFakePi();
+  const cleanupSettlement = createDeferred();
+  const transitions = [];
+  let startTelemetryCalls = 0;
+  let cleanupRetryCalls = 0;
+  const startTelemetry = async ({ lineage }) => {
+    startTelemetryCalls += 1;
+    if (startTelemetryCalls === 1) {
+      transitions.push("failed-provider-start");
+      throw toOtelStartupError(
+        new Error("metric startup failed"),
+        {
+          operation: "shutdown",
+          completed: false,
+          timedOut: true,
+          settlement: cleanupSettlement.promise,
+        },
+        async () => {
+          cleanupRetryCalls += 1;
+          transitions.push("startup-cleanup-retry");
+          return { operation: "shutdown", completed: true, timedOut: false };
+        },
+      );
+    }
+
+    transitions.push("replacement-provider-start");
+    return createFakeTelemetry(lineage);
+  };
+  const options = { loadConfig, otelOperationOwnership: ownership, startTelemetry };
+  const ctx = { cwd: "/workspace/demo" };
+
+  registerHandlers(failedPi, options);
+  await failedPi.handlers.get("session_start")({ sessionId: "session-failed-startup-retry" }, ctx);
+
+  registerHandlers(reboundPi, options);
+  await reboundPi.handlers.get("session_start")({ sessionId: "session-blocked-before-late-failure" }, ctx);
+  assert.equal(startTelemetryCalls, 1);
+  assert.equal(cleanupRetryCalls, 0);
+
+  cleanupSettlement.resolve({
+    operation: "shutdown",
+    completed: false,
+    timedOut: false,
+    error: new Error("late startup cleanup failure"),
+  });
+  await cleanupSettlement.promise;
+  await Promise.resolve();
+
+  assert.equal(ownership.hasUnresolvedOperations, true);
+  await reboundPi.handlers.get("session_start")({ sessionId: "session-after-startup-cleanup-retry" }, ctx);
+
+  assert.equal(ownership.hasUnresolvedOperations, false);
+  assert.equal(startTelemetryCalls, 2);
+  assert.equal(cleanupRetryCalls, 1);
+  assert.deepEqual(transitions, [
+    "failed-provider-start",
+    "startup-cleanup-retry",
+    "replacement-provider-start",
+  ]);
+  await reboundPi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "shutdown" }, ctx);
 });
 
 test("rebound extension waits for timed-out flush cleanup before starting new providers", async () => {

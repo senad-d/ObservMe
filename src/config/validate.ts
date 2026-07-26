@@ -1,4 +1,5 @@
 import { Compile } from "typebox/compile";
+import { notifyBestEffort } from "../diagnostics/notify.ts";
 import { defaultObservMeConfig } from "./defaults.ts";
 import {
   ACTIVE_AGENT_LEASE_EXPORT_SAFETY_MARGIN_MILLIS,
@@ -8,8 +9,9 @@ import type { ObservMeConfig } from "./schema.ts";
 import { validateCustomRedactionPatterns } from "../privacy/redact.ts";
 import { classifyOtlpEndpointFailure } from "../otel/otlp-endpoint.ts";
 import {
-  classifyGrafanaUrlSecurityFailure,
-  formatGrafanaUrlSecurityFailure,
+  classifyGrafanaUrlFailure,
+  formatGrafanaUrlFailure,
+  getGrafanaUrlIssueCode,
 } from "../query/grafana-url.ts";
 
 export interface ValidationIssue {
@@ -21,6 +23,11 @@ export interface ConfigValidationOptions {
   env?: NodeJS.ProcessEnv;
   isProjectTrusted?: boolean;
   projectConfigWasRead?: boolean;
+}
+
+export interface ConfigEnsureOptions extends ConfigValidationOptions {
+  logger?: ConfigLogSink;
+  preserveExplicitDisablement?: boolean;
 }
 
 export interface ConfigValidationResult {
@@ -70,6 +77,9 @@ const knownConfigValidationIssueCodes = new Set([
   "insecure_production_transport",
   "invalid_otlp_endpoint",
   "invalid_signal_endpoint_path",
+  "missing_grafana_url",
+  "unresolved_grafana_url",
+  "invalid_grafana_url",
   "embedded_grafana_url_credentials",
   "high_cardinality_metric_label",
   "active_agent_lease_too_short_for_export_interval",
@@ -113,21 +123,48 @@ export function validateObservMeConfig(
 
 export function ensureValidObservMeConfig(
   config: ObservMeConfig,
-  options: ConfigValidationOptions & { logger?: ConfigLogSink } = {},
+  options: ConfigEnsureOptions = {},
 ): ObservMeConfig {
   return ensureValidObservMeConfigWithDiagnostics(config, options).config;
 }
 
 export function ensureValidObservMeConfigWithDiagnostics(
   config: ObservMeConfig,
-  options: ConfigValidationOptions & { logger?: ConfigLogSink } = {},
+  options: ConfigEnsureOptions = {},
 ): EnsuredObservMeConfig {
   const result = validateObservMeConfig(config, options);
-  if (result.valid) return { config };
+  if (result.valid) {
+    return {
+      config: applyPreservedDisablement(config, options.preserveExplicitDisablement === true),
+    };
+  }
 
   const rejection = createConfigRejectionDiagnostic(result.issues);
-  logValidationRejection(rejection, options.logger);
-  return { config: structuredClone(defaultObservMeConfig), rejection };
+  const fallbackConfig = createSafeFallbackConfig(config, options.preserveExplicitDisablement === true);
+  logValidationRejection(rejection, options.logger, fallbackConfig.enabled === false);
+  return { config: fallbackConfig, rejection };
+}
+
+function applyPreservedDisablement(config: ObservMeConfig, preserveExplicitDisablement: boolean): ObservMeConfig {
+  if (!preserveExplicitDisablement || config.enabled === false) return config;
+
+  const disabledConfig: ObservMeConfig = structuredClone(config);
+  disabledConfig.enabled = false;
+  return disabledConfig;
+}
+
+function createSafeFallbackConfig(config: unknown, preserveExplicitDisablement: boolean): ObservMeConfig {
+  const fallbackConfig: ObservMeConfig = structuredClone(defaultObservMeConfig);
+  if (preserveExplicitDisablement || hasExplicitDisablement(config)) fallbackConfig.enabled = false;
+  return fallbackConfig;
+}
+
+function hasExplicitDisablement(config: unknown): boolean {
+  try {
+    return typeof config === "object" && config !== null && "enabled" in config && config.enabled === false;
+  } catch {
+    return false;
+  }
 }
 
 export function createConfigRejectionDiagnostic(issues: readonly ValidationIssue[]): ConfigRejectionDiagnostic {
@@ -176,7 +213,7 @@ export async function emitUnsafeCaptureWarning(
 ): Promise<boolean> {
   if (!config.privacy.allowUnsafeCapture || !hasContentCaptureEnabled(config)) return false;
 
-  await ctx.ui?.notify?.(unsafeCaptureWarningMessage(config), "warning");
+  notifyBestEffort(ctx, unsafeCaptureWarningMessage(config), "warning");
   return true;
 }
 
@@ -352,13 +389,13 @@ function endpointPathMatches(endpoint: string, requiredPath: string): boolean {
 }
 
 function validateGrafanaUrl(config: ObservMeConfig): ValidationIssue[] {
-  const failureClass = classifyGrafanaUrlSecurityFailure(config.query.grafana.url);
+  const failureClass = classifyGrafanaUrlFailure(config.query.grafana.url);
   if (!failureClass) return [];
 
   return [
     {
-      code: "embedded_grafana_url_credentials",
-      message: formatGrafanaUrlSecurityFailure(failureClass),
+      code: getGrafanaUrlIssueCode(failureClass),
+      message: formatGrafanaUrlFailure(failureClass),
     },
   ];
 }
@@ -524,12 +561,20 @@ function validateBatchSize(name: string, value: number, queueSize: number): Vali
   return [{ code: "queue_size_exceeds_guardrail", message: `${name} must not exceed its maxQueueSize.` }];
 }
 
-function logValidationRejection(rejection: ConfigRejectionDiagnostic, logger: ConfigLogSink | undefined): void {
+function logValidationRejection(
+  rejection: ConfigRejectionDiagnostic,
+  logger: ConfigLogSink | undefined,
+  disablementPreserved: boolean,
+): void {
   if (!logger?.warn) return;
+
+  const fallbackDescription = disablementPreserved
+    ? "safe defaults applied with explicit disablement preserved; telemetry remains disabled"
+    : "safe defaults applied";
 
   try {
     logger.warn(
-      `ObservMe config rejected (${rejection.issueCodes.join(", ")}); ${rejection.issueCount} issue(s), safe defaults applied.`,
+      `ObservMe config rejected (${rejection.issueCodes.join(", ")}); ${rejection.issueCount} issue(s), ${fallbackDescription}.`,
     );
   } catch {
     return;

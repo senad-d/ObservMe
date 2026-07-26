@@ -21,6 +21,7 @@ import { bootstrapProjectObservMeConfig } from "../../config/bootstrap-project-c
 import type {
   LoadSessionConfigResult,
   SessionConfigDiagnostics,
+  SessionConfigRejectedSource,
 } from "../../config/load-config.ts";
 import {
   loadSessionConfig,
@@ -29,7 +30,8 @@ import {
 import type { ObservMeConfig } from "../../config/schema.ts";
 import { emitUnsafeCaptureWarning, normalizeConfigRejectionDiagnostic } from "../../config/validate.ts";
 import { EXTENSION_STATUS_KEY, EXTENSION_STATUS_VALUE } from "../../constants.ts";
-import { ObservMeOtelStartupError } from "../../otel/sdk.ts";
+import { notifyBestEffort } from "../../diagnostics/notify.ts";
+import { ObservMeOtelStartupError, type OtelStartupCleanupRetry } from "../../otel/sdk.ts";
 import type { BoundedOtelOperationResult, OtelOperationSettlement } from "../../otel/shutdown.ts";
 import {
   AGENT_LINEAGE_ATTRIBUTES,
@@ -38,7 +40,7 @@ import {
   SESSION_ATTRIBUTES,
   WORKFLOW_ATTRIBUTES,
 } from "../../semconv/attributes.ts";
-import { LOG_EVENT_NAMES } from "../../semconv/metrics.ts";
+import { createOrphanAgentMetricLabels, LOG_EVENT_NAMES } from "../../semconv/metrics.ts";
 import { SPAN_NAMES } from "../../semconv/spans.ts";
 import { createAgentLineageContext, normalizeAgentRoleMetricLabel } from "../agent-lineage.ts";
 import {
@@ -197,6 +199,7 @@ async function handleSessionStart(
 
   if (!config.enabled) {
     clearDisabledTelemetryRuntimeState(state);
+    notifyConfigRejection(ctx, loadedConfig.diagnostics, false);
     await clearExtensionStatus(ctx);
     return;
   }
@@ -408,9 +411,31 @@ function normalizeLoadSessionConfigResult(loaded: LoadSessionConfigResult): Load
     config: loaded.config,
     diagnostics: {
       ...loaded.diagnostics,
+      rejectedSources: normalizeRejectedConfigSources(loaded.diagnostics.rejectedSources),
+      safeFallbackApplied: loaded.diagnostics.safeFallbackApplied === true,
       rejection: normalizeConfigRejectionDiagnostic(loaded.diagnostics.rejection),
     },
   };
+}
+
+function normalizeRejectedConfigSources(value: unknown): SessionConfigRejectedSource[] {
+  if (!Array.isArray(value)) return [];
+
+  const sources: SessionConfigRejectedSource[] = [];
+  for (const source of value) {
+    if (!isSessionConfigRejectedSource(source) || sources.includes(source)) continue;
+    sources.push(source);
+  }
+  return sources;
+}
+
+function isSessionConfigRejectedSource(value: unknown): value is SessionConfigRejectedSource {
+  return (
+    value === "global" ||
+    value === "trusted_project" ||
+    value === "project_env" ||
+    value === "process_environment"
+  );
 }
 
 async function ensureProjectConfigForHandler(
@@ -418,7 +443,8 @@ async function ensureProjectConfigForHandler(
   ctx: ObservMeHandlerContext,
 ): Promise<void> {
   // Pi emits session_start for startup, reload, new, resume, and fork flows. ObservMe keeps
-  // bootstrap idempotent across all of them: create once for trusted projects, then never overwrite.
+  // bootstrap idempotent across all of them: create one inactive setup guide for trusted projects,
+  // then never overwrite it or an intentionally adopted project configuration.
   await bootstrapProjectObservMeConfig(ctx, {
     configDirName: options.configDirName,
     ensureProjectConfig: options.ensureProjectConfig,
@@ -430,7 +456,7 @@ async function shutDownPreviousSessionBeforeDuplicateStart(
   ctx: ObservMeHandlerContext,
   state: HandlerSessionState,
 ): Promise<boolean> {
-  emitLifecycleLog(session.logger, LOG_EVENT_NAMES.SESSION_DUPLICATE_START, buildDuplicateSessionStartAttributes(session));
+  runTelemetryBookkeeping(recordDuplicateSessionStart.bind(undefined, session));
 
   try {
     await shutDownTelemetrySession(session, duplicateSessionStartShutdownEvent(), ctx, state);
@@ -438,14 +464,22 @@ async function shutDownPreviousSessionBeforeDuplicateStart(
     notifyPendingTelemetryCleanupOnce(state, ctx);
     return false;
   } catch (error) {
-    recordDuplicateSessionStartShutdownError(session, error);
+    retainControllerOperationFailure(state, session, "shutdown", error);
     clearObsSessionRuntimeState();
     clearObsAgentsRuntimeState();
     state.session = undefined;
-    retainControllerOperationFailure(state, session, "shutdown", error);
+    recordDuplicateSessionStartShutdownError(session, error);
     notifyPendingTelemetryCleanupOnce(state, ctx);
     return false;
   }
+}
+
+function recordDuplicateSessionStart(session: ObservMeTelemetrySession): void {
+  emitLifecycleLog(
+    session.logger,
+    LOG_EVENT_NAMES.SESSION_DUPLICATE_START,
+    buildDuplicateSessionStartAttributes(session),
+  );
 }
 
 async function resolvePendingTelemetryCleanupBeforeStart(
@@ -466,18 +500,11 @@ function notifyPendingTelemetryCleanupOnce(
 }
 
 function notifyPendingTelemetryCleanup(ctx: ObservMeHandlerContext): void {
-  if (ctx.hasUI === false || !ctx.ui?.notify) return;
-
-  const message = "ObservMe telemetry startup was deferred because prior OTEL flush or shutdown cleanup is still unresolved.";
-  try {
-    void Promise.resolve(ctx.ui.notify(message, "warning")).catch(ignorePendingCleanupDiagnosticError);
-  } catch {
-    return;
-  }
-}
-
-function ignorePendingCleanupDiagnosticError(): undefined {
-  return undefined;
+  notifyBestEffort(
+    ctx,
+    "ObservMe telemetry startup was deferred because prior OTEL flush or shutdown cleanup is still unresolved.",
+    "warning",
+  );
 }
 
 function buildDuplicateSessionStartAttributes(session: ObservMeTelemetrySession): AttributeMap {
@@ -495,12 +522,19 @@ function duplicateSessionStartShutdownEvent(): SessionShutdownEvent {
 }
 
 function recordDuplicateSessionStartShutdownError(session: ObservMeTelemetrySession, error: unknown): void {
-  session.metrics.handlerErrors.add(1, { operation: "session_start.duplicate_shutdown" });
-  emitLifecycleLog(
-    session.logger,
-    LOG_EVENT_NAMES.HANDLER_FAILED,
-    handlerErrorAttributes("session_start.duplicate_shutdown", error),
-    "ERROR",
+  runTelemetryBookkeeping(
+    session.metrics.handlerErrors.add.bind(session.metrics.handlerErrors, 1, {
+      operation: "session_start.duplicate_shutdown",
+    }),
+  );
+  runTelemetryBookkeeping(
+    emitLifecycleLog.bind(
+      undefined,
+      session.logger,
+      LOG_EVENT_NAMES.HANDLER_FAILED,
+      handlerErrorAttributes("session_start.duplicate_shutdown", error),
+      "ERROR",
+    ),
   );
 }
 
@@ -510,19 +544,14 @@ async function cleanUpFailedSessionStart(
   state: HandlerSessionState,
 ): Promise<void> {
   const labels = metricLabels(session.config, session.lineage);
+  state.integrationSessionPhase = "closing";
+  recordFailedSessionStartCleanupBookkeeping(session, labels);
+  await clearExtensionStatus(ctx);
 
   try {
-    state.integrationSessionPhase = "closing";
-    deactivateSessionActiveAgent(session, labels);
-    interruptActiveSubagentOperations(session);
-    endAllActiveSpans(session);
-    endActiveSpan(session, session.sessionSpan);
-    await clearExtensionStatus(ctx);
-    await recordOwnedControllerOperation(state, session, "flush");
-    await recordOwnedControllerOperation(state, session, "shutdown");
+    await cleanUpTelemetryController(state, session);
   } finally {
-    disposeSessionActiveAgentLease(session);
-    clearTelemetrySessionRuntimeState(session, state);
+    finalizeTelemetrySessionCleanup(session, state);
   }
 }
 
@@ -536,23 +565,98 @@ async function shutDownTelemetrySession(
   const labels = metricLabels(session.config, session.lineage);
   const outcome = deriveWorkflowOutcome(event, session.workflowOutcome);
   const shutdownAttributes = buildShutdownAttributes(event, session, outcome);
+  recordSessionShutdownBookkeeping(session, shutdownAttributes, outcome, labels);
+  await clearExtensionStatus(ctx);
 
   try {
-    deactivateSessionActiveAgent(session, labels);
-    session.metrics.sessionsShutdown.add(1, labels);
-    recordWorkflowShutdownTelemetry(session, shutdownAttributes, outcome, labels);
-    interruptActiveSubagentOperations(session);
-    endAllActiveSpans(session);
-    session.sessionSpan?.addEvent(LOG_EVENT_NAMES.SESSION_SHUTDOWN, shutdownAttributes);
-    if (session.sessionSpan) setTerminalSpanStatus(session.sessionSpan, outcome);
-    endActiveSpan(session, session.sessionSpan);
-    await clearExtensionStatus(ctx);
-    await recordOwnedControllerOperation(state, session, "flush");
-    return await recordOwnedControllerOperation(state, session, "shutdown");
+    return await cleanUpTelemetryController(state, session);
   } finally {
-    disposeSessionActiveAgentLease(session);
-    clearTelemetrySessionRuntimeState(session, state);
+    finalizeTelemetrySessionCleanup(session, state);
   }
+}
+
+function recordFailedSessionStartCleanupBookkeeping(
+  session: ObservMeTelemetrySession,
+  labels: Record<string, string>,
+): void {
+  runTelemetryBookkeeping(deactivateSessionActiveAgent.bind(undefined, session, labels));
+  runTelemetryBookkeeping(interruptActiveSubagentOperations.bind(undefined, session));
+  runTelemetryBookkeeping(endAllActiveSpans.bind(undefined, session));
+  runTelemetryBookkeeping(endActiveSpan.bind(undefined, session, session.sessionSpan));
+}
+
+function recordSessionShutdownBookkeeping(
+  session: ObservMeTelemetrySession,
+  shutdownAttributes: AttributeMap,
+  outcome: TerminalOutcome,
+  labels: Record<string, string>,
+): void {
+  runTelemetryBookkeeping(deactivateSessionActiveAgent.bind(undefined, session, labels));
+  runTelemetryBookkeeping(session.metrics.sessionsShutdown.add.bind(session.metrics.sessionsShutdown, 1, labels));
+  runTelemetryBookkeeping(
+    recordWorkflowShutdownTelemetry.bind(undefined, session, shutdownAttributes, outcome, labels),
+  );
+  runTelemetryBookkeeping(interruptActiveSubagentOperations.bind(undefined, session));
+  runTelemetryBookkeeping(endAllActiveSpans.bind(undefined, session));
+  runTelemetryBookkeeping(recordSessionShutdownSpanEvent.bind(undefined, session, shutdownAttributes));
+  runTelemetryBookkeeping(recordSessionWorkflowOutcomeAttribute.bind(undefined, session, outcome));
+  runTelemetryBookkeeping(recordSessionTerminalSpanStatus.bind(undefined, session, outcome));
+  runTelemetryBookkeeping(endActiveSpan.bind(undefined, session, session.sessionSpan));
+}
+
+function recordSessionShutdownSpanEvent(
+  session: ObservMeTelemetrySession,
+  shutdownAttributes: AttributeMap,
+): void {
+  session.sessionSpan?.addEvent(LOG_EVENT_NAMES.SESSION_SHUTDOWN, shutdownAttributes);
+}
+
+function recordSessionWorkflowOutcomeAttribute(
+  session: ObservMeTelemetrySession,
+  outcome: TerminalOutcome,
+): void {
+  session.sessionSpan?.setAttribute(WORKFLOW_ATTRIBUTES.PI_WORKFLOW_STATUS, outcome);
+}
+
+function recordSessionTerminalSpanStatus(
+  session: ObservMeTelemetrySession,
+  outcome: TerminalOutcome,
+): void {
+  if (session.sessionSpan) setTerminalSpanStatus(session.sessionSpan, outcome);
+}
+
+function runTelemetryBookkeeping(operation: () => void): void {
+  try {
+    operation();
+  } catch {
+    return;
+  }
+}
+
+async function cleanUpTelemetryController(
+  state: HandlerSessionState,
+  session: ObservMeTelemetrySession,
+): Promise<BoundedOtelOperationResult> {
+  let flushFailed = false;
+  let flushError: unknown;
+  try {
+    await recordOwnedControllerOperation(state, session, "flush");
+  } catch (error) {
+    flushFailed = true;
+    flushError = error;
+  }
+
+  const shutdownResult = await recordOwnedControllerOperation(state, session, "shutdown");
+  if (flushFailed) throw flushError;
+  return shutdownResult;
+}
+
+function finalizeTelemetrySessionCleanup(
+  session: ObservMeTelemetrySession,
+  state: HandlerSessionState,
+): void {
+  runTelemetryBookkeeping(disposeSessionActiveAgentLease.bind(undefined, session));
+  clearTelemetrySessionRuntimeState(session, state);
 }
 
 function activateSessionActiveAgent(
@@ -570,11 +674,14 @@ function deactivateSessionActiveAgent(
   session: ObservMeTelemetrySession,
   labels: Record<string, string>,
 ): void {
-  session.activeAgentLease?.deactivate();
-  if (!session.activeAgentRecorded) return;
-
-  session.activeAgentRecorded = false;
-  session.metrics.activeAgents.add(-1, labels);
+  try {
+    session.activeAgentLease?.deactivate();
+  } finally {
+    if (session.activeAgentRecorded) {
+      session.activeAgentRecorded = false;
+      session.metrics.activeAgents.add(-1, labels);
+    }
+  }
 }
 
 function disposeSessionActiveAgentLease(session: ObservMeTelemetrySession): void {
@@ -605,26 +712,65 @@ async function handleTelemetryStartupFailure(
   ctx: ObservMeHandlerContext,
   error: unknown,
 ): Promise<void> {
-  clearDisabledTelemetryRuntimeState(state);
-  if (!(error instanceof ObservMeOtelStartupError)) throw error;
+  if (!(error instanceof ObservMeOtelStartupError)) {
+    clearDisabledTelemetryRuntimeState(state);
+    throw error;
+  }
 
-  recordObsStatusExportResult({ operation: "startup", error });
+  retainTelemetryStartupCleanup(state, error);
+  clearDisabledTelemetryRuntimeState(state);
+  tryRecordObsStatusExportResult({ operation: "startup", error });
   await clearExtensionStatus(ctx);
   notifyTelemetryStartupFailure(ctx, error.message);
 }
 
-function notifyTelemetryStartupFailure(ctx: ObservMeHandlerContext, message: string): void {
-  if (ctx.hasUI === false || !ctx.ui?.notify) return;
+function retainTelemetryStartupCleanup(
+  state: HandlerSessionState,
+  error: ObservMeOtelStartupError,
+): void {
+  const cleanup = error.cleanup;
+  if (!cleanup) return;
 
+  const retryCleanup = error.retryCleanup ?? retryUnavailableStartupCleanup.bind(undefined, cleanup.operation);
+  state.otelOperationOwnership.retain(
+    cleanup,
+    recordStartupCleanupRetry.bind(undefined, retryCleanup, cleanup.operation),
+    recordLateStartupCleanupSettlement,
+  );
+}
+
+async function recordStartupCleanupRetry(
+  retryCleanup: OtelStartupCleanupRetry,
+  operation: BoundedOtelOperationResult["operation"],
+): Promise<BoundedOtelOperationResult> {
   try {
-    void Promise.resolve(ctx.ui.notify(message, "error")).catch(ignoreStartupDiagnosticError);
-  } catch {
-    return;
+    const result = await retryCleanup();
+    tryRecordObsStatusExportResult(result);
+    return result;
+  } catch (error) {
+    const result = { operation, completed: false, timedOut: false, error } as const;
+    tryRecordObsStatusExportResult(result);
+    return result;
   }
 }
 
-function ignoreStartupDiagnosticError(): undefined {
-  return undefined;
+function retryUnavailableStartupCleanup(
+  operation: BoundedOtelOperationResult["operation"],
+): Promise<BoundedOtelOperationResult> {
+  return Promise.resolve({
+    operation,
+    completed: false,
+    timedOut: false,
+    error: new Error("ObservMe OTEL startup cleanup cannot be retried by this telemetry factory."),
+  });
+}
+
+function recordLateStartupCleanupSettlement(settlement: OtelOperationSettlement): void {
+  tryRecordObsStatusExportResult(settlement);
+}
+
+function notifyTelemetryStartupFailure(ctx: ObservMeHandlerContext, message: string): void {
+  notifyBestEffort(ctx, message, "error");
 }
 
 async function clearExtensionStatus(ctx: ObservMeHandlerContext): Promise<void> {
@@ -640,8 +786,9 @@ async function recordOwnedControllerOperation(
   session: ObservMeTelemetrySession,
   operation: BoundedOtelOperationResult["operation"],
 ): Promise<BoundedOtelOperationResult> {
-  const result = await recordControllerOperationResult(session, operation);
+  const result = await runControllerOperation(session, operation);
   retainControllerOperationResult(state, session, result);
+  recordControllerOperationDiagnostics(session, result);
   return result;
 }
 
@@ -675,8 +822,7 @@ function recordLateControllerOperationSettlement(
   session: ObservMeTelemetrySession,
   settlement: OtelOperationSettlement,
 ): void {
-  recordObsStatusExportResult(settlement);
-  recordExportOperationResult(session, settlement);
+  recordControllerOperationDiagnostics(session, settlement);
 }
 
 async function recordControllerOperationResult(
@@ -684,9 +830,24 @@ async function recordControllerOperationResult(
   operation: BoundedOtelOperationResult["operation"],
 ): Promise<BoundedOtelOperationResult> {
   const result = await runControllerOperation(session, operation);
-  recordObsStatusExportResult(result);
-  recordExportOperationResult(session, result);
+  recordControllerOperationDiagnostics(session, result);
   return result;
+}
+
+function recordControllerOperationDiagnostics(
+  session: ObservMeTelemetrySession,
+  result: BoundedOtelOperationResult,
+): void {
+  tryRecordObsStatusExportResult(result);
+  runTelemetryBookkeeping(recordExportOperationResult.bind(undefined, session, result));
+}
+
+function tryRecordObsStatusExportResult(result: Parameters<typeof recordObsStatusExportResult>[0]): void {
+  try {
+    recordObsStatusExportResult(result);
+  } catch {
+    return;
+  }
 }
 
 async function runControllerOperation(
@@ -727,7 +888,7 @@ function recordSessionTracePropagationFailure(
   emitStructuredLog(session.logger, LOG_EVENT_NAMES.TRACE_CONTEXT_PROPAGATION_FAILED, "agent-tree", attributes, "ERROR");
   if (!session.lineage.orphaned) return;
 
-  session.metrics.orphanAgents.add(1, { status: "orphaned", reason: "orphaned" });
+  session.metrics.orphanAgents.add(1, createOrphanAgentMetricLabels("orphaned", "orphaned"));
   session.sessionSpan?.addEvent(LOG_EVENT_NAMES.AGENT_ORPHANED, attributes);
   emitStructuredLog(session.logger, LOG_EVENT_NAMES.AGENT_ORPHANED, "agent-tree", attributes, "ERROR");
 }
@@ -745,12 +906,14 @@ function emitConfigRejectionDiagnostic(
     [LOG_ATTRIBUTES.TRACE_ID]: readSpanTraceId(session.sessionSpan),
     [LOG_ATTRIBUTES.SPAN_ID]: readSpanId(session.sessionSpan),
     [CONFIG_ATTRIBUTES.OBSERVME_CONFIG_SOURCE]: diagnostics.effectiveSource,
+    [CONFIG_ATTRIBUTES.OBSERVME_CONFIG_REJECTED_SOURCES]: [...diagnostics.rejectedSources],
+    [CONFIG_ATTRIBUTES.OBSERVME_CONFIG_SAFE_FALLBACK_APPLIED]: diagnostics.safeFallbackApplied,
     [CONFIG_ATTRIBUTES.OBSERVME_CONFIG_REJECTION_ISSUE_CODES]: [...rejection.issueCodes],
     [CONFIG_ATTRIBUTES.OBSERVME_CONFIG_REJECTION_ISSUE_COUNT]: rejection.issueCount,
   });
 
   tryEmitConfigRejectionLog(session, attributes);
-  notifyConfigRejection(ctx, diagnostics);
+  notifyConfigRejection(ctx, diagnostics, true);
 }
 
 function tryEmitConfigRejectionLog(session: ObservMeTelemetrySession, attributes: AttributeMap): void {
@@ -761,25 +924,46 @@ function tryEmitConfigRejectionLog(session: ObservMeTelemetrySession, attributes
   }
 }
 
-function notifyConfigRejection(ctx: ObservMeHandlerContext, diagnostics: SessionConfigDiagnostics): void {
-  if (ctx.hasUI === false || !ctx.ui?.notify || !diagnostics.rejection) return;
+function notifyConfigRejection(
+  ctx: ObservMeHandlerContext,
+  diagnostics: SessionConfigDiagnostics | undefined,
+  telemetryEnabled: boolean,
+): void {
+  if (!diagnostics?.rejection) return;
 
   const rejection = diagnostics.rejection;
-  const message = `ObservMe rejected ${formatConfigDiagnosticSource(diagnostics.effectiveSource)} configuration (${rejection.issueCount} issue(s): ${rejection.issueCodes.join(", ")}) and applied safe defaults.`;
+  const rejectedSourceDescription = formatRejectedConfigSources(diagnostics.rejectedSources);
+  const actionDescription = formatConfigRejectionAction(
+    diagnostics.safeFallbackApplied,
+    telemetryEnabled,
+  );
+  const message = `ObservMe rejected ${rejectedSourceDescription} (${rejection.issueCount} issue(s): ${rejection.issueCodes.join(", ")}) and ${actionDescription}.`;
 
-  try {
-    void Promise.resolve(ctx.ui.notify(message, "warning")).catch(ignoreConfigDiagnosticError);
-  } catch {
-    return;
+  notifyBestEffort(ctx, message, "warning");
+}
+
+function formatRejectedConfigSources(sources: readonly SessionConfigRejectedSource[]): string {
+  if (sources.length === 0) return "merged configuration";
+  const sourceNames = sources.map(formatRejectedConfigSource).join(", ");
+  return `${sourceNames} ${sources.length === 1 ? "source" : "sources"}`;
+}
+
+function formatRejectedConfigSource(source: SessionConfigRejectedSource): string {
+  if (source === "global") return "global config";
+  if (source === "trusted_project") return "trusted project config";
+  if (source === "project_env") return "trusted project .env";
+  return "process environment";
+}
+
+function formatConfigRejectionAction(safeFallbackApplied: boolean, telemetryEnabled: boolean): string {
+  if (safeFallbackApplied && !telemetryEnabled) {
+    return "applied safe defaults with explicit disablement preserved; ObservMe remains disabled and telemetry was not started";
   }
-}
-
-function formatConfigDiagnosticSource(source: SessionConfigDiagnostics["effectiveSource"]): string {
-  return source.replaceAll("_", " ");
-}
-
-function ignoreConfigDiagnosticError(): undefined {
-  return undefined;
+  if (safeFallbackApplied) return "applied safe defaults";
+  if (!telemetryEnabled) {
+    return "ignored those layers with explicit disablement preserved; ObservMe remains disabled and telemetry was not started";
+  }
+  return "ignored those layers; accepted configuration remains effective";
 }
 
 function recordWorkflowShutdownTelemetry(
@@ -818,8 +1002,22 @@ function recordExportOperationResult(session: ObservMeTelemetrySession, result: 
   if (result.completed && !result.timedOut && !result.error) return;
 
   const attributes = exportFailureAttributes(result);
-  session.metrics.exportErrors.add(1, exportFailureMetricLabels(result));
-  emitLifecycleLog(session.logger, LOG_EVENT_NAMES.EXPORT_FAILED, attributes, "ERROR");
+  runTelemetryBookkeeping(
+    session.metrics.exportErrors.add.bind(
+      session.metrics.exportErrors,
+      1,
+      exportFailureMetricLabels(result),
+    ),
+  );
+  runTelemetryBookkeeping(
+    emitLifecycleLog.bind(
+      undefined,
+      session.logger,
+      LOG_EVENT_NAMES.EXPORT_FAILED,
+      attributes,
+      "ERROR",
+    ),
+  );
 }
 
 function exportFailureAttributes(result: BoundedOtelOperationResult): AttributeMap {
@@ -854,14 +1052,12 @@ function buildShutdownAttributes(
   session: ObservMeTelemetrySession,
   outcome: TerminalOutcome,
 ): AttributeMap {
-  const attributes = withoutUndefinedAttributes({
+  return withoutUndefinedAttributes({
     ...buildLineageMetricSafeLogAttributes(session),
     [WORKFLOW_ATTRIBUTES.PI_WORKFLOW_DURATION_MS]: resolveWorkflowDurationMs(session),
     [WORKFLOW_ATTRIBUTES.PI_WORKFLOW_STATUS]: outcome,
     reason: event.reason,
   });
-  session.sessionSpan?.setAttribute(WORKFLOW_ATTRIBUTES.PI_WORKFLOW_STATUS, outcome);
-  return attributes;
 }
 
 function resolveWorkflowDurationMs(session: ObservMeTelemetrySession): number | undefined {

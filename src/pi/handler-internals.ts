@@ -935,8 +935,11 @@ export function recordActiveSpanStart(metrics: Pick<ObservMeMetrics, "activeSpan
 export function endActiveSpan(session: ObservMeTelemetrySession, span: Span | undefined): void {
   if (!span) return;
 
-  recordActiveSpanEnd(session.metrics, span);
-  span.end();
+  try {
+    recordActiveSpanEnd(session.metrics, span);
+  } finally {
+    span.end();
+  }
 }
 
 export function recordActiveSpanEnd(metrics: Pick<ObservMeMetrics, "activeSpans">, span: Span | undefined): void {
@@ -945,9 +948,12 @@ export function recordActiveSpanEnd(metrics: Pick<ObservMeMetrics, "activeSpans"
   const operation = activeSpanOperations.get(span);
   if (!operation) return;
 
-  metrics.activeSpans.add(-1, { operation });
-  activeSpanOperations.delete(span);
-  spanStartTimesMs.delete(span);
+  try {
+    metrics.activeSpans.add(-1, { operation });
+  } finally {
+    activeSpanOperations.delete(span);
+    spanStartTimesMs.delete(span);
+  }
 }
 
 export function startChildSpan(tracer: TelemetryTracer, name: string, parent: Span | undefined, attributes: AttributeMap): Span {
@@ -1024,14 +1030,14 @@ export function cancelPendingUserBashCompletionPoll(pending: PendingBashOperatio
 }
 
 export function endAllActiveSpans(session: ObservMeTelemetrySession): void {
-  closePendingUserBashOperation(session, "bash_session_shutdown", false);
-  for (const state of session.spans.activeAgentJoins.values()) endActiveSpan(session, state.span);
-  for (const state of session.spans.activeAgentWaits.values()) endActiveSpan(session, state.span);
-  for (const state of session.spans.activeSubagentSpawns.values()) endActiveSpan(session, state.span);
-  for (const span of session.spans.activeLlmRequests.values()) endActiveSpan(session, span);
-  for (const state of session.spans.activeToolCalls.values()) endActiveSpan(session, state.span);
-  for (const span of session.spans.activeTurns.values()) endActiveSpan(session, span);
-  for (const span of session.spans.activeAgentRuns.values()) endActiveSpan(session, span);
+  closePendingUserBashOperationBestEffort(session);
+  for (const state of session.spans.activeAgentJoins.values()) endActiveSpanBestEffort(session, state.span);
+  for (const state of session.spans.activeAgentWaits.values()) endActiveSpanBestEffort(session, state.span);
+  for (const state of session.spans.activeSubagentSpawns.values()) endActiveSpanBestEffort(session, state.span);
+  for (const span of session.spans.activeLlmRequests.values()) endActiveSpanBestEffort(session, span);
+  for (const state of session.spans.activeToolCalls.values()) endActiveSpanBestEffort(session, state.span);
+  for (const span of session.spans.activeTurns.values()) endActiveSpanBestEffort(session, span);
+  for (const span of session.spans.activeAgentRuns.values()) endActiveSpanBestEffort(session, span);
   session.spans.activeAgentJoins.clear();
   session.spans.activeAgentWaits.clear();
   session.spans.activeSubagentSpawns.clear();
@@ -1043,6 +1049,23 @@ export function endAllActiveSpans(session: ObservMeTelemetrySession): void {
   session.pendingUserPromptImageCount = undefined;
   session.nextTurnImageCount = undefined;
   session.childFailureAccounting?.clear();
+  session.childFailureAccountingArchive?.clear();
+}
+
+function closePendingUserBashOperationBestEffort(session: ObservMeTelemetrySession): void {
+  try {
+    closePendingUserBashOperation(session, "bash_session_shutdown", false);
+  } catch {
+    session.pendingUserBash = undefined;
+  }
+}
+
+function endActiveSpanBestEffort(session: ObservMeTelemetrySession, span: Span): void {
+  try {
+    endActiveSpan(session, span);
+  } catch {
+    return;
+  }
 }
 
 export function resolveCurrentSessionId(session: SelfObservabilitySession): string {

@@ -218,7 +218,7 @@ pi.session.id
 pi.agent.spawn.trace_context_propagated
 ```
 
-The child-specific descriptor attributes are present on the parent spawn start and terminal span events/logs, including launcher failure, completion, and cancellation. API v1 starts omit them. If W3C trace context is propagated to the child, the child `pi.session` span should continue the trace. If not, link the child trace back using span links/log attributes and the lineage fields above.
+The child-specific descriptor attributes are present on the parent spawn start and terminal span events/logs, including launcher failure, completion, and cancellation. Launcher success and terminal child completion are distinct lifecycle transitions: capability-aware launchers call `completeSubagentLaunch()` immediately after obtaining a usable transport handle, while `completeSubagent()` reports the later child outcome. API v1 starts omit them. If W3C trace context is propagated to the child, the child `pi.session` span should continue the trace. If not, link the child trace back using span links/log attributes and the lineage fields above.
 
 ### 5.3 Agent Wait and Join Spans
 
@@ -564,10 +564,10 @@ A renewable lease is a bounded liveness signal, not proof that the operating-sys
 - Record `observme_tool_result_size_chars` once from the finalized `tool_execution_end` result, using the same bounded tool labels as tool-call metrics.
 - Increment `observme_agent_run_errors_total` only when an ended agent run is classified as failed.
 - Record `observme_workflow_duration_ms` once for a root workflow at shutdown from its stored start time, with bounded `status=ok|error|cancelled|unknown` derived from observed Pi terminal payloads rather than the shutdown reason.
-- Record `observme_subagent_spawn_duration_ms` from spawn start through either launcher completion or launcher failure.
+- Record `observme_subagent_spawn_duration_ms` exactly once from spawn start through either successful transport-handle acquisition (`completeSubagentLaunch()`) or pre-handle launcher failure (`failSubagent()`). Later wait, join, and terminal child completion transitions never re-record it. Existing v1/v2 providers remain compatible because launcher completion is an optional additive method; clients capability-detect it.
 - Increment `observme_child_agent_failures_total` when an actual child completion/join reports failed status; a launcher failure before child creation is only a spawn failure.
 - Increment `observme_parent_recovered_from_child_failure_total` once when a failed child is joined with `failurePropagated=false` and parent recovery is confirmed.
-- Repeated child completion/join observations use bounded deduplication state and cannot increment the same failure or recovery transition twice.
+- Repeated child completion/join observations cannot increment the same failure or recovery transition twice. The session retains at most `limits.maxActiveSubagentSpawns` exact child accounting states and archives evicted failure/recovery transition fingerprints in a fixed-size, no-false-negative membership filter. A first observation that is absent from both stores is counted before insertion; an archived duplicate is suppressed, while a later first recovery for an archived failure can still be counted separately. The archive never clears bits during the session, so an evicted transition cannot be recounted. Fixed-space fingerprint collisions can conservatively suppress a novel transition after accounting pressure, but cannot cause duplicate overcounting.
 
 ### 12.6 Export Health self-observability contract
 
@@ -693,9 +693,11 @@ handler                             # failed handler's Pi event name on handler.
 observme.config.source
 observme.config.rejection.issue_codes
 observme.config.rejection.issue_count
+observme.config.rejection.rejected_sources
+observme.config.safe_fallback_applied
 ```
 
-Configuration rejection diagnostics use only the bounded effective source, normalized issue codes, and aggregate issue count. They never include rejected values, raw validation messages, paths, headers, environment values, or custom regular expressions.
+Configuration rejection diagnostics keep the bounded accepted effective source separate from the rejected source list and the whole-config safe-fallback flag. A rejected layer is ignored without claiming safe defaults were applied when accepted layers remain valid; `observme.config.safe_fallback_applied` is true only when merged-config validation replaced the merged result. Diagnostics never include rejected values, raw validation messages, paths, headers, environment values, or custom regular expressions.
 
 Role values remain explicit across contract generations: `root` is the ObservMe topology root; integration API v2 children use exactly `lead`, `helper`, `worker`, or `validator`; API v1 children use `subagent`; and `orchestrator`, `reviewer`, and `unknown` remain distinguishable historical values. Role is descriptive telemetry and grants no authority. `pi.agent.display_name`, `pi.agent.capability`, and their parent-side `pi.agent.child.*` forms are span/log/resource attributes only and must not be promoted to metric labels.
 

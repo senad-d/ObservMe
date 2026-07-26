@@ -4,7 +4,7 @@ import type { ObservMeConfig } from "../config/schema.ts";
 import type { AgentChildStatus, AgentTreeNode, AgentTreeSummary } from "../pi/agent-tree-tracker.ts";
 import { GrafanaQueryDisabledError } from "../query/grafana-readiness.ts";
 import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../query/prometheus.ts";
-import { createPrometheusQueryClient } from "../query/prometheus.ts";
+import { assertPrometheusVectorResult, createPrometheusQueryClient } from "../query/prometheus.ts";
 import type { TimeRange, TraceSummary } from "../query/tempo.ts";
 import { createTempoQueryClient } from "../query/tempo.ts";
 import {
@@ -13,6 +13,7 @@ import {
   normalizeObsBackendLabelRecord,
 } from "../safety/display-bounds.ts";
 import { COMMON_SPAN_ATTRIBUTES } from "../semconv/attributes.ts";
+import { OBSERVME_ORPHAN_AGENT_METRIC_LABEL_KEYS } from "../semconv/metrics.ts";
 import { completeObsSubcommand, isExactObsSubcommandRequest } from "./obs-args.ts";
 import { loadObsCommandConfig, notifyObsCommand } from "./obs-command-support.ts";
 import {
@@ -59,9 +60,11 @@ export interface ObsAgentsAggregateRows {
 }
 
 export type ObsAgentsEnrichmentSubsystem = "Prometheus" | "Tempo";
+export type ObsAgentsAggregateSection = "spawned" | "fanoutP95" | "orphaned";
 
 export interface ObsAgentsEnrichmentWarning {
   readonly subsystem: ObsAgentsEnrichmentSubsystem;
+  readonly section?: ObsAgentsAggregateSection;
   readonly message: string;
 }
 
@@ -117,7 +120,8 @@ export const OBS_AGENTS_SPAWNED_PROMQL =
   "sum(rate(observme_subagents_spawned_total[1h])) by (agent_role, subagent_depth, spawn_type, spawn_reason)";
 export const OBS_AGENTS_FANOUT_P95_PROMQL =
   'histogram_quantile(0.95, sum(rate(observme_agent_fanout_count_bucket{subagent_depth!=""}[1h])) by (subagent_depth, le))';
-export const OBS_AGENTS_ORPHAN_PROMQL = "sum(rate(observme_orphan_agents_total[1h])) by (status, reason)";
+export const OBS_AGENTS_ORPHAN_PROMQL =
+  `sum(rate(observme_orphan_agents_total[1h])) by (${OBSERVME_ORPHAN_AGENT_METRIC_LABEL_KEYS.join(", ")})`;
 export const OBS_AGENTS_TEMPO_DRILLDOWN_ATTRIBUTE_KEYS = [
   COMMON_SPAN_ATTRIBUTES.PI_AGENT_ID,
   COMMON_SPAN_ATTRIBUTES.PI_WORKFLOW_ID,
@@ -149,10 +153,16 @@ const emptyAgentTreeSummary = {
   },
 } as const satisfies AgentTreeSummary;
 
+interface ObsAgentsQueryOutcome {
+  readonly result: QueryResult;
+  readonly warning?: ObsAgentsEnrichmentWarning;
+}
+
 interface ObsAgentsQueryResults {
   readonly spawned: QueryResult;
   readonly fanoutP95: QueryResult;
   readonly orphaned: QueryResult;
+  readonly warnings: readonly ObsAgentsEnrichmentWarning[];
 }
 
 interface ObsAgentsEnrichmentResult {
@@ -227,14 +237,10 @@ export function renderObsAgents(snapshot: ObsAgentsSnapshot): string {
   ];
 
   if (latestChild) lines.push(`Latest child: ${renderLatestChild(latestChild, snapshot.waitJoinHints)}`);
-  const prometheusWarning = findObsAgentsEnrichmentWarning(snapshot, "Prometheus");
   const tempoWarning = findObsAgentsEnrichmentWarning(snapshot, "Tempo");
   lines.push(
     `Wait/join hints: ${renderWaitJoinHints(snapshot.waitJoinHints)}`,
-    appendObsAgentsEnrichmentWarning(
-      `Aggregate agent metrics (last ${OBS_AGENTS_WINDOW}): ${renderAggregateRows(snapshot.aggregateRows)}`,
-      prometheusWarning,
-    ),
+    `Aggregate agent metrics (last ${OBS_AGENTS_WINDOW}): ${renderAggregateRows(snapshot)}`,
     appendObsAgentsEnrichmentWarning(`Lineage drill-down: ${renderLineageDrilldown(snapshot)}`, tempoWarning),
   );
   return boundObsCommandOutput(lines.join("\n"));
@@ -298,6 +304,8 @@ async function resolveObsAgentsEnrichment(
   const warnings: ObsAgentsEnrichmentWarning[] = [];
   if (aggregateResult.status === "rejected") {
     warnings.push(createObsAgentsEnrichmentWarning("Prometheus", aggregateResult.reason));
+  } else {
+    warnings.push(...aggregateResult.value.warnings);
   }
   if (tempoResult.status === "rejected") {
     warnings.push(createObsAgentsEnrichmentWarning("Tempo", tempoResult.reason));
@@ -328,7 +336,7 @@ function createUnavailableObsAgentsEnrichment(
 
 function createEmptyObsAgentsQueryResults(): ObsAgentsQueryResults {
   const emptyResult = { resultType: "vector", series: [] } as const satisfies QueryResult;
-  return { spawned: emptyResult, fanoutP95: emptyResult, orphaned: emptyResult };
+  return { spawned: emptyResult, fanoutP95: emptyResult, orphaned: emptyResult, warnings: [] };
 }
 
 async function queryObsAgentsAggregates(
@@ -342,14 +350,47 @@ async function queryObsAgentsAggregates(
     client.queryPrometheus(OBS_AGENTS_ORPHAN_PROMQL, undefined, { resultLimit: "agents" }),
   ]);
 
-  if (spawnedResult.status === "rejected") throw spawnedResult.reason;
-  if (fanoutResult.status === "rejected") throw fanoutResult.reason;
-  if (orphanedResult.status === "rejected") throw orphanedResult.reason;
+  const spawned = resolveObsAgentsQueryOutcome(spawnedResult, "spawned");
+  const fanoutP95 = resolveObsAgentsQueryOutcome(fanoutResult, "fanoutP95");
+  const orphaned = resolveObsAgentsQueryOutcome(orphanedResult, "orphaned");
+  const warnings = [spawned.warning, fanoutP95.warning, orphaned.warning].filter(isObsAgentsEnrichmentWarning);
+
   return {
-    spawned: spawnedResult.value,
-    fanoutP95: fanoutResult.value,
-    orphaned: orphanedResult.value,
+    spawned: spawned.result,
+    fanoutP95: fanoutP95.result,
+    orphaned: orphaned.result,
+    warnings,
   };
+}
+
+function resolveObsAgentsQueryOutcome(
+  settled: PromiseSettledResult<QueryResult>,
+  section: ObsAgentsAggregateSection,
+): ObsAgentsQueryOutcome {
+  if (settled.status === "rejected") {
+    return createUnavailableObsAgentsQueryOutcome(section, settled.reason);
+  }
+
+  try {
+    assertPrometheusVectorResult(settled.value);
+    return { result: settled.value };
+  } catch (error) {
+    return createUnavailableObsAgentsQueryOutcome(section, error);
+  }
+}
+
+function createUnavailableObsAgentsQueryOutcome(
+  section: ObsAgentsAggregateSection,
+  error: unknown,
+): ObsAgentsQueryOutcome {
+  return {
+    result: createEmptyObsAgentsQueryResult(),
+    warning: createObsAgentsEnrichmentWarning("Prometheus", error, section),
+  };
+}
+
+function createEmptyObsAgentsQueryResult(): QueryResult {
+  return { resultType: "vector", series: [] };
 }
 
 async function queryObsAgentsTempoTraces(
@@ -518,15 +559,54 @@ function renderWaitJoinHint(hint: ObsAgentWaitJoinHint | undefined): string {
   return `${formatUnknown(hint.kind)}:${formatUnknown(target)} status=${formatUnknown(status)} duration=${formatDuration(hint.durationMs)}`;
 }
 
-function renderAggregateRows(rows: ObsAgentsAggregateRows): string {
-  return `spawn_series=${rows.spawned.length} fanout_series=${rows.fanoutP95.length} orphan_series=${rows.orphaned.length}`;
+function renderAggregateRows(snapshot: ObsAgentsSnapshot): string {
+  const generalWarning = findObsAgentsEnrichmentWarning(snapshot, "Prometheus");
+  if (generalWarning) {
+    return appendObsAgentsEnrichmentWarning("unavailable", generalWarning);
+  }
+
+  const spawnedWarning = findObsAgentsEnrichmentWarning(snapshot, "Prometheus", "spawned");
+  const fanoutWarning = findObsAgentsEnrichmentWarning(snapshot, "Prometheus", "fanoutP95");
+  const orphanedWarning = findObsAgentsEnrichmentWarning(snapshot, "Prometheus", "orphaned");
+  const summary = [
+    renderObsAgentsAggregateCount("spawn_series", snapshot.aggregateRows.spawned, spawnedWarning),
+    renderObsAgentsAggregateCount("fanout_series", snapshot.aggregateRows.fanoutP95, fanoutWarning),
+    renderObsAgentsAggregateCount("orphan_series", snapshot.aggregateRows.orphaned, orphanedWarning),
+  ].join(" ");
+  const warningDetails = [spawnedWarning, fanoutWarning, orphanedWarning]
+    .filter(isObsAgentsEnrichmentWarning)
+    .map(renderObsAgentsAggregateWarning);
+
+  return warningDetails.length === 0 ? summary : `${summary}; ${warningDetails.join("; ")}`;
+}
+
+function renderObsAgentsAggregateCount(
+  label: string,
+  rows: readonly ObsAgentAggregateRow[],
+  warning: ObsAgentsEnrichmentWarning | undefined,
+): string {
+  return `${label}=${warning ? "unavailable" : rows.length}`;
+}
+
+function renderObsAgentsAggregateWarning(warning: ObsAgentsEnrichmentWarning): string {
+  return `${formatObsAgentsAggregateSection(warning.section)} unavailable: ${sanitizeObsDiagnosticText(warning.message)}`;
+}
+
+function formatObsAgentsAggregateSection(section: ObsAgentsAggregateSection | undefined): string {
+  if (section === "spawned") return "Spawned metrics";
+  if (section === "fanoutP95") return "Fanout p95 metrics";
+  if (section === "orphaned") return "Orphan metrics";
+  return "Prometheus";
 }
 
 function findObsAgentsEnrichmentWarning(
   snapshot: ObsAgentsSnapshot,
   subsystem: ObsAgentsEnrichmentSubsystem,
+  section?: ObsAgentsAggregateSection,
 ): ObsAgentsEnrichmentWarning | undefined {
-  return snapshot.enrichmentWarnings?.find(warning => warning.subsystem === subsystem);
+  return snapshot.enrichmentWarnings?.find(
+    warning => warning.subsystem === subsystem && warning.section === section,
+  );
 }
 
 function appendObsAgentsEnrichmentWarning(
@@ -540,10 +620,12 @@ function appendObsAgentsEnrichmentWarning(
 function createObsAgentsEnrichmentWarning(
   subsystem: ObsAgentsEnrichmentSubsystem,
   error: unknown,
+  section?: ObsAgentsAggregateSection,
 ): ObsAgentsEnrichmentWarning {
   const nextAction = subsystem === "Prometheus" ? OBS_AGENTS_PROMETHEUS_NEXT_ACTION : OBS_AGENTS_TEMPO_NEXT_ACTION;
   return {
     subsystem,
+    section,
     message: formatObsCommandDiagnostic(error, nextAction),
   };
 }
@@ -566,6 +648,12 @@ function isActiveJoinHint(hint: ObsAgentWaitJoinHint): boolean {
 
 function isObsAgentAggregateRow(row: ObsAgentAggregateRow | undefined): row is ObsAgentAggregateRow {
   return row !== undefined;
+}
+
+function isObsAgentsEnrichmentWarning(
+  warning: ObsAgentsEnrichmentWarning | undefined,
+): warning is ObsAgentsEnrichmentWarning {
+  return warning !== undefined;
 }
 
 function parseMetricValue(value: string | number | undefined): number | undefined {

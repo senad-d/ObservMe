@@ -1,3 +1,4 @@
+import { getEnabledOtlpSignalDestinations } from "../otel/otlp-endpoint.ts";
 import type { ObservMeConfig } from "./schema.ts";
 
 const tlsVerificationEnabled = "TLS certificate verification enabled";
@@ -8,12 +9,6 @@ const inactiveSignals = "inactive (all OTLP signals disabled)";
 const inactiveGrafana = "inactive (Grafana queries disabled)";
 const unknownTransport = "unknown or invalid transport";
 
-interface OtlpSignalTransport {
-  readonly name: "traces" | "metrics" | "logs";
-  readonly endpoint: string;
-  readonly enabled: boolean;
-}
-
 export interface ObsTransportSecuritySnapshot {
   readonly collector: string;
   readonly grafana: string;
@@ -22,11 +17,11 @@ export interface ObsTransportSecuritySnapshot {
 export function describeOtlpTransportSecurity(config: ObservMeConfig): string {
   if (!config.enabled) return inactiveObservMe;
 
-  const signals = getOtlpSignalTransports(config).filter(signal => signal.enabled);
+  const signals = getEnabledOtlpSignalDestinations(config);
   if (signals.length === 0) return inactiveSignals;
 
   const descriptions = signals.map(signal => ({
-    name: signal.name,
+    name: signal.signal,
     description: describeEndpointTransportSecurity(
       signal.endpoint,
       config.otlp.tls.insecureSkipVerify,
@@ -50,11 +45,7 @@ export function describeGrafanaTransportSecurity(config: ObservMeConfig): string
 
 export function createObsTransportSecuritySnapshot(config: ObservMeConfig): ObsTransportSecuritySnapshot {
   return {
-    collector: describeEndpointTransportSecurity(
-      config.otlp.endpoint,
-      config.otlp.tls.insecureSkipVerify,
-      config.privacy.allowInsecureTransport,
-    ),
+    collector: describeOtlpTransportSecurity(config),
     grafana: describeGrafanaTransportSecurity(config),
   };
 }
@@ -72,26 +63,6 @@ export function describeEndpointTransportSecurity(
   }
   if (protocol === "http:") return describeAcknowledgedInsecurity(plaintextHttp, allowInsecureTransport);
   return unknownTransport;
-}
-
-function getOtlpSignalTransports(config: ObservMeConfig): OtlpSignalTransport[] {
-  return [
-    {
-      name: "traces",
-      endpoint: config.otlp.signalEndpoints?.traces ?? config.otlp.endpoint,
-      enabled: config.traces.enabled,
-    },
-    {
-      name: "metrics",
-      endpoint: config.otlp.signalEndpoints?.metrics ?? config.otlp.endpoint,
-      enabled: config.metrics.enabled,
-    },
-    {
-      name: "logs",
-      endpoint: config.otlp.signalEndpoints?.logs ?? config.otlp.endpoint,
-      enabled: config.logs.enabled,
-    },
-  ];
 }
 
 function readEndpointProtocol(endpoint: string): string | undefined {

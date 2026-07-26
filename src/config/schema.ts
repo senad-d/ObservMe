@@ -1,6 +1,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { QUERY_RESULT_COUNT_MAXIMUM, QUERY_RESULT_COUNT_MINIMUM } from "./query-limits.ts";
+import { NODE_TIMER_MAX_MILLISECONDS } from "./timer-limits.ts";
 
 const observMeEnvironments = ["production", "development", "test"] as const;
 const privacyPathModes = ["hash", "basename", "full", "drop"] as const;
@@ -201,6 +202,7 @@ const environmentSchema = StringEnum(observMeEnvironments);
 const otlpProtocolSchema = Type.Literal("http/protobuf");
 const stringRecordSchema = Type.Record(Type.String(), Type.String());
 const positiveIntegerSchema = Type.Integer({ minimum: 1 });
+const timerMillisecondsSchema = Type.Integer({ minimum: 1, maximum: NODE_TIMER_MAX_MILLISECONDS });
 const queryResultCountSchema = Type.Integer({
   minimum: QUERY_RESULT_COUNT_MINIMUM,
   maximum: QUERY_RESULT_COUNT_MAXIMUM,
@@ -230,7 +232,7 @@ export const observMeConfigSchema = Type.Object(
       {
         endpoint: Type.String({ minLength: 1 }),
         protocol: otlpProtocolSchema,
-        timeoutMs: positiveIntegerSchema,
+        timeoutMs: timerMillisecondsSchema,
         headers: stringRecordSchema,
         tls: Type.Object(
           {
@@ -294,8 +296,8 @@ export const observMeConfigSchema = Type.Object(
           {
             maxQueueSize: positiveIntegerSchema,
             maxExportBatchSize: positiveIntegerSchema,
-            scheduledDelayMillis: positiveIntegerSchema,
-            exportTimeoutMillis: positiveIntegerSchema,
+            scheduledDelayMillis: timerMillisecondsSchema,
+            exportTimeoutMillis: timerMillisecondsSchema,
           },
           { additionalProperties: false },
         ),
@@ -305,8 +307,8 @@ export const observMeConfigSchema = Type.Object(
     metrics: Type.Object(
       {
         enabled: Type.Boolean(),
-        exportIntervalMillis: positiveIntegerSchema,
-        exportTimeoutMillis: positiveIntegerSchema,
+        exportIntervalMillis: timerMillisecondsSchema,
+        exportTimeoutMillis: timerMillisecondsSchema,
         activeAgentLeaseDurationMillis: Type.Integer({
           minimum: ACTIVE_AGENT_LEASE_DURATION_MILLIS_MINIMUM,
           maximum: ACTIVE_AGENT_LEASE_DURATION_MILLIS_MAXIMUM,
@@ -322,7 +324,7 @@ export const observMeConfigSchema = Type.Object(
           {
             maxQueueSize: positiveIntegerSchema,
             maxExportBatchSize: positiveIntegerSchema,
-            scheduledDelayMillis: positiveIntegerSchema,
+            scheduledDelayMillis: timerMillisecondsSchema,
           },
           { additionalProperties: false },
         ),
@@ -374,7 +376,7 @@ export const observMeConfigSchema = Type.Object(
     query: Type.Object(
       {
         enabled: Type.Boolean(),
-        timeoutMs: positiveIntegerSchema,
+        timeoutMs: timerMillisecondsSchema,
         maxLogs: queryResultCountSchema,
         maxTraces: queryResultCountSchema,
         maxMetricSeries: queryResultCountSchema,
@@ -419,7 +421,7 @@ export const observMeConfigSchema = Type.Object(
     ),
     shutdown: Type.Object(
       {
-        flushTimeoutMs: positiveIntegerSchema,
+        flushTimeoutMs: timerMillisecondsSchema,
       },
       { additionalProperties: false },
     ),

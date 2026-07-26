@@ -127,7 +127,7 @@ Matched values are replaced with:
 
 ## 6. Path Redaction
 
-Path recognition covers standalone and embedded POSIX absolute paths, Windows drive paths, and UNC paths. It must use the matching POSIX or Windows basename/dirname semantics and must not classify normal URLs or harmless slash-separated prose as filesystem paths.
+Path recognition covers quoted and unquoted standalone or embedded POSIX absolute paths, Windows drive paths, UNC paths, and local `file://` URLs, including paths with spaces. It uses the matching POSIX or Windows basename/dirname semantics and does not classify normal HTTP(S) URLs or harmless slash-separated prose as filesystem paths.
 
 Representative sensitive inputs:
 
@@ -137,6 +137,8 @@ Representative sensitive inputs:
 /etc/hosts
 C:\Users\alice\secret.txt
 \\server\share\secret.txt
+/home/Alice Smith/private/file.txt
+file:///home/alice/private/file.txt
 ```
 
 Options:

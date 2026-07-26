@@ -325,7 +325,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Selected-range parent recoveries divided by completed child-agent failures. A range with no child failures renders 100% because no recovery was required; use the failure/recovery trend to distinguish healthy idle from active recovery. The 50% and 90% color bands are tunable guidance, not alert thresholds.",
+      "description": "Selected-range parent recoveries divided by completed child-agent failures. Exact bounded state plus a fixed-size archive prevents retained or evicted child transitions from being recounted; archive collisions can only conservatively suppress novel transitions under accounting pressure. A range with no child failures renders 100% because no recovery was required; use the failure/recovery trend to distinguish healthy idle from active recovery. The 50% and 90% color bands are tunable guidance, not alert thresholds.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -549,7 +549,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Child-agent failure and parent-recovery rates grouped by safe role and depth labels.",
+      "description": "Child-agent failure and parent-recovery rates grouped by safe role and depth labels. Exact bounded state plus a fixed-size archive prevents retained or evicted child transitions from being recounted; archive collisions can only conservatively suppress novel transitions under accounting pressure.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -921,7 +921,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "p95 subagent-spawn duration grouped by bounded spawn labels.",
+      "description": "p95 launcher latency from spawn start through usable transport-handle acquisition or pre-handle launcher failure, grouped by bounded spawn labels. Delayed child execution, wait, join, and terminal result delivery are excluded.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1515,7 +1515,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Selected-range aggregate orphan counts by emitted status/reason, paired with spawn-attempt volume by depth. The orphan metric intentionally has no depth label, so this table does not claim direct orphan-to-depth attribution; use the lineage log rows for execution context.",
+      "description": "Top selected-range orphan counts grouped only by the metric's emitted bounded status and reason labels. Role, depth, and execution IDs are not available on this metric; use the lineage log rows for execution context.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1575,22 +1575,9 @@
           "format": "table",
           "instant": true,
           "range": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "topk(10, sum(increase(observme_subagents_spawned_total[$__range])) by (subagent_depth))",
-          "refId": "B",
-          "legendFormat": "spawn attempts depth {{subagent_depth}}",
-          "format": "table",
-          "instant": true,
-          "range": false
         }
       ],
-      "title": "Orphan-prone depths",
+      "title": "Orphans by status and reason",
       "type": "table"
     },
     {

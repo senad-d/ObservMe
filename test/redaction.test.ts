@@ -183,6 +183,78 @@ test("redaction pipeline scrubs cross-platform filesystem paths without exportin
   for (const path of paths) assert.equal(result.value?.includes(path), false);
 });
 
+test("redaction pipeline protects paths with spaces and local file URLs in every non-full mode", () => {
+  const pathCases = [
+    {
+      input: "open /home/Alice Smith/private-posix/file.txt, done",
+      basenameOutput: "open file.txt, done",
+      dropOutput: "open [REDACTED:path], done",
+      basename: "file.txt",
+      sensitiveFragments: ["Alice Smith", "private-posix"],
+    },
+    {
+      input: "open C:\\Users\\Drive User\\private-drive\\notes.txt, done",
+      basenameOutput: "open notes.txt, done",
+      dropOutput: "open [REDACTED:path], done",
+      basename: "notes.txt",
+      sensitiveFragments: ["Drive User", "private-drive"],
+    },
+    {
+      input: "open \\\\private-server\\customer-share\\Unc User\\private-unc\\report.txt, done",
+      basenameOutput: "open report.txt, done",
+      dropOutput: "open [REDACTED:path], done",
+      basename: "report.txt",
+      sensitiveFragments: ["private-server", "customer-share", "Unc User", "private-unc"],
+    },
+    {
+      input: 'open "/home/Quoted User/private-quoted/Project Plan.txt", done',
+      basenameOutput: 'open "Project Plan.txt", done',
+      dropOutput: 'open "[REDACTED:path]", done',
+      basename: "Project Plan.txt",
+      sensitiveFragments: ["Quoted User", "private-quoted"],
+    },
+    {
+      input: "open file:///home/File Url User/private-file-url/plan.txt, done",
+      basenameOutput: "open plan.txt, done",
+      dropOutput: "open [REDACTED:path], done",
+      basename: "plan.txt",
+      sensitiveFragments: ["file://", "File Url User", "private-file-url"],
+    },
+    {
+      input: "open file:///C:/Users/Encoded%20Drive/private-file-drive/spec.txt, done",
+      basenameOutput: "open spec.txt, done",
+      dropOutput: "open [REDACTED:path], done",
+      basename: "spec.txt",
+      sensitiveFragments: ["file://", "Encoded%20Drive", "private-file-drive"],
+    },
+    {
+      input: "open file://private-host/customer-share/Encoded%20Unc/private-file-unc/data.txt, done",
+      basenameOutput: "open data.txt, done",
+      dropOutput: "open [REDACTED:path], done",
+      basename: "data.txt",
+      sensitiveFragments: ["file://", "private-host", "customer-share", "Encoded%20Unc", "private-file-unc"],
+    },
+  ];
+
+  for (const pathCase of pathCases) {
+    const basenameResult = redactValue(pathCase.input, defaultOptions({ pathMode: "basename" }));
+    const hashResult = redactValue(pathCase.input, defaultOptions({ pathMode: "hash" }));
+    const dropResult = redactValue(pathCase.input, defaultOptions({ pathMode: "drop" }));
+    const fullResult = redactValue(pathCase.input, defaultOptions({ pathMode: "full" }));
+
+    assert.equal(basenameResult.value, pathCase.basenameOutput);
+    assert.equal(dropResult.value, pathCase.dropOutput);
+    assert.equal(fullResult.value, pathCase.input);
+    assert.match(hashResult.value ?? "", /\/<home>\/[a-f0-9]{12}\//u);
+    assert.equal(hashResult.value?.includes(pathCase.basename), true);
+    for (const fragment of pathCase.sensitiveFragments) {
+      assert.equal(basenameResult.value?.includes(fragment), false);
+      assert.equal(hashResult.value?.includes(fragment), false);
+      assert.equal(dropResult.value?.includes(fragment), false);
+    }
+  }
+});
+
 test("redaction pipeline does not mistake URLs or slash-separated prose for filesystem paths", () => {
   const input = "read https://example.invalid/docs/setup and compare yes/no with 1/2";
   const result = redactValue(input, defaultOptions({ pathMode: "drop" }));

@@ -44,6 +44,8 @@ export interface ObservMeOtelSdkControllerSnapshot {
   readonly shutdown: boolean;
 }
 
+export type OtelStartupCleanupRetry = () => Promise<BoundedOtelOperationResult>;
+
 export class ObservMeOtelSdkController {
   readonly #config: ObservMeConfig;
   readonly #agent?: AgentLineageContext;
@@ -111,9 +113,16 @@ export class ObservMeOtelSdkController {
           ),
         );
       }
-      this.#sdk = undefined;
+
       this.#state = "failed";
-      throw toOtelStartupError(error, this.#startupCleanupResult);
+      const cleanup = this.#startupCleanupResult;
+      if (operationCompleted(cleanup)) {
+        this.#sdk = undefined;
+        throw toOtelStartupError(error, cleanup);
+      }
+
+      this.observeFailedStartupCleanup(cleanup);
+      throw toOtelStartupError(error, cleanup, this.retryFailedStartupCleanup.bind(this));
     } finally {
       this.#startPromise = undefined;
     }
@@ -125,11 +134,11 @@ export class ObservMeOtelSdkController {
 
   async shutdown(timeoutMs: number = this.#config.shutdown.flushTimeoutMs): Promise<BoundedOtelOperationResult> {
     if (this.#state === "shutdown") return completedShutdown();
-    if (this.#state === "failed") return this.#startupCleanupResult ?? completedShutdown();
-    if (this.#state === "shutting_down" && this.#shutdownPromise) return this.#shutdownPromise;
-    if (this.#state === "shutdown_pending" && this.#pendingShutdown) {
-      return pendingShutdown(this.#pendingShutdown);
+    if (this.#state === "failed" && operationCompleted(this.#startupCleanupResult)) {
+      return this.#startupCleanupResult ?? completedShutdown();
     }
+    if (this.#state === "shutting_down" && this.#shutdownPromise) return this.#shutdownPromise;
+    if (this.#pendingShutdown) return pendingShutdown(this.#pendingShutdown);
 
     this.#state = "shutting_down";
     this.#shutdownPromise = this.shutdownOnce(timeoutMs);
@@ -144,6 +153,28 @@ export class ObservMeOtelSdkController {
     } finally {
       this.#shutdownPromise = undefined;
     }
+  }
+
+  private retryFailedStartupCleanup(): Promise<BoundedOtelOperationResult> {
+    return this.shutdown(this.#config.shutdown.flushTimeoutMs);
+  }
+
+  private observeFailedStartupCleanup(result: BoundedOtelOperationResult): void {
+    if (!result.timedOut || !result.settlement) return;
+
+    this.#pendingShutdown = result.settlement;
+    void result.settlement.then(this.observePendingFailedStartupCleanup.bind(this, result.settlement));
+  }
+
+  private observePendingFailedStartupCleanup(
+    pending: Promise<OtelOperationSettlement>,
+    settlement: OtelOperationSettlement,
+  ): void {
+    if (this.#pendingShutdown !== pending) return;
+
+    this.#pendingShutdown = undefined;
+    this.#startupCleanupResult = sanitizeStartupCleanupResult(settlement);
+    if (operationCompleted(settlement)) this.#sdk = undefined;
   }
 
   private applyShutdownResult(result: BoundedOtelOperationResult): void {
@@ -186,24 +217,40 @@ export class ObservMeOtelSdkController {
 export function toOtelStartupError(
   error: unknown,
   cleanup?: BoundedOtelOperationResult,
-): Error {
-  if (error instanceof ObservMeOtelStartupError) return error;
+  retryCleanup?: OtelStartupCleanupRetry,
+): ObservMeOtelStartupError {
+  if (error instanceof ObservMeOtelStartupError && !cleanup && !retryCleanup) return error;
+
+  const safeCleanup = cleanup ? sanitizeStartupCleanupResult(cleanup) : undefined;
+  if (error instanceof ObservMeOtelStartupError) {
+    return new ObservMeOtelStartupError(
+      error.message,
+      safeCleanup ?? error.cleanup,
+      retryCleanup ?? error.retryCleanup,
+    );
+  }
 
   const detail = sanitizeDiagnosticText(readDiagnosticMessage(error));
-  const safeCleanup = cleanup ? sanitizeStartupCleanupResult(cleanup) : undefined;
   return new ObservMeOtelStartupError(
     `ObservMe OTEL startup failed: ${detail}. ${startupCleanupGuidance(safeCleanup)}`,
     safeCleanup,
+    retryCleanup,
   );
 }
 
 export class ObservMeOtelStartupError extends Error {
   readonly cleanup?: BoundedOtelOperationResult;
+  readonly retryCleanup?: OtelStartupCleanupRetry;
 
-  constructor(message: string, cleanup?: BoundedOtelOperationResult) {
+  constructor(
+    message: string,
+    cleanup?: BoundedOtelOperationResult,
+    retryCleanup?: OtelStartupCleanupRetry,
+  ) {
     super(message);
     this.name = "ObservMeOtelStartupError";
     this.cleanup = cleanup;
+    this.retryCleanup = retryCleanup;
   }
 }
 
@@ -223,9 +270,15 @@ export function createNoopSessionScopedOtelSdk(): SessionScopedOtelSdk {
 
 function startupCleanupGuidance(cleanup: BoundedOtelOperationResult | undefined): string {
   if (!cleanup) return "Check OTLP settings and Collector availability before retrying.";
-  if (cleanup.timedOut) return "Cleanup exceeded its timeout; restart Pi before retrying.";
-  if (cleanup.error) return "Cleanup also failed; restart Pi before retrying.";
+  if (cleanup.timedOut) {
+    return "Cleanup exceeded its timeout; telemetry startup remains deferred until cleanup settles or succeeds on retry.";
+  }
+  if (cleanup.error) return "Cleanup also failed; telemetry startup remains deferred until cleanup succeeds on retry.";
   return "Started providers were cleaned up; check OTLP settings and Collector availability before retrying.";
+}
+
+function operationCompleted(result: BoundedOtelOperationResult | undefined): boolean {
+  return result?.completed === true && !result.timedOut && !result.error;
 }
 
 function completedShutdown(): BoundedOtelOperationResult {

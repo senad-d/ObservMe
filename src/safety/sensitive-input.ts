@@ -15,42 +15,46 @@ export const UNSAFE_OBSERVME_SESSION_ID_DETAILS =
 const maximumDiagnosticLength = 360;
 const rawContentMarkerPattern = /(?:^|[\s"'`|=(])(?:prompt|system prompt|user prompt|assistant response|thinking|raw content)\s*:/iu;
 const shellCommandPattern = /(?:^|[\s"'`|=])(?:sudo|rm|mv|cp|curl|wget|npm|pnpm|yarn|node|python3?|bash|sh|git)\s+\S+/iu;
-const homeFilesystemPathPattern = /(?:^|[\s"'`=])~(?:\/|\b)\S*/u;
-const relativeFilesystemPathPattern = /(?:^|[\s"'`=])\.{1,2}\/\S*/u;
-const unixFilesystemPathPattern = /(?:^|[\s"'`=])\/(?:Users|home|tmp|var|etc|private|workspace|opt|Volumes)\b\S*/u;
-const windowsDriveFilesystemPathPattern = /(?:^|[\s"'`=])[A-Za-z]:\\\S*/u;
-const windowsUncFilesystemPathPattern = /(?:^|[\s"'`=])\\\\\S*/u;
+const localFilesystemPathPrefixPatternSource =
+  String.raw`(?:~(?:[\\/]|\b)|\.{1,2}[\\/]|\/(?:Users|home|root|tmp|var|etc|private|workspace|opt|Volumes)(?:\/|\b)|[A-Za-z]:[\\/]|\\\\)`;
+const localFilesystemPathPattern = new RegExp(
+  `(?:^|[\\s"'\\x60=])${localFilesystemPathPrefixPatternSource}\\S*`,
+  "u",
+);
+const diagnosticLocalFilesystemPathPattern = new RegExp(
+  `(^|[\\s(\\["'\\x60=])${localFilesystemPathPrefixPatternSource}[^\\s)"'\\x60,;]*`,
+  "gu",
+);
 const environmentAssignmentPattern = /\b[A-Z][A-Z0-9_]{2,}=[^\s"'`;,)]*/u;
 const diagnosticEnvironmentAssignmentPattern = /\b[A-Z][A-Z0-9_]{2,}=[^\s"'`;,)]*/gu;
 const unresolvedEnvironmentPlaceholderPattern = /\$\{[A-Z0-9_]+\}/u;
 const diagnosticUnresolvedEnvironmentPlaceholderPattern = /\$\{[A-Z0-9_]+\}/gu;
 const bearerCredentialPattern = /\bBearer\s+[^\s"'`;,)]+/iu;
-const credentialAssignmentPatterns = [
-  /\baccess[_-]?token\s*[:=]\s*["']?[^\s"'`;,)]*/iu,
-  /\bapi[_-]?key\s*[:=]\s*["']?[^\s"'`;,)]*/iu,
-  /\btoken\s*[:=]\s*["']?[^\s"'`;,)]*/iu,
-  /\bpassword\s*[:=]\s*["']?[^\s"'`;,)]*/iu,
-  /\bsecret\s*[:=]\s*["']?[^\s"'`;,)]*/iu,
-  /\bauthorization\s*[:=]\s*["']?[^\s"'`;,)]*/iu,
-] as const;
+const credentialAssignmentKeyPatternSource =
+  String.raw`(access(?:[_-]|\s)?token|api(?:[_-]|\s)?key|client(?:[_-]|\s)?secret|token|password|secret|authorization)`;
+const credentialAssignmentValuePatternSource = String.raw`(?:"[^"]*"|'[^']*'|[^\s"'\x60;,)]+)`;
+const credentialAssignmentPattern = new RegExp(
+  String.raw`\b${credentialAssignmentKeyPatternSource}\s*[:=]\s*${credentialAssignmentValuePatternSource}`,
+  "iu",
+);
+const diagnosticCredentialAssignmentPattern = new RegExp(
+  String.raw`\b${credentialAssignmentKeyPatternSource}\s*[:=]\s*${credentialAssignmentValuePatternSource}`,
+  "giu",
+);
 const safeObservMeSessionIdPattern = /^[A-Za-z0-9._:-]{1,256}$/u;
 const sensitiveQueryInputPatterns = [
   rawContentMarkerPattern,
   shellCommandPattern,
-  homeFilesystemPathPattern,
-  relativeFilesystemPathPattern,
-  unixFilesystemPathPattern,
-  windowsDriveFilesystemPathPattern,
-  windowsUncFilesystemPathPattern,
+  localFilesystemPathPattern,
   environmentAssignmentPattern,
   unresolvedEnvironmentPlaceholderPattern,
   bearerCredentialPattern,
-  ...credentialAssignmentPatterns,
+  credentialAssignmentPattern,
 ] as const;
 const diagnosticReplacements = [
   { pattern: /Bearer\s+[^\s;,)]+/giu, replacement: "Bearer [redacted]" },
   { pattern: /Basic\s+[^\s;,)]+/giu, replacement: "Basic [redacted]" },
-  { pattern: /\b(token|password|secret|authorization)\s*[:=]\s*["']?[^"'\s;,)]+/giu, replacement: "$1=[redacted]" },
+  { pattern: diagnosticCredentialAssignmentPattern, replacement: "$1=[redacted]" },
   { pattern: diagnosticEnvironmentAssignmentPattern, replacement: "[redacted-env]" },
   { pattern: diagnosticUnresolvedEnvironmentPlaceholderPattern, replacement: "[redacted-env-placeholder]" },
   {
@@ -66,7 +70,7 @@ const diagnosticReplacements = [
     replacement: "$1[redacted-command]",
   },
   {
-    pattern: /(^|[\s(["'`])(?:~|\.{2}\/|\.\/|\/Users\/|\/home\/|\/tmp\/|[A-Za-z]:\\|\\\\)[^\s)"'`,;]*/gu,
+    pattern: diagnosticLocalFilesystemPathPattern,
     replacement: "$1[redacted-path]",
   },
 ] as const satisfies readonly DiagnosticReplacement[];
@@ -131,15 +135,9 @@ function redactUrlCredentials(message: string): string {
 
     const credentialsStart = markerIndex + 3;
     const authorityEnd = findUrlAuthorityEnd(message, credentialsStart);
-    const atIndex = message.indexOf("@", credentialsStart);
-    if (atIndex === -1 || atIndex >= authorityEnd) {
+    const atIndex = message.lastIndexOf("@", authorityEnd - 1);
+    if (atIndex < credentialsStart) {
       searchFrom = authorityEnd + 1;
-      continue;
-    }
-
-    const colonIndex = message.indexOf(":", credentialsStart);
-    if (colonIndex === -1 || colonIndex >= atIndex || colonIndex === credentialsStart || colonIndex + 1 === atIndex) {
-      searchFrom = atIndex + 1;
       continue;
     }
 

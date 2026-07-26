@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { normalizeNodeTimerMilliseconds } from "../config/timer-limits.ts";
 import { readDiagnosticMessage, sanitizeDiagnosticText } from "../diagnostics/sanitize.ts";
 
 export interface FlushableOtelSdk {
@@ -57,7 +58,7 @@ export async function runBoundedOtelOperation(
   action: () => Promise<void> | void,
   timeoutMs: number,
 ): Promise<BoundedOtelOperationResult> {
-  const normalizedTimeoutMs = normalizeTimeoutMs(timeoutMs);
+  const normalizedTimeoutMs = normalizeOtelOperationTimeoutMs(timeoutMs);
   const timeoutController = new AbortController();
   const timeoutResult = timeoutOperation(operation, normalizedTimeoutMs, timeoutController.signal);
 
@@ -71,9 +72,8 @@ export async function runBoundedOtelOperation(
   }
 }
 
-function normalizeTimeoutMs(timeoutMs: number): number {
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) return 0;
-  return timeoutMs;
+export function normalizeOtelOperationTimeoutMs(timeoutMs: number): number {
+  return normalizeNodeTimerMilliseconds(timeoutMs, 0);
 }
 
 async function settleOperation(

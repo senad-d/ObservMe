@@ -2,7 +2,7 @@
 
 Use this guide for routine project setup. For every supported key and environment variable, see the [complete configuration reference](reference/12-configuration-reference.md). For the supported local profile, see the [example guide](../examples/README.md).
 
-ObservMe creates a project-local starter config automatically during trusted Pi session-start lifecycles.
+ObservMe creates a project-local, inactive setup guide automatically during trusted Pi session-start lifecycles.
 
 ## Automatic project config
 
@@ -12,11 +12,13 @@ When Pi emits `session_start` in a trusted project, ObservMe creates `observme.y
 <CONFIG_DIR_NAME>/observme.yaml
 ```
 
-The standard Pi distribution currently resolves this to `.pi/observme.yaml`. ObservMe resolves the absolute target under the trusted project root and serializes the complete existence-check/create/write window through Pi's file-mutation queue. Pi emits `session_start` for startup, `/reload`, new-session, resume, and fork flows. ObservMe intentionally runs the same idempotent bootstrap for each trusted flow so session replacement and reloads converge on the same project-local config state. The file is created only when it is missing; concurrent starts create it at most once, existing project config is never overwritten, and no repeat notification is shown. Bootstrap is skipped when the project is untrusted or Pi does not provide a project `ctx.cwd`. The generated file is privacy-preserving: raw prompt, response, thinking, tool, bash, and file-path capture starts disabled, redaction starts enabled, and unsafe capture starts disabled.
+The standard Pi distribution currently resolves this to `.pi/observme.yaml`. ObservMe resolves the absolute target under the trusted project root and serializes the complete existence-check/create/write window through Pi's file-mutation queue. Pi emits `session_start` for startup, `/reload`, new-session, resume, and fork flows. ObservMe intentionally runs the same idempotent bootstrap for each trusted flow so session replacement and reloads converge on the same project-local state. The file is created only when it is missing; concurrent starts create it at most once, existing project config is never overwritten, and no repeat notification is shown. Bootstrap is skipped when the project is untrusted or Pi does not provide a project `ctx.cwd`.
+
+Every generated setting is commented out. An untouched guide contributes no project configuration, so built-in defaults and active global settings—including disablement, OTLP destinations, environment, and transport policy—remain effective on first start and later reloads. To adopt a project override, uncomment the top-level `observme:` key, the relevant section keys, and only the settings you intend to own locally. Once edited this way, the file is a normal user-authored project configuration and follows the documented precedence. The suggested profile remains privacy-preserving when adopted: raw prompt, response, thinking, tool, bash, and file-path capture is disabled, redaction is enabled, and unsafe capture is disabled.
 
 ## What to edit
 
-Edit the project config file (`.pi/observme.yaml` in the standard distribution) where you run Pi:
+Edit the project config file (`.pi/observme.yaml` in the standard distribution) where you run Pi. The generated guide is fully commented; uncomment `observme:`, each parent section, and only the values you want to override. Do not uncomment the whole profile unless you intentionally want every suggested local value to replace its global counterpart.
 
 - `otlp.endpoint` and `otlp.signalEndpoints` — absolute HTTP(S) OpenTelemetry Collector URLs. Base endpoints may include an intentional path; ObservMe appends one `/v1/{signal}` suffix with URL pathname semantics. Signal-specific endpoints must already end in the matching signal path. Keep credentials in `otlp.headers`; endpoint userinfo, unresolved placeholders, queries, and fragments are rejected.
 - `resource.attributes` — service name, project name, tenant, and deployment environment labels.
@@ -38,7 +40,7 @@ Configuration is merged in this order:
 defaults → global ~/.pi/agent/observme.yaml → trusted project .pi/observme.yaml → trusted project .env → system environment variables → runtime options
 ```
 
-Use `~/.pi/agent/observme.yaml` for standard-distribution global defaults that should apply across projects. Use `<CONFIG_DIR_NAME>/observme.yaml` for per-project setup. Because `.env` and system environment variables have higher precedence than YAML, remove or update stale `OBSERVME_REDACTION_ENABLED`, `OBSERVME_ALLOW_UNSAFE_CAPTURE`, and `OBSERVME_CAPTURE_*` overrides when YAML privacy settings appear to be ignored.
+Use `~/.pi/agent/observme.yaml` for standard-distribution global defaults that should apply across projects. Use `<CONFIG_DIR_NAME>/observme.yaml` for intentional per-project overrides. The untouched generated guide is inert and therefore does not displace the global layer. Because `.env` and system environment variables have higher precedence than YAML, remove or update stale `OBSERVME_REDACTION_ENABLED`, `OBSERVME_ALLOW_UNSAFE_CAPTURE`, and `OBSERVME_CAPTURE_*` overrides when YAML privacy settings appear to be ignored.
 
 Global and trusted-project `observme.yaml` files have a 262,144-byte (256 KiB) limit. The trusted-project `.env` file has a 131,072-byte (128 KiB) limit. Exact-limit files are supported; larger files, including sparse files, are rejected from their opened-file metadata before ObservMe allocates or parses their contents.
 

@@ -13,6 +13,7 @@ interface OwnedOtelOperation {
   readonly retry: OtelOperationRetry;
   readonly observeSettlement: OtelOperationSettlementObserver;
   state: OwnedOperationState;
+  pendingSettlement?: Promise<OtelOperationSettlement>;
 }
 
 export interface OtelOperationOwnership {
@@ -53,7 +54,7 @@ export function getProcessOtelOperationOwnership(): OtelOperationOwnership {
 }
 
 class ProcessOtelOperationOwnership implements OtelOperationOwnership {
-  readonly #operations = new Map<OtelOperation, OwnedOtelOperation>();
+  readonly #operations = new Set<OwnedOtelOperation>();
   #diagnosticEmitted = false;
   #resolution?: Promise<boolean>;
 
@@ -74,7 +75,7 @@ class ProcessOtelOperationOwnership implements OtelOperationOwnership {
       observeSettlement,
       state: operationCanRetry(result) ? "retryable" : "settling",
     };
-    this.#operations.set(result.operation, ownedOperation);
+    this.#operations.add(ownedOperation);
     this.observePendingSettlement(ownedOperation, result.settlement);
   }
 
@@ -102,19 +103,20 @@ class ProcessOtelOperationOwnership implements OtelOperationOwnership {
 
   private async retryUnresolvedOperations(): Promise<boolean> {
     for (const operation of operationRetryOrder) {
-      const ownedOperation = this.#operations.get(operation);
-      if (!ownedOperation) continue;
-      if (ownedOperation.state === "settling") return false;
+      for (const ownedOperation of this.#operations) {
+        if (ownedOperation.operation !== operation) continue;
+        if (ownedOperation.state === "settling") return false;
 
-      const result = await ownedOperation.retry();
-      if (operationCompleted(result)) {
-        this.release(ownedOperation);
-        continue;
+        const result = await ownedOperation.retry();
+        if (operationCompleted(result)) {
+          this.release(ownedOperation);
+          continue;
+        }
+
+        ownedOperation.state = operationCanRetry(result) ? "retryable" : "settling";
+        this.observePendingSettlement(ownedOperation, result.settlement);
+        return false;
       }
-
-      ownedOperation.state = operationCanRetry(result) ? "retryable" : "settling";
-      this.observePendingSettlement(ownedOperation, result.settlement);
-      return false;
     }
 
     return !this.hasUnresolvedOperations;
@@ -126,6 +128,7 @@ class ProcessOtelOperationOwnership implements OtelOperationOwnership {
   ): void {
     if (!settlement) return;
     ownedOperation.state = "settling";
+    ownedOperation.pendingSettlement = settlement;
     void this.applyPendingSettlement(ownedOperation, settlement);
   }
 
@@ -134,9 +137,10 @@ class ProcessOtelOperationOwnership implements OtelOperationOwnership {
     settlementPromise: Promise<OtelOperationSettlement>,
   ): Promise<void> {
     const settlement = await resolveSettlement(ownedOperation.operation, settlementPromise);
-    notifySettlementObserver(ownedOperation.observeSettlement, settlement);
-    if (this.#operations.get(ownedOperation.operation) !== ownedOperation) return;
+    if (!this.#operations.has(ownedOperation) || ownedOperation.pendingSettlement !== settlementPromise) return;
 
+    ownedOperation.pendingSettlement = undefined;
+    notifySettlementObserver(ownedOperation.observeSettlement, settlement);
     if (operationCompleted(settlement)) {
       this.release(ownedOperation);
       return;
@@ -145,8 +149,8 @@ class ProcessOtelOperationOwnership implements OtelOperationOwnership {
   }
 
   private release(ownedOperation: OwnedOtelOperation): void {
-    if (this.#operations.get(ownedOperation.operation) !== ownedOperation) return;
-    this.#operations.delete(ownedOperation.operation);
+    if (!this.#operations.delete(ownedOperation)) return;
+    ownedOperation.pendingSettlement = undefined;
     if (this.#operations.size === 0) this.#diagnosticEmitted = false;
   }
 }

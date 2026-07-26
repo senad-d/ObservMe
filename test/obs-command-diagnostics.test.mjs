@@ -59,6 +59,7 @@ function assertNoSensitiveDiagnosticText(message) {
   assert.doesNotMatch(message, /\/Users\/senad/u);
   assert.doesNotMatch(message, /rm -rf/u);
   assert.doesNotMatch(message, /OBSERVME_TOKEN=super-secret/u);
+  assert.doesNotMatch(message, /command-api-value|command-client-value|\/root\/command-private|C:\/Users\/CommandUser|command-user/u);
 }
 
 test("/obs logs explains a missing current session with a concrete next action", async () => {
@@ -180,7 +181,7 @@ test("/obs cost redacts raw diagnostic content before rendering errors", async (
     loadConfig: async () => createQueryReadyConfig(),
     fetch: async () => {
       throw new Error(
-        "Authorization: Bearer grafana-token Prompt: raw prompt body /Users/senad/project rm -rf /tmp/demo OBSERVME_TOKEN=super-secret.",
+        "Authorization: Bearer grafana-token Prompt: raw prompt body. api_key=command-api-value client-secret=command-client-value /root/command-private C:/Users/CommandUser/private https://command-user@grafana.local /Users/senad/project rm -rf /tmp/demo OBSERVME_TOKEN=super-secret.",
       );
     },
   });

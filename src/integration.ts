@@ -63,6 +63,15 @@ export interface ObservMeIntegrationFailure {
   readonly reason: ObservMeIntegrationFailureReason;
 }
 
+export type ObservMeIntegrationContextRole =
+  | "root"
+  | "subagent"
+  | "orchestrator"
+  | "worker"
+  | "reviewer"
+  | "unknown";
+export type ObservMeIntegrationContextRoleV2 = ObservMeIntegrationContextRole | ObservMeChildRole;
+
 export interface ObservMeIntegrationContext {
   readonly workflowId: string;
   readonly workflowRootAgentId: string;
@@ -70,15 +79,24 @@ export interface ObservMeIntegrationContext {
   readonly parentAgentId?: string;
   readonly rootAgentId: string;
   readonly depth: number;
-  readonly role: "root" | "subagent" | "orchestrator" | "worker" | "reviewer" | "unknown";
+  readonly role: ObservMeIntegrationContextRole;
   readonly capability?: string;
   readonly sessionId?: string;
   readonly traceId?: string;
 }
 
+export interface ObservMeIntegrationContextV2 extends Omit<ObservMeIntegrationContext, "role"> {
+  readonly role: ObservMeIntegrationContextRoleV2;
+}
+
 export interface ObservMeIntegrationContextSuccess {
   readonly ok: true;
   readonly context: ObservMeIntegrationContext;
+}
+
+export interface ObservMeIntegrationContextSuccessV2 {
+  readonly ok: true;
+  readonly context: ObservMeIntegrationContextV2;
 }
 
 export interface ObservMeStartSubagentOptions {
@@ -104,8 +122,11 @@ export interface ObservMeStartedSubagent {
   readonly traceContextPropagated: boolean;
 }
 
-export interface ObservMeCompleteSubagentOptions {
+export interface ObservMeCompleteSubagentLaunchOptions {
   readonly childAgentId?: string;
+}
+
+export interface ObservMeCompleteSubagentOptions extends ObservMeCompleteSubagentLaunchOptions {
   readonly childStatus?: ObservMeTerminalChildStatus;
   readonly outcome?: ObservMeTerminalChildStatus;
 }
@@ -139,6 +160,11 @@ export interface ObservMeIntegrationApi {
   readonly version: ObservMeIntegrationVersion;
   getContext(): ObservMeIntegrationContextSuccess | ObservMeIntegrationFailure;
   startSubagent(options?: ObservMeStartSubagentOptions): ObservMeStartedSubagent | ObservMeIntegrationFailure;
+  /** Optional additive capability: call once immediately after obtaining a usable launcher handle. */
+  completeSubagentLaunch?(
+    spawnId: string,
+    options?: ObservMeCompleteSubagentLaunchOptions,
+  ): ObservMeIntegrationSuccess | ObservMeIntegrationFailure;
   completeSubagent(spawnId: string, options?: ObservMeCompleteSubagentOptions): ObservMeIntegrationSuccess | ObservMeIntegrationFailure;
   failSubagent(spawnId: string, options?: ObservMeFailSubagentOptions): ObservMeIntegrationSuccess | ObservMeIntegrationFailure;
   startWait(options?: ObservMeWaitJoinOptions): ObservMeStartedWaitJoin | ObservMeIntegrationFailure;
@@ -147,10 +173,11 @@ export interface ObservMeIntegrationApi {
   endJoin(joinId: string, options?: ObservMeWaitJoinOptions): ObservMeIntegrationSuccess | ObservMeIntegrationFailure;
 }
 
-export interface ObservMeIntegrationApiV2 extends Omit<ObservMeIntegrationApi, "version" | "startSubagent"> {
+export interface ObservMeIntegrationApiV2 extends Omit<ObservMeIntegrationApi, "version" | "getContext" | "startSubagent"> {
   readonly version: ObservMeIntegrationVersionV2;
   readonly childRoles: typeof OBSERVME_CHILD_ROLES;
   readonly childIdentityEnvelopeVersion: ObservMeChildIdentityEnvelopeVersion;
+  getContext(): ObservMeIntegrationContextSuccessV2 | ObservMeIntegrationFailure;
   startSubagent(options: ObservMeStartSubagentOptionsV2): ObservMeStartedSubagent | ObservMeIntegrationFailure;
 }
 

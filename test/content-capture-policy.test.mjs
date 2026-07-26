@@ -194,6 +194,35 @@ test("content-capture policy scrubs cross-platform absolute paths while preservi
   for (const path of paths) assert.equal(result.value?.includes(path), false);
 });
 
+test("content-capture policy applies configured path modes to spaced paths and local file URLs", () => {
+  const value = [
+    "open /home/Live Capture/private-live/result.txt",
+    "inspect file:///C:/Users/Url%20Capture/private-url/report.txt",
+  ].join(" and ");
+  const sensitiveFragments = ["Live Capture", "private-live", "file://", "Url%20Capture", "private-url"];
+
+  for (const pathMode of ["hash", "basename", "drop"]) {
+    const result = applyContentCapturePolicy({
+      captureEnabled: true,
+      value,
+      kind: "toolResult",
+      config: cloneConfig({ privacy: { redactionEnabled: true, allowUnsafeCapture: false, pathMode } }),
+    });
+
+    assert.equal(result.mode, "redacted");
+    assert.equal(result.captured, true);
+    for (const fragment of sensitiveFragments) assert.equal(result.value?.includes(fragment), false);
+  }
+
+  const fullResult = applyContentCapturePolicy({
+    captureEnabled: true,
+    value,
+    kind: "toolResult",
+    config: cloneConfig({ privacy: { redactionEnabled: true, allowUnsafeCapture: false, pathMode: "full" } }),
+  });
+  assert.equal(fullResult.value, value);
+});
+
 test("content-capture policy omits prompt, tool result, and bash output when capture is disabled", () => {
   const config = cloneConfig();
 

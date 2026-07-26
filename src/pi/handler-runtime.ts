@@ -498,8 +498,26 @@ async function runSafeHandler<Event, Context>(
   try {
     await fn(event, ctx);
   } catch (error) {
-    recorder(name, error);
+    invokeHandlerErrorRecorder(recorder, name, error);
   }
+}
+
+function invokeHandlerErrorRecorder(
+  recorder: HandlerErrorRecorder | undefined,
+  name: string,
+  error: unknown,
+): void {
+  if (!recorder) return;
+
+  try {
+    void Promise.resolve(recorder(name, error)).catch(ignoreHandlerErrorRecorderFailure);
+  } catch {
+    return;
+  }
+}
+
+function ignoreHandlerErrorRecorderFailure(): undefined {
+  return undefined;
 }
 
 async function runSerializedLifecycleHandler(
@@ -625,9 +643,29 @@ function recordStatefulHandlerError(
   error: unknown,
 ): void {
   const session = state.session;
-  session?.metrics.handlerErrors.add(1, { operation: normalizeMetricValue(name, "handler") });
-  if (session) emitLifecycleLog(session.logger, LOG_EVENT_NAMES.HANDLER_FAILED, handlerErrorAttributes(name, error), "ERROR");
-  if (!session) fallback?.(name, error);
+  if (!session) {
+    invokeHandlerErrorRecorder(fallback, name, error);
+    return;
+  }
+
+  tryRecordHandlerErrorMetric(session, name);
+  tryEmitHandlerErrorLog(session, name, error);
+}
+
+function tryRecordHandlerErrorMetric(session: ObservMeTelemetrySession, name: string): void {
+  try {
+    session.metrics.handlerErrors.add(1, { operation: normalizeMetricValue(name, "handler") });
+  } catch {
+    return;
+  }
+}
+
+function tryEmitHandlerErrorLog(session: ObservMeTelemetrySession, name: string, error: unknown): void {
+  try {
+    emitLifecycleLog(session.logger, LOG_EVENT_NAMES.HANDLER_FAILED, handlerErrorAttributes(name, error), "ERROR");
+  } catch {
+    return;
+  }
 }
 
 function handlerErrorAttributes(name: string, error: unknown): AttributeMap {

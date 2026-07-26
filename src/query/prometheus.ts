@@ -30,6 +30,10 @@ export interface QueryResult {
   readonly stringValue?: PrometheusSample;
 }
 
+export interface PrometheusVectorQueryResult extends QueryResult {
+  readonly resultType: "vector";
+}
+
 export interface PrometheusQueryClientOptions {
   readonly fetch?: PrometheusFetch;
 }
@@ -113,6 +117,16 @@ export async function queryPrometheus(
   options: PrometheusQueryOptions = {},
 ): Promise<QueryResult> {
   return queryPrometheusWithTransport(config, createGrafanaTransport(config, options), query, time, options);
+}
+
+export function assertPrometheusVectorResult(
+  result: QueryResult,
+): asserts result is PrometheusVectorQueryResult {
+  if (result.resultType === "vector") return;
+
+  throw new Error(
+    `Prometheus query contract error: expected an instant-vector result, but backend returned ${result.resultType}; update the PromQL or datasource response to return a vector.`,
+  );
 }
 
 async function queryPrometheusWithTransport(

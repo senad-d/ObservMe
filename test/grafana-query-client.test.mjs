@@ -332,7 +332,7 @@ test("Grafana health sanitizes transport failure details", async () => {
   const health = await getGrafanaHealth(config, {
     fetch: async () => {
       throw new Error(
-        "Authorization: Bearer grafana-token https://admin:secret@grafana.local?token=url-token password=grafana-password /home/senad/private.env curl https://example.test OBSERVME_TOKEN=env-secret",
+        "Authorization: Bearer grafana-token https://admin@grafana.local?token=url-token password=grafana-password api-key=grafana-api-value CLIENT_SECRET=grafana-client-value /home/senad/private.env /root/grafana-private C:/Users/Grafana/private \\\\grafana-server\\share\\private",
       );
     },
   });
@@ -341,7 +341,7 @@ test("Grafana health sanitizes transport failure details", async () => {
   assert.match(health.checks[0].detail, /\[redacted\]/u);
   assert.doesNotMatch(
     health.checks[0].detail,
-    /grafana-token|admin:secret|url-token|grafana-password|private\.env|curl https|env-secret/u,
+    /grafana-token|admin@|url-token|grafana-password|grafana-api-value|grafana-client-value|private\.env|\/root\/grafana-private|C:\/Users\/Grafana|grafana-server/u,
   );
 });
 

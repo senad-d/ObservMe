@@ -32,6 +32,10 @@ function createIntegrationApi(calls, environments = [{ CHILD_ENV: "propagated" }
         traceContextPropagated: true,
       };
     },
+    completeSubagentLaunch(spawnId, options) {
+      calls.push(["completeSubagentLaunch", spawnId, options]);
+      return { ok: true };
+    },
     completeSubagent(spawnId, options) {
       calls.push(["completeSubagent", spawnId, options]);
       return { ok: true };
@@ -94,6 +98,7 @@ test("generic subagent runner forwards child identity and returned environment u
   assert.deepEqual(calls.map(call => call[0]), [
     "startSubagent",
     "launch",
+    "completeSubagentLaunch",
     "startWait",
     "wait",
     "endWait",
@@ -109,7 +114,12 @@ test("generic subagent runner forwards child identity and returned environment u
     childAgentId: "child-example",
     traceContextPropagated: true,
   });
-  assert.deepEqual(calls[5], [
+  assert.deepEqual(calls[2], [
+    "completeSubagentLaunch",
+    "spawn-example",
+    { childAgentId: "child-example" },
+  ]);
+  assert.deepEqual(calls[6], [
     "completeSubagent",
     "spawn-example",
     { childAgentId: "child-example", childStatus: "completed", outcome: "completed" },

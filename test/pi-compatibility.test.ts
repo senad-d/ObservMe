@@ -11,6 +11,9 @@ import {
   type ObservMeChildRole,
   type ObservMeIntegrationApi,
   type ObservMeIntegrationApiV2,
+  type ObservMeIntegrationContext,
+  type ObservMeIntegrationContextRoleV2,
+  type ObservMeIntegrationContextV2,
   type ObservMeIntegrationHost,
   type ObservMeIntegrationRequest,
   type ObservMeIntegrationRequestV2,
@@ -55,6 +58,23 @@ function assertIntegrationApiV2Types(
   };
   const v2Options: ObservMeStartSubagentOptionsV2 = { child };
   v2Api.startSubagent(v2Options);
+
+  const v1Context = v1Api.getContext();
+  if (v1Context.ok) {
+    const v1Role: ObservMeIntegrationContext["role"] = v1Context.context.role;
+    void v1Role;
+  }
+  const v2Context = v2Api.getContext();
+  if (v2Context.ok) {
+    const roleCompleteContext: ObservMeIntegrationContextV2 = v2Context.context;
+    const v2Role: ObservMeIntegrationContextRoleV2 = roleCompleteContext.role;
+    void v2Role;
+  }
+  const v2Lead: Extract<ObservMeIntegrationContextV2["role"], "lead"> = "lead";
+  void v2Lead;
+  // @ts-expect-error The source-compatible v1 context does not expose the v2-only lead role.
+  const v1Lead: Extract<ObservMeIntegrationContext["role"], "lead"> = "lead";
+  void v1Lead;
 
   const v1Request: ObservMeIntegrationRequest = {
     supportedVersions: [OBSERVME_INTEGRATION_VERSION],

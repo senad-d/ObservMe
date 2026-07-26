@@ -89,6 +89,41 @@ function createToolFailuresResponse() {
   );
 }
 
+function createEmptyVectorResponse() {
+  return new Response(
+    JSON.stringify({ status: "success", data: { resultType: "vector", result: [] } }),
+    { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
+  );
+}
+
+function createNonVectorToolsResponse(resultType) {
+  const result = resultType === "matrix"
+    ? [{ metric: { tool_name: "read" }, values: [[1783422000.25, "0.25"]] }]
+    : [1783422000.25, resultType === "scalar" ? "0.25" : "ready"];
+
+  return new Response(
+    JSON.stringify({ status: "success", data: { resultType, result } }),
+    { status: 200, statusText: "OK", headers: { "content-type": "application/json" } },
+  );
+}
+
+const toolsPartialFailureCases = [
+  {
+    failedQuery: OBS_TOOLS_CALLS_PROMQL,
+    failedWarning: /Tool calls unavailable:/u,
+    siblingWarning: /Tool failures unavailable:/u,
+    fulfilledRow: /bash \/ TimeoutError: 0\.05\/s/u,
+    falseEmpty: /No tool call metrics found/u,
+  },
+  {
+    failedQuery: OBS_TOOLS_FAILURES_PROMQL,
+    failedWarning: /Tool failures unavailable:/u,
+    siblingWarning: /Tool calls unavailable:/u,
+    fulfilledRow: /read: 0\.25\/s/u,
+    falseEmpty: /No tool failure metrics found/u,
+  },
+];
+
 test("renderObsTools reports tool call and failure rates", () => {
   const output = renderObsTools({
     window: "1h",
@@ -204,6 +239,97 @@ test("/obs tools queries documented PromQL with configured timeout and result li
     ratePerSecond: 0.05,
     timestampUnixSeconds: "1783422000.25",
   });
+});
+
+test("/obs tools preserves successful empty vectors for both fixed-vector queries", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+
+  const snapshot = await getObsToolsSnapshot(createCommandContext([]), {
+    loadConfig: async () => config,
+    fetch: async () => createEmptyVectorResponse(),
+  });
+
+  assert.deepEqual(snapshot.calls, []);
+  assert.deepEqual(snapshot.failures, []);
+});
+
+test("/obs tools preserves a fulfilled sibling when either fixed-vector query violates its contract", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+
+  for (const resultType of ["scalar", "string", "matrix"]) {
+    for (const failureCase of toolsPartialFailureCases) {
+      const notifications = [];
+      await handleObsToolsCommand("tools", createCommandContext(notifications), {
+        loadConfig: async () => config,
+        fetch: async input => {
+          const query = new URL(String(input)).searchParams.get("query");
+          if (query === failureCase.failedQuery) return createNonVectorToolsResponse(resultType);
+          return createToolsResponseForQuery(query);
+        },
+      });
+
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].type, "warning");
+      assert.ok(notifications[0].message.length <= OBS_COMMAND_OUTPUT_MAX_CHARS);
+      assert.match(notifications[0].message, failureCase.fulfilledRow);
+      assert.match(notifications[0].message, failureCase.failedWarning);
+      assert.doesNotMatch(notifications[0].message, failureCase.siblingWarning);
+      assert.match(notifications[0].message, /Prometheus query contract error: expected an instant-vector result/u);
+      assert.match(notifications[0].message, new RegExp(`backend returned ${resultType}`, "u"));
+      assert.match(notifications[0].message, /update the PromQL or datasource response to return a vector/u);
+      assert.doesNotMatch(notifications[0].message, failureCase.falseEmpty);
+    }
+  }
+});
+
+test("/obs tools preserves every fulfilled section when one independent query fails", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+
+  for (const failureCase of toolsPartialFailureCases) {
+    const notifications = [];
+    await handleObsToolsCommand("tools", createCommandContext(notifications), {
+      loadConfig: async () => config,
+      fetch: async input => {
+        const query = new URL(String(input)).searchParams.get("query");
+        if (query === failureCase.failedQuery) throw new Error(`token=private ${"x".repeat(20_000)}`);
+        return createToolsResponseForQuery(query);
+      },
+    });
+
+    assert.equal(notifications[0].type, "warning");
+    assert.ok(notifications[0].message.length <= OBS_COMMAND_OUTPUT_MAX_CHARS);
+    assert.match(notifications[0].message, failureCase.fulfilledRow);
+    assert.match(notifications[0].message, failureCase.failedWarning);
+    assert.doesNotMatch(notifications[0].message, failureCase.siblingWarning);
+    assert.doesNotMatch(notifications[0].message, failureCase.falseEmpty);
+    assert.doesNotMatch(notifications[0].message, /private/u);
+  }
+});
+
+test("/obs tools renders every failed section as unavailable when both queries fail", async () => {
+  const config = cloneDefaultConfig();
+  config.query.grafana.url = "http://grafana.local";
+  config.query.grafana.token = "grafana-token";
+  const notifications = [];
+
+  await handleObsToolsCommand("tools", createCommandContext(notifications), {
+    loadConfig: async () => config,
+    fetch: async () => {
+      throw new Error("Prometheus query failed");
+    },
+  });
+
+  assert.equal(notifications[0].type, "error");
+  assert.ok(notifications[0].message.length <= OBS_COMMAND_OUTPUT_MAX_CHARS);
+  assert.match(notifications[0].message, /Tool calls unavailable: Prometheus query failed/u);
+  assert.match(notifications[0].message, /Tool failures unavailable: Prometheus query failed/u);
+  assert.doesNotMatch(notifications[0].message, /No tool (?:call|failure) metrics found/u);
 });
 
 test("/obs tools completes delayed independent queries within one request timeout budget", async () => {

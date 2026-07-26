@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import { getGrafanaHealth } from "../src/query/grafana.ts";
+import { getGrafanaQueryReadiness } from "../src/query/grafana-readiness.ts";
 import {
   createGrafanaTransport,
   MAX_GRAFANA_RESPONSE_BODY_BYTES,
@@ -21,6 +22,46 @@ const defaultRange = {
   from: new Date("2026-07-07T10:00:00.250Z"),
   to: new Date("2026-07-07T11:00:00.750Z"),
 };
+
+const rejectedGrafanaUrlCases = [
+  {
+    name: "blank",
+    url: "  ",
+    code: "missing_grafana_url",
+    message: "query.grafana.url is not configured. Configure an absolute http:// or https:// URL.",
+  },
+  {
+    name: "unresolved",
+    url: "https://${PRIVATE_GRAFANA_HOST}/observability",
+    code: "unresolved_grafana_url",
+    message:
+      "query.grafana.url is unresolved. Set the referenced environment variable before running Grafana-backed queries.",
+  },
+  {
+    name: "malformed",
+    url: "https://[private-malformed-grafana",
+    code: "invalid_grafana_url",
+    message: "query.grafana.url must be a valid http:// or https:// URL (malformed_url).",
+  },
+  {
+    name: "relative",
+    url: "private/relative/grafana",
+    code: "invalid_grafana_url",
+    message: "query.grafana.url must be a valid http:// or https:// URL (malformed_url).",
+  },
+  {
+    name: "file protocol",
+    url: "file:///private/grafana",
+    code: "invalid_grafana_url",
+    message: "query.grafana.url must be a valid http:// or https:// URL (unsupported_protocol).",
+  },
+  {
+    name: "FTP protocol",
+    url: "ftp://private-grafana.example.test/observability",
+    code: "invalid_grafana_url",
+    message: "query.grafana.url must be a valid http:// or https:// URL (unsupported_protocol).",
+  },
+];
 
 function cloneReadyConfig() {
   const config = structuredClone(defaultObservMeConfig);
@@ -386,23 +427,53 @@ test("default and custom Grafana transports reject embedded URL credentials befo
   assert.equal(requestCount, 0);
 });
 
-test("shared Grafana readiness rejects invalid Grafana URLs before health and datasource query fetches", async () => {
-  const config = cloneReadyConfig();
-  config.query.grafana.url = "file:///tmp/grafana";
+test("shared Grafana URL policy agrees across readiness, health, transports, and datasource clients", async () => {
   let fetchCalls = 0;
   const fetcher = async () => {
     fetchCalls += 1;
     throw new Error("fetch should not run for invalid Grafana URL configuration");
   };
 
-  const health = await getGrafanaHealth(config, { fetch: fetcher });
-  for (const check of health.checks) {
-    assert.equal(check.status, "failed");
-    assert.match(check.detail, /query\.grafana\.url must be a valid http:\/\/ or https:\/\/ URL/u);
+  for (const rejected of rejectedGrafanaUrlCases) {
+    const config = cloneReadyConfig();
+    config.query.grafana.url = rejected.url;
+    const readiness = getGrafanaQueryReadiness(config);
+    const readinessMessage = `Grafana query configuration is not ready: ${rejected.message}`;
+
+    assert.deepEqual(
+      readiness,
+      {
+        status: "not_ready",
+        issues: [{ code: rejected.code, key: "query.grafana.url", message: rejected.message }],
+      },
+      rejected.name,
+    );
+
+    const health = await getGrafanaHealth(config, { fetch: fetcher });
+    for (const check of health.checks) {
+      assert.equal(check.status, "failed", rejected.name);
+      assert.equal(check.detail, readinessMessage, rejected.name);
+    }
+
+    const transport = createGrafanaTransport(config, { fetch: fetcher });
+    assert.throws(
+      () => transport.apiUrl("/api/health"),
+      error => {
+        assert.equal(error.message, rejected.message, rejected.name);
+        return true;
+      },
+    );
+
+    for (const query of [runPrometheusQuery, runLokiQuery, runTempoSearch]) {
+      await assert.rejects(
+        query(config, fetcher),
+        error => {
+          assert.equal(error.message, readinessMessage, rejected.name);
+          return true;
+        },
+      );
+    }
   }
 
-  await assert.rejects(runPrometheusQuery(config, fetcher), /query\.grafana\.url must be a valid http:\/\/ or https:\/\/ URL/u);
-  await assert.rejects(runLokiQuery(config, fetcher), /query\.grafana\.url must be a valid http:\/\/ or https:\/\/ URL/u);
-  await assert.rejects(runTempoSearch(config, fetcher), /query\.grafana\.url must be a valid http:\/\/ or https:\/\/ URL/u);
   assert.equal(fetchCalls, 0);
 });

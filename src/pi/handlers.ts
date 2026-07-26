@@ -11,7 +11,7 @@ import {
   setDefaultHandlerErrorRecorder,
 } from "./handler-runtime.ts";
 import type { HandlerSessionState, RegisterHandlersOptions } from "./handler-types.ts";
-import { prepareIntegrationRegistration } from "./integration-registration.ts";
+import { prepareIntegrationRegistration, type IntegrationRegistration } from "./integration-registration.ts";
 import { getProcessOtelOperationOwnership } from "./otel-operation-ownership.ts";
 
 export { buildSessionAttributes, readSessionHeaderFromFile } from "./event-handlers/lifecycle.ts";
@@ -68,7 +68,7 @@ export type {
   TurnSequenceRegistry,
 } from "./handler-types.ts";
 
-export function registerHandlers(pi: unknown, options: RegisterHandlersOptions = {}): void {
+export function registerHandlers(pi: unknown, options: RegisterHandlersOptions = {}): IntegrationRegistration {
   const api = resolveObservMePiApi(pi);
   const state: HandlerSessionState = {
     otelOperationOwnership: options.otelOperationOwnership ?? getProcessOtelOperationOwnership(),
@@ -91,6 +91,7 @@ export function registerHandlers(pi: unknown, options: RegisterHandlersOptions =
     registerToolBashHandlers(registrar, state);
     registerSessionEventHandlers(registrar, state);
     registrar.commit();
+    return integrationRegistration;
   } catch (error) {
     integrationRegistration.rollback();
     throw error;

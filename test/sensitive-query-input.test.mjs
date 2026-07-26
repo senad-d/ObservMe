@@ -19,8 +19,15 @@ const unsafeInputCases = [
   { name: "raw prompt", value: "Prompt: summarize this repository" },
   { name: "command", value: "rm -rf /tmp/demo" },
   { name: "path", value: "/Users/example/.ssh/id_rsa" },
+  { name: "root path", value: "/root/private/config.json" },
+  { name: "forward-slash Windows path", value: "C:/Users/example/private.txt" },
+  { name: "UNC path", value: "\\\\server\\share\\private.txt" },
+  { name: "relative path", value: "../private/config.json" },
+  { name: "home path", value: "~/private/config.json" },
   { name: "environment variable", value: "OBSERVME_PARENT_AGENT_ID=agent-1" },
   { name: "token", value: "Bearer query-token" },
+  { name: "API key assignment", value: "api_key=query-api-key" },
+  { name: "client secret assignment", value: "client-secret=query-client-secret" },
   { name: "unresolved environment placeholder", value: "${OBSERVME_GRAFANA_TOKEN}" },
 ];
 
@@ -192,6 +199,60 @@ test("shared sensitive input corpus still allows benign generated IDs at every p
   assert.equal(tempoFetches, 1);
   assert.equal(traceFetches, 1);
   assert.equal(logsFetches, 1);
+});
+
+test("shared diagnostic sanitizer removes credential, local path, and URL userinfo variants", () => {
+  const credentialCases = [
+    { input: "api_key=lower-api-value", sensitiveValues: ["lower-api-value"] },
+    { input: "API-KEY: upper-api-value", sensitiveValues: ["upper-api-value"] },
+    { input: "apiKey=camel-api-value", sensitiveValues: ["camel-api-value"] },
+    { input: "api key=\"quoted api value\"", sensitiveValues: ["quoted api value"] },
+    { input: "client_secret=lower-client-value", sensitiveValues: ["lower-client-value"] },
+    { input: "CLIENT-SECRET: upper-client-value", sensitiveValues: ["upper-client-value"] },
+    { input: "clientSecret=camel-client-value", sensitiveValues: ["camel-client-value"] },
+  ];
+  const pathCases = [
+    "/root/private/config.json",
+    "C:/Users/Alice/private/config.json",
+    "C:\\Users\\Alice\\private\\config.json",
+    "\\\\server\\share\\private\\config.json",
+    "../private/config.json",
+    "./private/config.json",
+    "..\\private\\config.json",
+    "~/private/config.json",
+    "/home/alice/private/config.json",
+  ];
+  const userinfoCases = [
+    "https://alice@grafana.local/api",
+    "https://alice:@grafana.local/api",
+    "https://:credential@grafana.local/api",
+    "https://alice:credential@grafana.local/api",
+    "https://alice:credential@relay@grafana.local/api",
+    "custom+https://alice@grafana.local/api",
+  ];
+
+  for (const credentialCase of credentialCases) {
+    const sanitized = sanitizeObsDiagnosticText(`failed: ${credentialCase.input}`);
+    assert.match(sanitized, /redacted/u);
+    for (const sensitiveValue of credentialCase.sensitiveValues) assert.equal(sanitized.includes(sensitiveValue), false);
+  }
+  for (const pathCase of pathCases) {
+    const sanitized = sanitizeObsDiagnosticText(`failed at ${pathCase}`);
+    assert.match(sanitized, /\[redacted-path\]/u);
+    assert.equal(sanitized.includes(pathCase), false);
+  }
+  for (const userinfoCase of userinfoCases) {
+    const sanitized = sanitizeObsDiagnosticText(`failed: ${userinfoCase}`);
+    assert.match(sanitized, /:\/\/\[redacted\]@grafana\.local\/api$/u);
+    assert.equal(sanitized.includes("alice"), false);
+    assert.equal(sanitized.includes("credential"), false);
+    assert.equal(sanitized.includes("relay"), false);
+  }
+
+  assert.equal(
+    sanitizeObsDiagnosticText("failed: https://grafana.local/docs/setup and compare yes/no"),
+    "failed: https://grafana.local/docs/setup and compare yes/no",
+  );
 });
 
 test("command diagnostics use the shared redaction corpus before rendering UI text", async () => {

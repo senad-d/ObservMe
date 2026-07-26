@@ -28,6 +28,8 @@ import {
 
 process.env.OBSERVME_HASH_SALT = "integration-api-test-salt";
 
+const expectedMaximumIntegrationEnvironmentKeyLength = 128;
+
 const validSpanContext = {
   traceId: "11111111111111111111111111111111",
   spanId: "2222222222222222",
@@ -174,6 +176,11 @@ class FutureOrcMeLifecycleRecordingApi {
       },
       traceContextPropagated: true,
     };
+  }
+
+  completeSubagentLaunch() {
+    this.calls.push("completeSubagentLaunch");
+    return { ok: true };
   }
 
   failSubagent() {
@@ -651,6 +658,7 @@ test("standalone future OrcMe consumer preserves lifecycle ordering and exactly-
   assert.deepEqual(calls, [
     "startSubagent",
     "launch",
+    "completeSubagentLaunch",
     "startWait",
     "waitForTerminal",
     "endWait",
@@ -661,6 +669,7 @@ test("standalone future OrcMe consumer preserves lifecycle ordering and exactly-
   ]);
   for (const call of [
     "startSubagent",
+    "completeSubagentLaunch",
     "startWait",
     "endWait",
     "completeSubagent",
@@ -776,6 +785,35 @@ test("rejected v2 identity values never enter diagnostics, logs, snapshots, or m
   for (const sentinel of rejectedSentinels) assert.equal(renderedSnapshot.includes(sentinel), false, sentinel);
 });
 
+test("v2 getContext preserves every exact child role while v1 keeps its compatibility mapping", () => {
+  const v1ExpectedRoles = {
+    lead: "subagent",
+    helper: "subagent",
+    worker: "worker",
+    validator: "subagent",
+  };
+
+  for (const role of OBSERVME_CHILD_ROLES) {
+    const events = createEventBus();
+    const session = createFakeTelemetry();
+    session.lineage.role = role;
+    session.lineage.capability = `${role}.context-fixture`;
+    registerObservMeIntegration({ events }, { session });
+    const [v2Api] = collectProviderResponses(events, [2]);
+    const [v1Api] = collectProviderResponses(events, [1]);
+
+    const v2Context = v2Api.getContext();
+    assert.equal(v2Context.ok, true);
+    assert.equal(v2Context.context.role, role);
+    assert.equal(v2Context.context.capability, `${role}.context-fixture`);
+
+    const v1Context = v1Api.getContext();
+    assert.equal(v1Context.ok, true);
+    assert.equal(v1Context.context.role, v1ExpectedRoles[role]);
+    assert.equal(v1Context.context.capability, `${role}.context-fixture`);
+  }
+});
+
 test("v1 and v2 adapters preserve unavailable and closing session fencing", () => {
   const events = createEventBus();
   const state = {};
@@ -851,7 +889,10 @@ test("integration API rejects child environments that Node cannot spawn without 
     { name: "NUL key", env: { "INVALID\u0000KEY": "value" } },
     { name: "NUL value", env: { VALID_KEY: "invalid\u0000value" } },
     { name: "equals-sign key", env: { "INVALID=KEY": "value" } },
-    { name: "oversized key", env: { ["K".repeat(129)]: "value" } },
+    {
+      name: "maximum-plus-one key",
+      env: { ["K".repeat(expectedMaximumIntegrationEnvironmentKeyLength + 1)]: "value" },
+    },
   ];
 
   assert.ok(api);
@@ -870,7 +911,7 @@ test("integration API returns a sanitized environment that round-trips through a
   const session = createFakeTelemetry();
   registerObservMeIntegration({ events }, { session });
   const api = requestObservMeIntegration({ events });
-  const boundaryKey = "K".repeat(128);
+  const boundaryKey = "K".repeat(expectedMaximumIntegrationEnvironmentKeyLength);
   const roundTripValue = `round-trip-${process.platform}`;
 
   assert.ok(api);
@@ -908,6 +949,43 @@ test("integration API returns a sanitized environment that round-trips through a
   assert.deepEqual(api.completeSubagent(started.spawnId), { ok: true });
 });
 
+test("exact-boundary generated lifecycle identifiers round-trip and clean their registries", () => {
+  const events = createEventBus();
+  const session = createFakeTelemetry();
+  registerObservMeIntegration({ events }, { session });
+  const api = requestObservMeIntegration({ events });
+  const spawnId = "s".repeat(128);
+  const identifierPattern = /^[A-Za-z0-9._:-]{1,128}$/u;
+
+  assert.ok(api);
+  const started = api.startSubagent({ spawnId, env: {} });
+  assert.equal(started.ok, true);
+  assert.match(started.spawnId, identifierPattern);
+  assert.match(started.childAgentId, identifierPattern);
+
+  const waitOptions = { spawnId: started.spawnId, childAgentId: started.childAgentId };
+  const wait = api.startWait(waitOptions);
+  assert.equal(wait.ok, true);
+  assert.match(wait.id, identifierPattern);
+  assert.deepEqual(api.startWait(waitOptions), { ok: false, reason: "wait_already_exists" });
+
+  const joinOptions = { spawnId: started.spawnId, childAgentId: started.childAgentId };
+  const join = api.startJoin(joinOptions);
+  assert.equal(join.ok, true);
+  assert.match(join.id, identifierPattern);
+  assert.deepEqual(api.startJoin(joinOptions), { ok: false, reason: "join_already_exists" });
+
+  assert.equal(session.spans.activeSubagentSpawns.size, 1);
+  assert.equal(session.spans.activeAgentWaits.size, 1);
+  assert.equal(session.spans.activeAgentJoins.size, 1);
+  assert.deepEqual(api.endWait(wait.id, { id: wait.id, ...waitOptions }), { ok: true });
+  assert.deepEqual(api.endJoin(join.id, { id: join.id, ...joinOptions }), { ok: true });
+  assert.deepEqual(api.completeSubagent(started.spawnId, { childAgentId: started.childAgentId }), { ok: true });
+  assert.equal(session.spans.activeSubagentSpawns.size, 0);
+  assert.equal(session.spans.activeAgentWaits.size, 0);
+  assert.equal(session.spans.activeAgentJoins.size, 0);
+});
+
 test("integration API rejects unsafe requests and duplicate active lifecycle identifiers", () => {
   const events = createEventBus();
   const session = createFakeTelemetry();
@@ -927,6 +1005,18 @@ test("integration API rejects unsafe requests and duplicate active lifecycle ide
   });
   assert.equal(session.spans.activeSubagentSpawns.size, 1);
   assert.equal(session.spans.activeSubagentSpawns.get("spawn-duplicate"), activeSpawn);
+  assert.deepEqual(api.completeSubagentLaunch("", {}), { ok: false, reason: "invalid_request" });
+  assert.deepEqual(api.completeSubagentLaunch(started.spawnId, { childAgentId: "different-child" }), {
+    ok: false,
+    reason: "child_agent_mismatch",
+  });
+  assert.deepEqual(api.completeSubagentLaunch(started.spawnId, { childAgentId: started.childAgentId }), { ok: true });
+  assert.deepEqual(api.completeSubagentLaunch(started.spawnId, { childAgentId: started.childAgentId }), { ok: true });
+  assert.equal(session.agentTree.getAgent(started.childAgentId).status, "active");
+  assert.deepEqual(api.failSubagent(started.spawnId, { childAgentId: started.childAgentId }), {
+    ok: false,
+    reason: "invalid_terminal_transition",
+  });
   assert.deepEqual(api.completeSubagent("", {}), { ok: false, reason: "invalid_request" });
   assert.deepEqual(api.completeSubagent(started.spawnId, { childStatus: "starting" }), {
     ok: false,
@@ -945,7 +1035,7 @@ test("integration API rejects unsafe requests and duplicate active lifecycle ide
     reason: "invalid_terminal_transition",
   });
   assert.equal(session.spans.activeSubagentSpawns.get(started.spawnId), activeSpawn);
-  assert.equal(session.agentTree.getAgent(started.childAgentId).status, "starting");
+  assert.equal(session.agentTree.getAgent(started.childAgentId).status, "active");
   assert.deepEqual(api.completeSubagent(started.spawnId, { childStatus: "completed", outcome: "completed" }), { ok: true });
   assert.deepEqual(api.completeSubagent(started.spawnId, { childStatus: "completed" }), {
     ok: false,

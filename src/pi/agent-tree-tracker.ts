@@ -1,5 +1,6 @@
 import type { ObservMeChildDescriptor } from "../integration.ts";
 import { BoundedMap } from "../util/bounded-map.ts";
+import { createOrphanAgentMetricLabels, type ObservMeOrphanAgentMetricLabels } from "../semconv/metrics.ts";
 import type { AgentLineageContext, AgentRole } from "./agent-lineage.ts";
 import { isHighCardinalityLineageKey } from "./agent-lineage.ts";
 
@@ -140,11 +141,8 @@ export class AgentTreeTracker {
     };
   }
 
-  metricLabels(status: AgentChildStatus, orphaned: boolean): Record<string, string> {
-    const labels = {
-      status,
-      reason: orphaned ? "orphaned" : "attached",
-    };
+  metricLabels(status: AgentChildStatus, orphaned: boolean): ObservMeOrphanAgentMetricLabels {
+    const labels = createOrphanAgentMetricLabels(status, orphaned ? "orphaned" : "attached");
 
     assertNoHighCardinalityMetricLabels(labels);
     return labels;

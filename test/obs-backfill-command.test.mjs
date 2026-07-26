@@ -794,6 +794,7 @@ test("/obs backfill aborts timed-out exporter setup and counts all records unexp
   const records = [];
   const config = cloneDefaultConfig();
   let setupSignalAborted = false;
+  let shutdownCalls = 0;
 
   const summary = await runObsBackfill(createContext([
     userEntry("a1", "2026-07-07T11:20:00.000Z", "one"),
@@ -807,7 +808,12 @@ test("/obs backfill aborts timed-out exporter setup and counts all records unexp
     createExporter: (_config, _ctx, options) => new Promise(resolve => {
       options.signal.addEventListener("abort", () => {
         setupSignalAborted = options.signal.aborted;
-        resolve(createExporter(records));
+        resolve({
+          emit: record => records.push(record),
+          shutdown: () => {
+            shutdownCalls += 1;
+          },
+        });
       }, { once: true });
     }),
     now: () => now,
@@ -825,6 +831,72 @@ test("/obs backfill aborts timed-out exporter setup and counts all records unexp
   assert.equal(summary.recordsSkipped, 0);
   assert.equal(setupSignalAborted, true);
   assert.equal(records.length, 0);
+  assert.equal(shutdownCalls, 1);
+});
+
+test("/obs backfill disposes an exporter that resolves after setup timeout exactly once", async () => {
+  const notifications = [];
+  const config = cloneDefaultConfig();
+  let resolveExporter;
+  let shutdownCalls = 0;
+
+  const summary = await runObsBackfill(createContext([
+    userEntry("a1", "2026-07-07T11:30:00.000Z", "one"),
+  ], notifications), {
+    currentSession: true,
+    since: "1h",
+    sinceMs: 60 * 60 * 1000,
+  }, {
+    loadConfig: async () => config,
+    createExporter: () => new Promise(resolve => {
+      resolveExporter = resolve;
+    }),
+    now: () => now,
+    maxRecords: 10,
+    exportOperationTimeoutMs: 10,
+  });
+
+  assert.equal(summary.status, "partial");
+  assert.match(summary.reason, /exporter setup timed out/u);
+  resolveExporter({
+    emit: () => undefined,
+    shutdown: () => {
+      shutdownCalls += 1;
+    },
+  });
+  await delay(10);
+
+  assert.equal(shutdownCalls, 1);
+});
+
+test("/obs backfill owns exporter rejection after setup timeout", async () => {
+  const notifications = [];
+  const config = cloneDefaultConfig();
+  let rejectExporter;
+
+  const summary = await runObsBackfill(createContext([
+    userEntry("a1", "2026-07-07T11:30:00.000Z", "one"),
+  ], notifications), {
+    currentSession: true,
+    since: "1h",
+    sinceMs: 60 * 60 * 1000,
+  }, {
+    loadConfig: async () => config,
+    createExporter: () => new Promise((_resolve, reject) => {
+      rejectExporter = reject;
+    }),
+    now: () => now,
+    maxRecords: 10,
+    exportOperationTimeoutMs: 10,
+  });
+
+  assert.equal(summary.status, "partial");
+  assert.match(summary.reason, /exporter setup timed out/u);
+  rejectExporter(new Error("late exporter setup failure"));
+  await delay(10);
+
+  assert.equal(summary.status, "partial");
+  assert.match(summary.reason, /exporter setup timed out/u);
 });
 
 test("/obs backfill reports queued records as unknown when flush fails", async () => {

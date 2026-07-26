@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:f
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { defaultObservMeConfig } from "../src/config/defaults.ts";
 import {
   bootstrapProjectObservMeConfig,
@@ -11,7 +12,17 @@ import {
   PROJECT_OBSERVME_YAML_TEMPLATE,
   registerProjectConfigBootstrap,
 } from "../src/config/bootstrap-project-config.ts";
+import {
+  loadSessionConfigWithDiagnostics,
+  parseObservMeConfigText,
+} from "../src/config/load-config.ts";
 import { registerHandlers } from "../src/pi/handlers.ts";
+
+const anchoredCreateStallHelperPath = fileURLToPath(
+  new URL("./fixtures/anchored-create-stall-helper.mjs", import.meta.url),
+);
+const anchoredCreateTestPhaseTimeoutMillis = 200;
+const anchoredCreateTestShutdownTimeoutMillis = 50;
 
 async function createTempProject() {
   return mkdtemp(join(tmpdir(), "observme-config-bootstrap-"));
@@ -23,6 +34,52 @@ async function removeTempProject(path) {
 
 function projectConfigPath(cwd) {
   return join(cwd, CONFIG_DIR_NAME, "observme.yaml");
+}
+
+function createStalledHelperHooks(cwd, phase, cleanupMode) {
+  const pidFile = join(cwd, `anchored-helper-${phase}.pid`);
+  return {
+    pidFile,
+    hooks: {
+      anchoredCreateHelper: {
+        modulePath: anchoredCreateStallHelperPath,
+        arguments: cleanupMode ? [phase, pidFile, cleanupMode] : [phase, pidFile],
+        phaseTimeoutMillis: anchoredCreateTestPhaseTimeoutMillis,
+        shutdownStepTimeoutMillis: anchoredCreateTestShutdownTimeoutMillis,
+      },
+    },
+  };
+}
+
+async function assertHelperWasReaped(pidFile) {
+  const pid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+  assert.equal(isProcessRunning(pid), false, `anchored-create helper ${pid} was not reaped`);
+}
+
+function isProcessRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+function createdSetupGuideMessage(path) {
+  return `ObservMe created an inactive project setup guide at ${path}. Uncomment only settings you want to override.`;
+}
+
+function adoptGeneratedProjectOverrides() {
+  return PROJECT_OBSERVME_YAML_TEMPLATE
+    .replace("# observme:", "observme:")
+    .replace("#   enabled: true", "  enabled: true")
+    .replace("#   environment: development", "  environment: development")
+    .replace("#   otlp:", "  otlp:")
+    .replace("#     endpoint: http://localhost:4318", "    endpoint: http://localhost:4318")
+    .replace("#     tls:", "    tls:")
+    .replace("#       insecureSkipVerify: false", "      insecureSkipVerify: false");
 }
 
 function createFakePi() {
@@ -55,18 +112,22 @@ test("ensureProjectObservMeConfig creates the trusted project starter file", asy
 
     assert.deepEqual(result, { path: configPath, status: "created" });
     assert.equal(text, PROJECT_OBSERVME_YAML_TEMPLATE);
-    assert.match(text, /capture:\n(?: {4}#.*\n){3} {4}prompts: false/u);
-    assert.match(text, /responses: false/u);
-    assert.match(text, /thinking: false/u);
-    assert.match(text, /toolArguments: false/u);
-    assert.match(text, /toolResults: false/u);
-    assert.match(text, /bashCommands: false/u);
-    assert.match(text, /bashOutput: false/u);
-    assert.match(text, /filePaths: false/u);
-    assert.match(text, /redactionEnabled: true/u);
-    assert.match(text, /allowUnsafeCapture: false/u);
-    assert.match(text, /activeAgentLeaseDurationMillis: 60000/u);
-    assert.match(text, /token: \$\{OBSERVME_GRAFANA_TOKEN\}/u);
+    assert.match(text, /inactive until explicitly adopted/u);
+    assert.match(text, /^# observme:$/mu);
+    assert.match(text, /^# {3}capture:$/mu);
+    assert.match(text, /^# {5}prompts: false$/mu);
+    assert.match(text, /^# {5}responses: false$/mu);
+    assert.match(text, /^# {5}thinking: false$/mu);
+    assert.match(text, /^# {5}toolArguments: false$/mu);
+    assert.match(text, /^# {5}toolResults: false$/mu);
+    assert.match(text, /^# {5}bashCommands: false$/mu);
+    assert.match(text, /^# {5}bashOutput: false$/mu);
+    assert.match(text, /^# {5}filePaths: false$/mu);
+    assert.match(text, /^# {5}redactionEnabled: true$/mu);
+    assert.match(text, /^# {5}allowUnsafeCapture: false$/mu);
+    assert.match(text, /^# {5}activeAgentLeaseDurationMillis: 60000$/mu);
+    assert.match(text, /^# {7}token: \$\{OBSERVME_GRAFANA_TOKEN\}$/mu);
+    assert.deepEqual(parseObservMeConfigText(text), {}, "untouched guidance is not an active config layer");
   } finally {
     await removeTempProject(cwd);
   }
@@ -312,6 +373,129 @@ test("ensureProjectObservMeConfig surfaces anchored cleanup failure without crea
   }
 });
 
+test("anchored create bounds and reaps stalled ready, open, write, and commit phases", async () => {
+  for (const phase of ["ready", "open", "write", "commit"]) {
+    const cwd = await createTempProject();
+    const fault = createStalledHelperHooks(cwd, phase);
+    const startedAt = Date.now();
+
+    try {
+      await assert.rejects(
+        ensureProjectObservMeConfig({
+          cwd,
+          isProjectTrusted: true,
+          projectFileOperationHooks: fault.hooks,
+        }),
+        { code: "ETIMEDOUT" },
+      );
+
+      assert.ok(Date.now() - startedAt < 2_500, `${phase} phase did not settle within its owned bound`);
+      await assert.rejects(readFile(projectConfigPath(cwd), "utf8"), { code: "ENOENT" });
+      await assertHelperWasReaped(fault.pidFile);
+    } finally {
+      await removeTempProject(cwd);
+    }
+  }
+});
+
+test("anchored create bounds abort and cancel cleanup phases", async () => {
+  for (const phase of ["abort", "cancel"]) {
+    const cwd = await createTempProject();
+    const fault = createStalledHelperHooks(cwd, phase);
+    const injectedFailure = new Error(`injected ${phase} cleanup`);
+    const phaseHook = phase === "abort" ? { afterOpen: () => { throw injectedFailure; } } : {
+      beforeOpen: () => { throw injectedFailure; },
+    };
+    const startedAt = Date.now();
+
+    try {
+      await assert.rejects(
+        ensureProjectObservMeConfig({
+          cwd,
+          isProjectTrusted: true,
+          projectFileOperationHooks: { ...fault.hooks, ...phaseHook },
+        }),
+        injectedFailure,
+      );
+
+      assert.ok(Date.now() - startedAt < 2_500, `${phase} phase did not settle within its owned bound`);
+      await assert.rejects(readFile(projectConfigPath(cwd), "utf8"), { code: "ENOENT" });
+      await assertHelperWasReaped(fault.pidFile);
+    } finally {
+      await removeTempProject(cwd);
+    }
+  }
+});
+
+test("anchored create fails closed when timeout cleanup cannot be verified", async () => {
+  const cwd = await createTempProject();
+  const fault = createStalledHelperHooks(cwd, "write", "skip-cleanup");
+
+  try {
+    await assert.rejects(
+      ensureProjectObservMeConfig({
+        cwd,
+        isProjectTrusted: true,
+        projectFileOperationHooks: fault.hooks,
+      }),
+      error => {
+        assert.equal(error.code, "OBSERVME_UNSAFE_PROJECT_PATH_CLEANUP_FAILED");
+        assert.match(error.message, /anchored file cleanup failed/u);
+        assert.doesNotMatch(error.message, new RegExp(cwd.replaceAll("/", "\\/"), "u"));
+        return true;
+      },
+    );
+
+    await assertHelperWasReaped(fault.pidFile);
+    assert.equal(await readFile(projectConfigPath(cwd), "utf8"), "");
+  } finally {
+    await removeTempProject(cwd);
+  }
+});
+
+test("serialized lifecycle work continues after an anchored helper timeout", async () => {
+  const cwd = await createTempProject();
+  const fault = createStalledHelperHooks(cwd, "ready");
+  const pi = createFakePi();
+  const lifecycleStarts = [];
+  let ensureCalls = 0;
+
+  try {
+    registerHandlers(pi, {
+      ensureProjectConfig: async options => {
+        ensureCalls += 1;
+        return ensureProjectObservMeConfig({
+          ...options,
+          projectFileOperationHooks: ensureCalls === 1 ? fault.hooks : undefined,
+        });
+      },
+      loadConfig: async () => defaultObservMeConfig,
+      startTelemetry: async () => {
+        lifecycleStarts.push(ensureCalls);
+        throw new Error("stop after bounded project bootstrap");
+      },
+      onHandlerError: () => undefined,
+    });
+
+    const context = createContext(cwd, true);
+    const event = pi.events.find(entry => entry.eventName === "session_start");
+    await Promise.all([
+      event.handler({ reason: "startup" }, context),
+      event.handler({ reason: "reload" }, context),
+    ]);
+
+    assert.equal(ensureCalls, 2);
+    assert.deepEqual(lifecycleStarts, [1, 2]);
+    assert.equal(await readFile(projectConfigPath(cwd), "utf8"), PROJECT_OBSERVME_YAML_TEMPLATE);
+    await assertHelperWasReaped(fault.pidFile);
+    const warning = context.notifications.find(notification => notification.level === "warning");
+    assert.match(warning.message, /protocol timed out/u);
+    assert.doesNotMatch(warning.message, new RegExp(cwd.replaceAll("/", "\\/"), "u"));
+  } finally {
+    await removeTempProject(cwd);
+  }
+});
+
 test("ensureProjectObservMeConfig supports a project config directory symlink that stays in root", async () => {
   const cwd = await createTempProject();
   const inRootDirectory = join(cwd, "config-target");
@@ -360,10 +544,33 @@ test("bootstrapProjectObservMeConfig centralizes project path, trust, and notifi
   assert.equal(calls[0].isProjectTrusted, context.isProjectTrusted);
   assert.deepEqual(context.notifications, [
     {
-      message: `ObservMe created ${expectedPath}. Edit this file for custom setup.`,
+      message: createdSetupGuideMessage(expectedPath),
       level: "info",
     },
   ]);
+});
+
+test("bootstrapProjectObservMeConfig preserves creation results when notifications throw or reject", async () => {
+  const notificationFailures = [
+    () => {
+      throw new Error("notification failed");
+    },
+    () => Promise.reject(new Error("notification rejected")),
+  ];
+  const expected = { path: projectConfigPath("/workspace/demo"), status: "created" };
+
+  for (const failNotification of notificationFailures) {
+    const result = await bootstrapProjectObservMeConfig(
+      {
+        cwd: "/workspace/demo",
+        isProjectTrusted: () => true,
+        ui: { notify: failNotification },
+      },
+      { ensureProjectConfig: async () => expected },
+    );
+
+    assert.deepEqual(result, expected);
+  }
 });
 
 test("bootstrapProjectObservMeConfig skips safely without trust or UI capabilities", async () => {
@@ -465,10 +672,85 @@ test("registerHandlers creates the project file before loading session config", 
   assert.deepEqual(order, ["ensure", "load", "start"]);
   assert.deepEqual(context.notifications, [
     {
-      message: `ObservMe created ${projectConfigPath("/workspace/demo")}. Edit this file for custom setup.`,
+      message: createdSetupGuideMessage(projectConfigPath("/workspace/demo")),
       level: "info",
     },
   ]);
+});
+
+test("real lifecycle keeps global settings active until the generated project guide is edited", async () => {
+  const cwd = await createTempProject();
+  const globalConfigPath = join(cwd, "global-observme.yaml");
+  const pi = createFakePi();
+  const loadedConfigs = [];
+  const telemetryStarts = [];
+
+  try {
+    await writeFile(
+      globalConfigPath,
+      [
+        "observme:",
+        "  enabled: false",
+        "  environment: test",
+        "  otlp:",
+        "    endpoint: https://global.example.test:4318",
+        "    tls:",
+        "      insecureSkipVerify: true",
+      ].join("\n"),
+      "utf8",
+    );
+
+    registerHandlers(pi, {
+      loadConfig: async options => {
+        const loaded = await loadSessionConfigWithDiagnostics({
+          ...options,
+          env: {},
+          globalConfigPath,
+          loadEnvFile: false,
+        });
+        loadedConfigs.push(loaded);
+        return loaded;
+      },
+      startTelemetry: async options => {
+        telemetryStarts.push(options.config);
+        throw new Error("stop after observing adopted project config");
+      },
+      onHandlerError: () => undefined,
+    });
+
+    const context = createContext(cwd, true);
+    const event = pi.events.find(entry => entry.eventName === "session_start");
+
+    await event.handler({ reason: "startup" }, context);
+    await event.handler({ reason: "reload" }, context);
+
+    assert.equal(loadedConfigs.length, 2);
+    for (const loaded of loadedConfigs) {
+      assert.equal(loaded.config.enabled, false);
+      assert.equal(loaded.config.environment, "test");
+      assert.equal(loaded.config.otlp.endpoint, "https://global.example.test:4318");
+      assert.equal(loaded.config.otlp.tls.insecureSkipVerify, true);
+      assert.equal(loaded.diagnostics.effectiveSource, "global");
+    }
+    assert.equal(telemetryStarts.length, 0, "global disablement remains effective on start and reload");
+    assert.equal(await readFile(projectConfigPath(cwd), "utf8"), PROJECT_OBSERVME_YAML_TEMPLATE);
+    assert.deepEqual(context.notifications, [
+      { message: createdSetupGuideMessage(projectConfigPath(cwd)), level: "info" },
+    ]);
+
+    await writeFile(projectConfigPath(cwd), adoptGeneratedProjectOverrides(), "utf8");
+    await event.handler({ reason: "reload" }, context);
+
+    assert.equal(loadedConfigs.length, 3);
+    assert.equal(loadedConfigs[2].diagnostics.effectiveSource, "trusted_project");
+    assert.equal(loadedConfigs[2].config.enabled, true);
+    assert.equal(loadedConfigs[2].config.environment, "development");
+    assert.equal(loadedConfigs[2].config.otlp.endpoint, "http://localhost:4318");
+    assert.equal(loadedConfigs[2].config.otlp.tls.insecureSkipVerify, false);
+    assert.equal(telemetryStarts.length, 1, "edited project settings intentionally override global disablement");
+  } finally {
+    await removeTempProject(cwd);
+  }
 });
 
 test("registerHandlers bootstraps trusted project config on every Pi session_start reason", async () => {
@@ -504,7 +786,7 @@ test("registerHandlers bootstraps trusted project config on every Pi session_sta
   assert.deepEqual(calls, reasons.map(reason => ({ reason, cwd: "/workspace/demo", trusted: true })));
   assert.deepEqual(context.notifications, [
     {
-      message: `ObservMe created ${projectConfigPath("/workspace/demo")}. Edit this file for custom setup.`,
+      message: createdSetupGuideMessage(projectConfigPath("/workspace/demo")),
       level: "info",
     },
   ]);
@@ -529,7 +811,7 @@ test("registerProjectConfigBootstrap creates the file before later session_start
     assert.equal(observed[0], PROJECT_OBSERVME_YAML_TEMPLATE);
     assert.deepEqual(context.notifications, [
       {
-        message: `ObservMe created ${projectConfigPath(cwd)}. Edit this file for custom setup.`,
+        message: createdSetupGuideMessage(projectConfigPath(cwd)),
         level: "info",
       },
     ]);

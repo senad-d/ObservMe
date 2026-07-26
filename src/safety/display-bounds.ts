@@ -5,7 +5,7 @@ export const OBS_COMMAND_RENDER_ROW_LIMIT = 20;
 
 const truncationMarker = "…";
 const outputTruncationSuffix = "\n… output truncated";
-const unsafeDisplayControlPattern = /[\p{Cc}\p{Zl}\p{Zp}]+/gu;
+const unsafeDisplayControlPattern = /[\p{Cc}\p{Zl}\p{Zp}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]+/gu;
 const displayWhitespacePattern = /\s+/gu;
 
 export interface BoundedObsCommandRows<T> {

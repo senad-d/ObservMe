@@ -163,6 +163,8 @@ test("renderObsStatus includes only bounded config rejection codes and counts", 
       projectTrusted: false,
       projectConfigStatus: "skipped_untrusted",
       effectiveSource: "environment",
+      rejectedSources: [],
+      safeFallbackApplied: true,
       globalConfigLoaded: false,
       environmentOverrides: true,
       runtimeOptionsApplied: false,
@@ -190,7 +192,9 @@ test("renderObsStatus distinguishes malformed, unreadable, rejected, and missing
       globalConfigStatus: "unreadable",
       envFileStatus: "malformed",
       environmentStatus: "missing",
-      effectiveSource: "trusted_project",
+      effectiveSource: "defaults",
+      rejectedSources: ["global", "trusted_project", "project_env"],
+      safeFallbackApplied: false,
       globalConfigLoaded: false,
       environmentOverrides: false,
       runtimeOptionsApplied: false,
@@ -205,7 +209,12 @@ test("renderObsStatus distinguishes malformed, unreadable, rejected, and missing
   assert.match(output, /Project config: ignored \(trusted \.pi\/observme\.yaml was structurally rejected\)/u);
   assert.match(output, /Project \.env: ignored \(trusted project \.env is malformed\)/u);
   assert.match(output, /Process environment: no ObservMe values/u);
-  assert.doesNotMatch(output, /private|workspace|Authorization|raw content/u);
+  assert.match(
+    output,
+    /Rejected config sources: global config, trusted project config \(\.pi\/observme\.yaml\), trusted project \.env/u,
+  );
+  assert.match(output, /Config rejection: rejected sources ignored; accepted configuration retained/u);
+  assert.doesNotMatch(output, /safe defaults applied|private|workspace|Authorization|raw content/u);
 });
 
 test("/obs status does not throw when Pi has no UI notification API", async t => {
@@ -267,6 +276,65 @@ test("/obs status reports trusted project config source and Grafana query readin
   assert.match(notifications[0].message, /Project config: loaded \(trusted \.pi\/observme\.yaml\)/u);
   assert.match(notifications[0].message, /Grafana URL: https:\/\/grafana\.project\.test\//u);
   assert.match(notifications[0].message, /Grafana query readiness: ready/u);
+});
+
+test("/obs status separates a rejected source from accepted repaired configuration", async t => {
+  resetObsStatusRuntimeState();
+  t.after(() => resetObsStatusRuntimeState());
+
+  const notifications = [];
+  await handleObsStatusCommand("status", createCommandContext(notifications), {
+    globalConfigPath: "global.yaml",
+    readText: createReader({
+      "global.yaml": [
+        "observme:",
+        "  tenant: private-rejected-global",
+        "  otlp:",
+        "    timeoutMs: private-invalid-timeout",
+        "  capture:",
+        "    prompts: true",
+      ].join("\n"),
+    }),
+    env: {},
+    runtimeOptions: { tenant: "accepted-runtime", otlp: { timeoutMs: 4321 } },
+  });
+
+  assert.equal(notifications.length, 1);
+  assert.match(notifications[0].message, /Config source: runtime options/u);
+  assert.match(notifications[0].message, /Rejected config sources: global config/u);
+  assert.match(
+    notifications[0].message,
+    /Config rejection: rejected sources ignored; accepted configuration retained/u,
+  );
+  assert.match(notifications[0].message, /Prompt capture: disabled/u);
+  assert.doesNotMatch(notifications[0].message, /safe defaults applied|private-/u);
+});
+
+test("/obs status uses the shared Grafana URL issue code for readiness and loader rejection", async t => {
+  resetObsStatusRuntimeState();
+  t.after(() => resetObsStatusRuntimeState());
+
+  const invalidConfig = cloneDefaultConfig();
+  invalidConfig.query.grafana.url = "ftp://grafana.invalid/observability";
+  invalidConfig.query.grafana.token = "grafana-token";
+  const directOutput = renderObsStatus({ config: invalidConfig, queueDrops: 0 });
+  assert.match(directOutput, /Grafana query readiness: not_ready \(invalid_grafana_url\)/u);
+
+  const notifications = [];
+  await handleObsStatusCommand("status", createCommandContext(notifications), {
+    globalConfigPath: "global.yaml",
+    readText: createReader({
+      "global.yaml": "observme:\n  query:\n    grafana:\n      url: ftp://grafana.invalid/observability\n",
+    }),
+    env: {},
+  });
+
+  assert.equal(notifications.length, 1);
+  assert.match(
+    notifications[0].message,
+    /Config rejection: safe defaults applied \(1 issue\(s\): invalid_grafana_url\)/u,
+  );
+  assert.doesNotMatch(notifications[0].message, /ftp:\/\//u);
 });
 
 test("/obs status rejects credential-bearing endpoint URLs without rendering secret values", async t => {
@@ -340,7 +408,7 @@ test("/obs status explains untrusted project config is skipped", async t => {
   assert.equal(notifications.length, 1);
   assert.match(notifications[0].message, /OTLP endpoint: https:\/\/otel-collector\.example\.com:4318/u);
   assert.match(notifications[0].message, /Config source: defaults/u);
-  assert.match(notifications[0].message, /Project config: skipped \(project is untrusted; safe defaults\/global\/env only\)/u);
+  assert.match(notifications[0].message, /Project config: skipped \(project is untrusted; defaults\/global\/environment only\)/u);
   assert.doesNotMatch(notifications[0].message, /otel\.project\.test/u);
 });
 

@@ -75,8 +75,13 @@ const HASH_PREFIX_LENGTH = 12;
 export const MAX_CUSTOM_REDACTION_REPLACEMENT_CHARS =
   "[REDACTED::]".length + CUSTOM_REDACTION_PATTERN_NAME_MAX_CHARS + HASH_PREFIX_LENGTH;
 const CUSTOM_REDACTION_BUDGET_EXCEEDED_ERROR = "custom redaction budget exceeded";
-const ABSOLUTE_PATH_CANDIDATE_PATTERN = /(?:[a-zA-Z]:[\\/][^\s'"`<>|]*|\\\\[^\s'"`<>|]*|\/[^\s'"`<>|]*)/gu;
+const LOCAL_PATH_START_PATTERN = /(?:file:\/\/|[a-zA-Z]:[\\/]|\\\\|\/+)/giu;
+const FILE_URL_PREFIX_PATTERN = /^file:\/\//iu;
+const URL_SCHEME_PREFIX_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//iu;
 const PATH_PREFIX_CONTINUATION_PATTERN = /[\p{L}\p{N}._~:/\\-]/u;
+const PATH_QUOTE_DELIMITERS = new Set(["'", '"', "`"]);
+const UNQUOTED_PATH_END_DELIMITERS = new Set(["\t", "\n", "\r", "'", '"', "`", "<", ">", "|", ",", ";", ")", "]", "}"]);
+const PATH_CONNECTOR_WORDS = new Set(["and", "or", "then", "with", "from", "to", "at", "in", "for", "but", "because"]);
 const TRAILING_PATH_PUNCTUATION = new Set([".", ",", ";", "!", "?", ")", "]", "}"]);
 const REDACTED_PATH_PLACEHOLDER = "[REDACTED:path]";
 
@@ -86,6 +91,17 @@ export interface AbsolutePathMatch {
   readonly value: string;
   readonly start: number;
   readonly end: number;
+  readonly style: AbsolutePathStyle;
+  readonly localPath?: string;
+}
+
+interface LocalPathCandidate {
+  readonly value: string;
+  readonly end: number;
+}
+
+interface ParsedLocalPath {
+  readonly path: string;
   readonly style: AbsolutePathStyle;
 }
 
@@ -214,9 +230,11 @@ export function redactPath(path: string, pathMode: PrivacyPathMode, tenantSaltSo
   if (pathMode === "full") return path;
   if (pathMode === "drop") return undefined;
 
-  const style = detectAbsolutePathStyle(path) ?? "posix";
-  if (pathMode === "basename") return pathBasename(path, style);
-  return hashPath(path, tenantSaltSource, style);
+  const parsedFileUrl = parseLocalFileUrl(path);
+  const localPath = parsedFileUrl?.path ?? path;
+  const style = parsedFileUrl?.style ?? detectAbsolutePathStyle(localPath) ?? "posix";
+  if (pathMode === "basename") return pathBasename(localPath, style);
+  return hashPath(localPath, tenantSaltSource, style);
 }
 
 export function runSizeGuard(rawValue: string, options: RedactionOptions, stages: RedactionStage[]): string {
@@ -356,19 +374,125 @@ export function formatReplacement(match: ReplacementMatch, options: RedactionOpt
 
 export function findAbsolutePaths(value: string): AbsolutePathMatch[] {
   const matches: AbsolutePathMatch[] = [];
+  let coveredUntil = 0;
 
-  for (const candidateMatch of value.matchAll(ABSOLUTE_PATH_CANDIDATE_PATTERN)) {
-    const candidateStart = candidateMatch.index;
-    if (!isAbsolutePathStartBoundary(value, candidateStart)) continue;
+  for (const startMatch of value.matchAll(LOCAL_PATH_START_PATTERN)) {
+    const candidateStart = startMatch.index;
+    if (candidateStart < coveredUntil || !isAbsolutePathStartBoundary(value, candidateStart)) continue;
 
-    const candidate = trimTrailingPathPunctuation(candidateMatch[0]);
-    const style = detectAbsolutePathStyle(candidate);
-    if (!style) continue;
+    const candidate = readLocalPathCandidate(value, candidateStart);
+    const parsedPath = parseLocalPathCandidate(candidate.value);
+    if (!parsedPath) continue;
 
-    matches.push({ value: candidate, start: candidateStart, end: candidateStart + candidate.length, style });
+    matches.push({
+      value: candidate.value,
+      start: candidateStart,
+      end: candidate.end,
+      style: parsedPath.style,
+      localPath: parsedPath.path,
+    });
+    coveredUntil = candidate.end;
   }
 
   return matches;
+}
+
+export function readLocalPathCandidate(value: string, start: number): LocalPathCandidate {
+  const quote = value[start - 1];
+  if (quote !== undefined && PATH_QUOTE_DELIMITERS.has(quote)) {
+    const quoteEnd = value.indexOf(quote, start);
+    if (quoteEnd !== -1) return { value: value.slice(start, quoteEnd), end: quoteEnd };
+  }
+
+  const candidateEnd = findUnquotedPathCandidateEnd(value, start);
+  const candidate = trimTrailingPathPunctuation(value.slice(start, candidateEnd));
+  return { value: candidate, end: start + candidate.length };
+}
+
+export function findUnquotedPathCandidateEnd(value: string, start: number): number {
+  const firstTokenEnd = findLocalPathTokenEnd(value, start);
+  if (pathTokenLooksLikeFilename(value.slice(start, firstTokenEnd))) return firstTokenEnd;
+
+  let finalPathEnd = firstTokenEnd;
+  let cursor = firstTokenEnd;
+  while (cursor < value.length) {
+    while (value[cursor] === " ") cursor += 1;
+    if (cursor >= value.length || UNQUOTED_PATH_END_DELIMITERS.has(value[cursor])) return finalPathEnd;
+
+    const tokenEnd = findLocalPathTokenEnd(value, cursor);
+    const token = value.slice(cursor, tokenEnd);
+    if (isPathCandidateBoundaryToken(token)) return finalPathEnd;
+    if (/[\\/]/u.test(token)) finalPathEnd = tokenEnd;
+    if (pathTokenLooksLikeFilename(token)) return tokenEnd;
+    cursor = tokenEnd;
+  }
+
+  return finalPathEnd;
+}
+
+export function findLocalPathTokenEnd(value: string, start: number): number {
+  let end = start;
+  while (end < value.length && value[end] !== " " && !UNQUOTED_PATH_END_DELIMITERS.has(value[end])) end += 1;
+  return end;
+}
+
+export function isPathCandidateBoundaryToken(value: string): boolean {
+  return URL_SCHEME_PREFIX_PATTERN.test(value)
+    || PATH_CONNECTOR_WORDS.has(value.toLowerCase())
+    || /^[a-zA-Z]:[\\/]/u.test(value)
+    || /^\\\\/u.test(value)
+    || /^\//u.test(value);
+}
+
+export function pathTokenLooksLikeFilename(value: string): boolean {
+  const normalizedValue = trimTrailingPathPunctuation(value);
+  const finalSegment = normalizedValue.split(/[\\/]/u).at(-1) ?? "";
+  return /\.[^\s.\\/]{1,32}$/u.test(finalSegment);
+}
+
+export function parseLocalPathCandidate(value: string): ParsedLocalPath | undefined {
+  const parsedFileUrl = parseLocalFileUrl(value);
+  if (parsedFileUrl) return parsedFileUrl;
+
+  const style = detectAbsolutePathStyle(value);
+  return style ? { path: value, style } : undefined;
+}
+
+export function parseLocalFileUrl(value: string): ParsedLocalPath | undefined {
+  if (!FILE_URL_PREFIX_PATTERN.test(value)) return undefined;
+
+  let fileUrl: URL;
+  try {
+    fileUrl = new URL(value);
+  } catch {
+    return undefined;
+  }
+  if (fileUrl.protocol !== "file:" || fileUrl.username || fileUrl.password || fileUrl.port) return undefined;
+
+  const decodedPathname = decodeFileUrlComponent(fileUrl.pathname);
+  if (fileUrl.hostname && fileUrl.hostname.toLowerCase() !== "localhost") {
+    const uncPath = `\\\\${decodeFileUrlComponent(fileUrl.hostname)}${decodedPathname.replace(/\//gu, "\\")}`;
+    return isUncPath(uncPath) ? { path: uncPath, style: "windows" } : undefined;
+  }
+  if (/^\/[a-zA-Z]:[\\/]/u.test(decodedPathname)) {
+    const drivePath = decodedPathname.slice(1).replace(/\//gu, "\\");
+    return isWindowsDrivePath(drivePath) ? { path: drivePath, style: "windows" } : undefined;
+  }
+  if (decodedPathname.startsWith("//")) {
+    const uncPath = decodedPathname.replace(/\//gu, "\\");
+    return isUncPath(uncPath) ? { path: uncPath, style: "windows" } : undefined;
+  }
+  return detectAbsolutePathStyle(decodedPathname) === "posix"
+    ? { path: decodedPathname, style: "posix" }
+    : undefined;
+}
+
+export function decodeFileUrlComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 export function isAbsolutePathStartBoundary(value: string, start: number): boolean {
@@ -409,7 +533,9 @@ export function replaceAbsolutePaths(
 
   for (const match of matches) {
     result += value.slice(cursor, match.start);
-    result += redactEmbeddedPath(match.value, pathMode, tenantSaltSource, match.style);
+    result += pathMode === "full"
+      ? match.value
+      : redactEmbeddedPath(match.localPath ?? match.value, pathMode, tenantSaltSource, match.style);
     cursor = match.end;
   }
 

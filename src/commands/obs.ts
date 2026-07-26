@@ -72,17 +72,17 @@ type ObsSubcommandRegistry = {
 
 const obsSubcommandRegistry = {
   status: {
-    rootArgs: "subcommand",
+    rootArgs: "raw",
     handle: handleObsStatusCommand,
     selectOptions: options => options.status,
   },
   health: {
-    rootArgs: "subcommand",
+    rootArgs: "raw",
     handle: handleObsHealthCommand,
     selectOptions: options => options.health,
   },
   session: {
-    rootArgs: "subcommand",
+    rootArgs: "raw",
     handle: handleObsSessionCommand,
     selectOptions: options => options.session,
   },

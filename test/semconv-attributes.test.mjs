@@ -57,6 +57,8 @@ const documentedAttributeKeys = [
   "observme.capture.tool_arguments",
   "observme.config.rejection.issue_codes",
   "observme.config.rejection.issue_count",
+  "observme.config.rejection.rejected_sources",
+  "observme.config.safe_fallback_applied",
   "observme.config.source",
   "observme.environment",
   "observme.evicted",

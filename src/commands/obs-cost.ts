@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LoadSessionConfigOptions } from "../config/load-config.ts";
 import type { ObservMeConfig } from "../config/schema.ts";
 import type { PrometheusFetch, PrometheusMetricSeries, QueryResult } from "../query/prometheus.ts";
-import { createPrometheusQueryClient } from "../query/prometheus.ts";
+import { assertPrometheusVectorResult, createPrometheusQueryClient } from "../query/prometheus.ts";
 import {
   boundObsCommandOutput,
   normalizeObsBackendLabel,
@@ -160,7 +160,9 @@ async function loadObsCostConfig(ctx: ObsCostCommandContext, options: ObsCostSna
 
 async function queryObsCost(config: ObservMeConfig, options: ObsCostSnapshotOptions): Promise<QueryResult> {
   const client = createPrometheusQueryClient(config, { fetch: options.fetch });
-  return client.queryPrometheus(OBS_COST_AGGREGATE_PROMQL, undefined, { resultLimit: "metricSeries" });
+  const result = await client.queryPrometheus(OBS_COST_AGGREGATE_PROMQL, undefined, { resultLimit: "metricSeries" });
+  assertPrometheusVectorResult(result);
+  return result;
 }
 
 function toObsCostRow(series: PrometheusMetricSeries): ObsCostRow | undefined {

@@ -533,7 +533,7 @@ async function confirmObsBackfill(
 
   return ctx.ui.confirm("Confirm ObservMe backfill", buildBackfillConfirmationMessage(request, config, options), {
     signal: ctx.signal,
-    timeout: options.confirmTimeoutMs,
+    timeout: normalizeOptionalBackfillConfirmTimeoutMs(options.confirmTimeoutMs),
   });
 }
 
@@ -712,19 +712,39 @@ async function createObsBackfillExporter(
   runScope: ObsBackfillRunScope,
   progress: ObsBackfillDeliveryProgress,
 ): Promise<ObsBackfillExporter> {
+  let exporterPromise: Promise<ObsBackfillExporter> | undefined;
+
   try {
     throwIfBackfillAborted(signal);
     const setupOptions = { signal, timeoutMs: operationTimeoutMs };
     const exporter = options.createExporter ? options.createExporter(config, ctx, setupOptions) : createObsBackfillLogExporter(config, setupOptions);
-    return await runBackfillOperation(exporter, signal, operationTimeoutMs, "exporter setup", runScope);
+    exporterPromise = Promise.resolve(exporter);
+    return await runBackfillOperation(exporterPromise, signal, operationTimeoutMs, "exporter setup", runScope);
   } catch (error) {
+    if (exporterPromise) {
+      void disposeObsBackfillExporterAfterSetupFailure(exporterPromise, operationTimeoutMs, progress, runScope);
+    }
     throw backfillOperationError(error, progress, "exporter setup");
+  }
+}
+
+async function disposeObsBackfillExporterAfterSetupFailure(
+  exporterPromise: Promise<ObsBackfillExporter>,
+  operationTimeoutMs: number,
+  progress: ObsBackfillDeliveryProgress,
+  runScope: ObsBackfillRunScope,
+): Promise<void> {
+  try {
+    const exporter = await exporterPromise;
+    await shutdownObsBackfillExporter(exporter, undefined, operationTimeoutMs, undefined, progress, runScope);
+  } catch {
+    // Late setup rejection or disposal failure must not replace the original setup outcome.
   }
 }
 
 async function shutdownObsBackfillExporter(
   exporter: ObsBackfillExporter,
-  signal: AbortSignal,
+  signal: AbortSignal | undefined,
   operationTimeoutMs: number,
   pendingError: unknown,
   progress: ObsBackfillDeliveryProgress,
@@ -1294,6 +1314,11 @@ function normalizeMaxRecords(value: number | undefined): number {
 }
 
 function normalizeBackfillOperationTimeoutMs(value: number | undefined): number {
+  return normalizeObsCommandTimeoutMs(value, OBS_BACKFILL_DEFAULT_OPERATION_TIMEOUT_MS);
+}
+
+function normalizeOptionalBackfillConfirmTimeoutMs(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
   return normalizeObsCommandTimeoutMs(value, OBS_BACKFILL_DEFAULT_OPERATION_TIMEOUT_MS);
 }
 
