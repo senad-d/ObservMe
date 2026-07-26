@@ -2007,6 +2007,205 @@
         }
       ],
       "pluginVersion": "11.1.0"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 78
+      },
+      "id": 106,
+      "panels": [],
+      "title": "Agent identity",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Loki-backed identity directory for running agents and child spawns. pi.agent.display_name and pi.agent.child.display_name are presentation text only and may be duplicated; pi.agent.id and pi.workflow.id remain the correlation keys used by links and joins. Capability and friendly names come from OTEL structured metadata rather than Prometheus labels. Empty means no matching session, agent-run, or spawn logs were observed in the selected range.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open Tempo trace",
+                    "url": "/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22query%22:%22${__value.raw}%22%7D%5D,%22range%22:%7B%22from%22:%22${__from}%22,%22to%22:%22${__to}%22%7D%7D"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "agent_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open agent in Trace Journey",
+                    "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&var-workflow_id=${__data.fields[\"workflow_id\"]}&var-agent_id=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "workflow_id"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Open workflow in Trace Journey",
+                    "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}&var-workflow_id=${__value.raw}&var-agent_id=${__data.fields[\"agent_id\"]}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 24,
+        "x": 0,
+        "y": 79
+      },
+      "id": 24,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Open Trace Journey",
+          "url": "/d/observme-trace-journey/observme-trace-journey?${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "Time"
+          }
+        ]
+      },
+      "pluginVersion": "11.1.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{service_name=\"observme-pi-extension\", service_namespace=\"pi\"} | event_name=~\"session[.]started|agent[.]run[.]started|agent[.]spawn[.](started|completed|failed)\" | line_format `{\"event\":{{ printf \"%q\" .event_name }},\"agent_name\":{{ printf \"%q\" .pi_agent_display_name }},\"agent_role\":{{ printf \"%q\" .pi_agent_role }},\"agent_capability\":{{ printf \"%q\" .pi_agent_capability }},\"agent_id\":{{ printf \"%q\" .pi_agent_id }},\"parent_id\":{{ printf \"%q\" .pi_agent_parent_id }},\"workflow_id\":{{ printf \"%q\" .pi_workflow_id }},\"child_name\":{{ printf \"%q\" .pi_agent_child_display_name }},\"child_role\":{{ printf \"%q\" .pi_agent_child_role }},\"trace_id\":{{ printf \"%q\" .trace_id }}}`",
+          "legendFormat": "{{event_name}}",
+          "maxLines": 500,
+          "queryType": "range",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Agent identity and spawned child names",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "extractFields",
+          "options": {
+            "format": "json",
+            "keepTime": true,
+            "replace": false,
+            "source": "Line"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Line": true,
+              "id": true,
+              "labels": true,
+              "tsNs": true,
+              "service_name": true,
+              "telemetry_source": true
+            },
+            "indexByName": {
+              "Time": 0,
+              "event": 1,
+              "agent_name": 2,
+              "agent_role": 3,
+              "agent_capability": 4,
+              "agent_id": 5,
+              "parent_id": 6,
+              "workflow_id": 7,
+              "child_name": 8,
+              "child_role": 9,
+              "trace_id": 10
+            },
+            "renameByName": {
+              "event": "Event",
+              "agent_name": "Running agent name",
+              "agent_role": "Agent role",
+              "agent_capability": "Capability",
+              "agent_id": "Agent identity",
+              "parent_id": "Parent",
+              "workflow_id": "Workflow",
+              "child_name": "Spawned child name",
+              "child_role": "Spawned child role",
+              "trace_id": "Trace ID"
+            }
+          }
+        }
+      ],
+      "type": "table"
     }
   ],
   "refresh": "30s",
@@ -2027,6 +2226,6 @@
   "timezone": "browser",
   "title": "ObservMe Agents and Subagents",
   "uid": "observme-agents",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

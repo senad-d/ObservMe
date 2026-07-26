@@ -47,6 +47,7 @@ const errorsDashboardFile = "dashboards/observme-errors.json";
 const exportHealthDashboardFile = "dashboards/observme-export-health.json";
 const sloHealthDashboardFile = "dashboards/observme-slo-health.json";
 const localCollectorConfigFile = "observability-stack/config/otel/otel-collector.yaml";
+const nativeOtlpLokiIndexLabels = ["service_namespace"];
 const exactAgentRoleValues = [
   "root",
   "lead",
@@ -241,6 +242,27 @@ const agentRatioPanelRequirements = [
     title: "Child recovery ratio",
     metricNames: ["observme_parent_recovered_from_child_failure_total", "observme_child_agent_failures_total"],
   },
+];
+const agentIdentityPanelTitle = "Agent identity and spawned child names";
+const agentIdentityStructuredMetadataFields = [
+  "pi_agent_display_name",
+  "pi_agent_role",
+  "pi_agent_capability",
+  "pi_agent_id",
+  "pi_agent_parent_id",
+  "pi_workflow_id",
+  "pi_agent_child_display_name",
+  "pi_agent_child_role",
+];
+const agentIdentityPresentationColumns = [
+  "Running agent name",
+  "Agent role",
+  "Capability",
+  "Agent identity",
+  "Parent",
+  "Workflow",
+  "Spawned child name",
+  "Spawned child role",
 ];
 const agentTopTableRequirements = [
   {
@@ -941,6 +963,7 @@ async function lokiDashboardTargetsUseNormalizedAttributeNames() {
 async function lokiDashboardTargetsUseProvisionedLabels() {
   const collectorText = await readFile(localCollectorConfigFile, "utf8");
   const labels = provisionedLokiLabels(collectorText);
+  for (const label of nativeOtlpLokiIndexLabels) labels.add(label);
 
   assert.match(collectorText, localServiceNameInsertPattern, `${localCollectorConfigFile}: service.name fallback is required`);
 
@@ -1381,6 +1404,54 @@ async function agentDashboardShowsLineageRatiosThresholdsAndDrilldowns() {
   assert.ok(handoffOverrides.includes("Open Tempo trace"), `${agentDashboardFile}: handoff table must define a Tempo trace data link`);
 }
 
+async function dashboardIdentityTablesUseLokiMetadataAndTechnicalCorrelationKeys() {
+  const agentsDashboard = await readJsonFile(agentDashboardFile);
+  const traceJourneyDashboard = await readJsonFile(traceJourneyDashboardFile);
+  const identityPanel = assertNamedPanel(agentDashboardFile, agentsDashboard, agentIdentityPanelTitle);
+  const handoffPanel = assertNamedPanel(traceJourneyDashboardFile, traceJourneyDashboard, "Parent → child handoffs");
+  const identityExpression = expressionsForPanel(identityPanel).join("\n");
+  const handoffExpression = expressionsForPanel(handoffPanel).join("\n");
+  const identityColumns = Object.values(
+    identityPanel.transformations.find(transformation => transformation.id === "organize")?.options?.renameByName ?? {},
+  );
+  const handoffColumns = Object.values(
+    handoffPanel.transformations.find(transformation => transformation.id === "organize")?.options?.renameByName ?? {},
+  );
+  const identityOverrides = JSON.stringify(identityPanel.fieldConfig?.overrides ?? []);
+
+  assert.equal(identityPanel.type, "table", `${agentDashboardFile}: identity directory must be a table`);
+  assert.equal(identityPanel.datasource?.type, "loki", `${agentDashboardFile}: friendly identity must come from Loki, not Prometheus`);
+  for (const field of agentIdentityStructuredMetadataFields) {
+    assert.ok(identityExpression.includes(field), `${agentDashboardFile}: identity table must read ${field}`);
+  }
+  for (const column of agentIdentityPresentationColumns) {
+    assert.ok(identityColumns.includes(column), `${agentDashboardFile}: identity table must show ${column}`);
+  }
+  assert.match(identityPanel.description ?? "", /presentation text.*duplicated/iu);
+  assert.match(identityPanel.description ?? "", /pi[.]agent[.]id.*pi[.]workflow[.]id.*correlation keys/iu);
+  assert.ok(identityOverrides.includes("Open Tempo trace"), `${agentDashboardFile}: identity rows must link trace IDs to Tempo`);
+  assert.ok(identityOverrides.includes("Open agent in Trace Journey"), `${agentDashboardFile}: agent IDs must drive journey links`);
+  assert.ok(identityOverrides.includes("Open workflow in Trace Journey"), `${agentDashboardFile}: workflow IDs must drive journey links`);
+
+  for (const field of ["pi_agent_display_name", "pi_agent_role", "pi_agent_id", "pi_agent_child_display_name", "pi_agent_child_role"]) {
+    assert.ok(handoffExpression.includes(field), `${traceJourneyDashboardFile}: handoff rows must read ${field}`);
+  }
+  for (const column of ["Running agent name", "Agent ID", "Agent role", "Spawned child name", "Spawned child role"]) {
+    assert.ok(handoffColumns.includes(column), `${traceJourneyDashboardFile}: handoff rows must show ${column}`);
+  }
+  assert.match(handoffPanel.description ?? "", /Names may be duplicated/iu);
+
+  for (const dashboard of [agentsDashboard, traceJourneyDashboard]) {
+    for (const { panel, target } of prometheusTargetsForDashboard(dashboard)) {
+      assert.doesNotMatch(
+        target.expr,
+        /display_name|capability/iu,
+        `${panel.title}: friendly identity must not be queried as a Prometheus label`,
+      );
+    }
+  }
+}
+
 async function nodeGraphDashboardUsesCountsAndHealthSignals() {
   const dashboard = await readJsonFile(nodeGraphDashboardFile);
   const panels = dashboard.panels.filter(panel => panel.type === "nodeGraph");
@@ -1776,6 +1847,10 @@ test("overview dashboard uses landing rows and drill-down links", overviewDashbo
 test(
   "agent dashboard shows lineage ratios, thresholds, top tables, and drill-downs",
   agentDashboardShowsLineageRatiosThresholdsAndDrilldowns,
+);
+test(
+  "dashboard identity tables use Loki metadata and technical correlation keys",
+  dashboardIdentityTablesUseLokiMetadataAndTechnicalCorrelationKeys,
 );
 test("node graph dashboard uses counts and health signals", nodeGraphDashboardUsesCountsAndHealthSignals);
 test("dashboard role queries preserve exact current and legacy values", dashboardRoleQueriesPreserveExactCurrentAndLegacyValues);

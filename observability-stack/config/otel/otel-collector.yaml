@@ -78,6 +78,9 @@ processors:
         action: delete
       - key: pi.tool.result.redacted
         action: delete
+  # Keep display names and capabilities out of Loki's label hints. Loki stores
+  # these OTEL attributes as structured metadata (for example,
+  # pi.agent.display_name becomes pi_agent_display_name) for bounded queries.
   attributes/loki_query_hints:
     actions:
       - key: loki.attribute.labels
@@ -101,8 +104,11 @@ exporters:
     metric_expiration: 5m
     resource_to_telemetry_conversion:
       enabled: true
-  loki:
-    endpoint: http://loki:3100/loki/api/v1/push
+  # Native OTLP ingestion retains non-indexed log/resource attributes as Loki
+  # structured metadata. Loki configuration indexes only the bounded selector
+  # attributes used by dashboards and /obs queries.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
   otlp/tempo:
     endpoint: tempo:4317
     tls:
@@ -117,9 +123,12 @@ service:
       exporters: [prometheus]
     logs:
       receivers: [otlp]
+      # Identity presentation attributes are retained as Loki structured metadata;
+      # only accidental content attributes are deleted from log records.
       processors: [memory_limiter, resource/observme, resource/loki_query_hints, attributes/drop_content_attributes, attributes/loki_query_hints, batch]
-      exporters: [loki]
+      exporters: [otlphttp/loki]
     traces:
       receivers: [otlp]
+      # Tempo retains the complete validated agent and child identity attributes.
       processors: [memory_limiter, resource/observme, batch]
       exporters: [otlp/tempo]

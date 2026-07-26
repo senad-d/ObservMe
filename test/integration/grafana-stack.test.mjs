@@ -16,6 +16,7 @@ import { OBS_COST_AGGREGATE_PROMQL } from "../../src/commands/obs-cost.ts";
 import { OBS_TOOLS_CALLS_PROMQL, OBS_TOOLS_FAILURES_PROMQL } from "../../src/commands/obs-tools.ts";
 import { loadSessionConfig } from "../../src/config/load-config.ts";
 import { registerHandlers, startSessionTelemetry } from "../../src/pi/handlers.ts";
+import { completeSubagentSpawn, startSubagentSpawn } from "../../src/pi/subagent-spawn.ts";
 
 const execFile = promisify(execFileCallback);
 const projectRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -91,8 +92,16 @@ function createIntegrationIds() {
     sessionId: `session-grafana-stack-${suffix}`,
     workflowId: `workflow-grafana-stack-${suffix}`,
     agentId: `agent-grafana-stack-${suffix}`,
+    agentDisplayName: "Duplicate-friendly Grafana worker",
+    agentRole: "worker",
+    agentCapability: "integration-test",
     parentAgentId: `agent-grafana-parent-${suffix}`,
     rootAgentId: `agent-grafana-root-${suffix}`,
+    childAgentId: `agent-grafana-child-${suffix}`,
+    childDisplayName: "Duplicate-friendly Grafana child",
+    childRole: "helper",
+    childCapability: "integration-child",
+    spawnId: `spawn-grafana-stack-${suffix}`,
     agentRunId: `agent-run-grafana-stack-${suffix}`,
     turnIndex: 1,
     llmRequestId: `llm-request-grafana-stack-${suffix}`,
@@ -108,7 +117,10 @@ function createLineageEnv(ids) {
     OBSERVME_PARENT_AGENT_ID: ids.parentAgentId,
     OBSERVME_ROOT_AGENT_ID: ids.rootAgentId,
     OBSERVME_AGENT_DEPTH: "1",
-    OBSERVME_AGENT_CAPABILITY: "integration-test",
+    OBSERVME_CHILD_IDENTITY_ENVELOPE_VERSION: "1",
+    OBSERVME_AGENT_DISPLAY_NAME: ids.agentDisplayName,
+    OBSERVME_AGENT_ROLE: ids.agentRole,
+    OBSERVME_AGENT_CAPABILITY: ids.agentCapability,
   };
 }
 
@@ -224,9 +236,41 @@ function hasTempoLlmContentPayload(payload) {
     && !text.includes("grafana-stack-secret");
 }
 
-function hasTempoLineageSearchResult(payload, traceId) {
-  const text = JSON.stringify(payload).toLowerCase();
-  return text.includes(traceId.toLowerCase());
+function hasTempoLineageSearchResult(payload) {
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.traces)) return false;
+  return payload.traces.some(hasValidTempoSearchTraceId);
+}
+
+function hasValidTempoSearchTraceId(traceSummary) {
+  if (!traceSummary || typeof traceSummary !== "object") return false;
+  const traceId = traceSummary.traceID ?? traceSummary.traceId;
+  return typeof traceId === "string" && /^[a-f0-9]{32}$/iu.test(traceId);
+}
+
+function hasTempoIdentityPayload(payload, ids) {
+  const text = JSON.stringify(payload);
+  return text.includes("pi.agent.display_name")
+    && text.includes(ids.agentDisplayName)
+    && text.includes("pi.agent.capability")
+    && text.includes(ids.agentCapability)
+    && text.includes("pi.agent.child.display_name")
+    && text.includes(ids.childDisplayName)
+    && text.includes("pi.agent.child.role")
+    && text.includes(ids.childRole);
+}
+
+function hasLokiAgentIdentity(payload, ids) {
+  const text = JSON.stringify(payload);
+  return text.includes(ids.agentDisplayName)
+    && text.includes(ids.agentRole)
+    && text.includes(ids.agentCapability);
+}
+
+function hasLokiChildIdentity(payload, ids) {
+  const text = JSON.stringify(payload);
+  return text.includes(ids.childDisplayName)
+    && text.includes(ids.childRole)
+    && text.includes(ids.childCapability);
 }
 
 function hasLokiSessionLog(payload, ids) {
@@ -250,6 +294,21 @@ function hasPrometheusValueAtLeast(payload, minimum) {
 
 function hasPrometheusSeries(payload) {
   return extractPrometheusValues(payload).length > 0;
+}
+
+function prometheusSeriesOmitFriendlyIdentity(payload, ids) {
+  if (!payload || typeof payload !== "object") return false;
+  if (!payload.data || typeof payload.data !== "object") return false;
+  if (!Array.isArray(payload.data.result) || payload.data.result.length === 0) return false;
+
+  const forbiddenValues = [ids.agentDisplayName, ids.agentCapability, ids.childDisplayName, ids.childCapability];
+  return payload.data.result.every(result => {
+    const metric = result && typeof result === "object" ? result.metric : undefined;
+    if (!metric || typeof metric !== "object") return false;
+    if (Object.keys(metric).some(key => /display_name|capability/iu.test(key))) return false;
+    const serializedMetric = JSON.stringify(metric);
+    return forbiddenValues.every(value => !serializedMetric.includes(value));
+  });
 }
 
 function extractPrometheusValues(payload) {
@@ -504,6 +563,25 @@ async function emitRepresentativeObservMeTelemetry(project, ids) {
   const traceId = telemetrySession?.sessionSpan?.spanContext().traceId;
 
   await invoke(pi, "agent_start", { agentRunId: ids.agentRunId, source: "user" }, context);
+  assert.ok(telemetrySession, "telemetry session should exist before subagent telemetry starts");
+  const spawned = startSubagentSpawn(telemetrySession, {
+    spawnId: ids.spawnId,
+    childAgentId: ids.childAgentId,
+    childIdentity: {
+      mode: "v2",
+      descriptor: {
+        displayName: ids.childDisplayName,
+        role: ids.childRole,
+        capability: ids.childCapability,
+      },
+    },
+    spawnType: "extension",
+    spawnReason: "delegated_task",
+  });
+  assert.deepEqual(
+    completeSubagentSpawn(telemetrySession, spawned.spawnId, { childAgentId: spawned.childAgentId }),
+    { ok: true },
+  );
   await invoke(pi, "turn_start", { turnIndex: ids.turnIndex, userMessage: "grafana-stack prompt", imageCount: 0 }, context);
   await invoke(
     pi,
@@ -627,19 +705,28 @@ async function waitForTempoLlmContent(stack, traceId) {
   );
 }
 
-async function waitForTempoLineageSearch(stack, traceId, ids, range) {
+async function waitForTempoIdentity(stack, traceId, ids) {
+  return waitForResult(
+    "Tempo agent and child identity attributes",
+    () => fetchGrafanaJson(stack, tempoTraceUrl(stack, traceId)),
+    payload => hasTempoIdentityPayload(payload, ids),
+    { timeoutMs: 90000 },
+  );
+}
+
+async function waitForTempoLineageSearch(stack, ids, range) {
   const tags = `pi.agent.id="${ids.agentId}" pi.agent.parent_id="${ids.parentAgentId}"`;
 
   return waitForResult(
     "Tempo lineage search",
     () => fetchGrafanaJson(stack, tempoSearchUrl(stack, tags, range)),
-    payload => hasTempoLineageSearchResult(payload, traceId),
+    hasTempoLineageSearchResult,
     { timeoutMs: 90000 },
   );
 }
 
 async function waitForLokiSessionLogs(stack, ids, range) {
-  const query = `{service_name="${serviceName}", pi_session_id="${ids.sessionId}"}`;
+  const query = `{service_name="${serviceName}"} | pi_session_id="${ids.sessionId}"`;
 
   return waitForResult(
     "Loki session log query",
@@ -650,7 +737,7 @@ async function waitForLokiSessionLogs(stack, ids, range) {
 }
 
 async function waitForLokiErrorLogs(stack, range) {
-  const query = `{service_name="${serviceName}", event_name="tool.call.failed"}`;
+  const query = `{service_name="${serviceName}"} | event_name="tool.call.failed"`;
 
   return waitForResult(
     "Loki error label query",
@@ -660,8 +747,26 @@ async function waitForLokiErrorLogs(stack, range) {
   );
 }
 
+async function waitForLokiIdentityMetadata(stack, ids, range) {
+  const agentQuery = `{service_name="${serviceName}", service_namespace="pi"} | pi_session_id="${ids.sessionId}" | line_format "{{.pi_agent_display_name}}|{{.pi_agent_role}}|{{.pi_agent_capability}}"`;
+  const childQuery = `{service_name="${serviceName}", service_namespace="pi"} | pi_session_id="${ids.sessionId}" | event_name="agent.spawn.started" | line_format "{{.pi_agent_child_display_name}}|{{.pi_agent_child_role}}|{{.pi_agent_child_capability}}"`;
+
+  await waitForResult(
+    "Loki running agent identity structured metadata",
+    () => fetchGrafanaJson(stack, lokiQueryRangeUrl(stack, agentQuery, range)),
+    payload => hasLokiAgentIdentity(payload, ids),
+    { timeoutMs: 90000 },
+  );
+  await waitForResult(
+    "Loki spawned child identity structured metadata",
+    () => fetchGrafanaJson(stack, lokiQueryRangeUrl(stack, childQuery, range)),
+    payload => hasLokiChildIdentity(payload, ids),
+    { timeoutMs: 90000 },
+  );
+}
+
 async function waitForLokiContentLog(stack, range, eventName, marker) {
-  const query = `{service_name="${serviceName}", event_name="${eventName}"}`;
+  const query = `{service_name="${serviceName}"} | event_name="${eventName}"`;
 
   return waitForResult(
     `Loki ${eventName} content log query`,
@@ -673,7 +778,7 @@ async function waitForLokiContentLog(stack, range, eventName, marker) {
 
 async function waitForPrometheusTokenTotals(stack) {
   const tokenMetrics = [
-    ["total", "observme_llm_total_tokens_total", 26],
+    ["total", "observme_llm_tokens_total", 26],
     ["cache-write", "observme_llm_cache_write_tokens_total", 4],
     ["one-hour cache-write", "observme_llm_cache_write_1h_tokens_total", 2],
   ];
@@ -692,6 +797,15 @@ async function waitForPrometheusCommandQueries(stack) {
   await waitForPrometheusQuerySeries(stack, "Prometheus cost command query", OBS_COST_AGGREGATE_PROMQL);
   await waitForPrometheusQuerySeries(stack, "Prometheus tool call command query", OBS_TOOLS_CALLS_PROMQL);
   await waitForPrometheusQuerySeries(stack, "Prometheus tool failure command query", OBS_TOOLS_FAILURES_PROMQL);
+}
+
+async function waitForPrometheusFriendlyIdentityPolicy(stack, ids) {
+  return waitForResult(
+    "Prometheus friendly identity cardinality policy",
+    () => fetchGrafanaJson(stack, prometheusQueryUrl(stack, "observme_sessions_started_total")),
+    payload => prometheusSeriesOmitFriendlyIdentity(payload, ids),
+    { timeoutMs: 120000, intervalMs: 2000 },
+  );
 }
 
 async function waitForPrometheusQuerySeries(stack, label, query) {
@@ -872,8 +986,9 @@ function createCommandAgentsRuntime(ids) {
     parentAgentId: ids.parentAgentId,
     rootAgentId: ids.rootAgentId,
     depth: 1,
-    role: "subagent",
-    capability: "integration-test",
+    displayName: ids.agentDisplayName,
+    role: ids.agentRole,
+    capability: ids.agentCapability,
     orphaned: false,
   };
 
@@ -901,7 +1016,9 @@ async function runObsRuntimeCommandSmoke(project, ids) {
 
   assert.match(await runObsInfoCommand(harness, options, "status"), /ObservMe: enabled/u);
   const health = await runObsInfoCommand(harness, options, "health");
-  assert.match(health, /Collector: reachable/u);
+  assert.match(health, /Collector traces: reachable/u);
+  assert.match(health, /Collector metrics: reachable/u);
+  assert.match(health, /Collector logs: reachable/u);
   assert.match(health, /Grafana: reachable/u);
   assert.match(health, /Tempo datasource: ok/u);
   assert.match(health, /Loki datasource: ok/u);
@@ -985,15 +1102,18 @@ test("ObservMe telemetry is queryable through the Grafana stack and /obs command
 
   await waitForTempoTraceById(stack, traceId, ids);
   await waitForTempoLlmContent(stack, traceId);
-  await waitForTempoLineageSearch(stack, traceId, ids, range);
+  await waitForTempoIdentity(stack, traceId, ids);
+  await waitForTempoLineageSearch(stack, ids, range);
   await waitForLokiSessionLogs(stack, ids, range);
   await waitForLokiErrorLogs(stack, range);
+  await waitForLokiIdentityMetadata(stack, ids, range);
   await waitForLokiContentLog(stack, range, "llm.prompt.captured", "grafana-stack-prompt-marker");
   await waitForLokiContentLog(stack, range, "llm.response.captured", "grafana-stack-response-marker");
   await waitForLokiContentLog(stack, range, "llm.thinking.captured", "grafana-stack-thinking-marker");
   await waitForLokiContentLog(stack, range, "tool.error.captured", "grafana-stack-tool-error-marker");
   await waitForPrometheusTokenTotals(stack);
   await waitForPrometheusCommandQueries(stack);
+  await waitForPrometheusFriendlyIdentityPolicy(stack, ids);
   await waitForDashboardImports(stack);
   await runObsRuntimeCommandSmoke(commandProject, ids);
   await runObsTraceCommandSmoke(commandProject, ids, traceId);

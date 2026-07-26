@@ -384,6 +384,7 @@ Panels:
 - Ratio panels for spawn failure rate, orphan pressure vs spawns/runs, propagation failure rate, and child recovery ratio.
 - Top tables for slow agent roles, failing spawn reasons, orphan status/reason combinations, and high fan-out roles.
 - Parent/child handoff table with parsed fields and Trace Journey/Tempo links.
+- Loki-backed identity table showing the running agent display name, exact role, capability, agent/parent/workflow IDs, and spawned child display name/role. Display names are presentation text only; links and joins use agent, workflow, and trace IDs.
 
 PromQL aggregates must avoid high-cardinality workflow IDs and agent IDs:
 
@@ -439,7 +440,7 @@ Panels:
 - Agent-tree shape over time using active agents, p95 depth, p95 width, and p95 fan-out.
 - Subagent handoffs by depth and spawn reason.
 - Loki-backed execution journey events and ordered journey log, filterable by `pi_session_id`, `pi_agent_id`, and `pi_agent_run_id`; these use logs panels because Loki log streams do not provide state-timeline frames without extra transforms.
-- Parent/child handoff table from `event_category="agent-tree"` logs.
+- Parent/child handoff table from `event_category="agent-tree"` logs, with `pi.agent.display_name` beside agent ID/role and `pi.agent.child.display_name`/`pi.agent.child.role` on spawn rows.
 - Tempo TraceQL table for recent `observme-pi-extension` traces so users can open the full waterfall and keep the current session/agent filters beside matching logs.
 
 The dashboard uses high-cardinality IDs only for Loki/Tempo drill-down filters. Prometheus panels continue to use low-cardinality aggregate labels only.

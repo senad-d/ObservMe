@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added Loki-backed friendly-name identity tables and Trace Journey spawn-name columns that keep display names as presentation metadata while correlating by agent, workflow, and trace IDs.
+- Added exporter-enabled Tempo/Loki/Prometheus integration assertions for retained trace/log identity metadata and absent metric identity labels, plus native Loki OTLP ingestion that keeps friendly identity as structured metadata and indexes only bounded selector attributes.
 - Added a one-tarball packaged parent/child compatibility smoke that negotiates API v2 from an isolated parent install and explicitly loads the same release in a real child process to verify envelope-version-1 identity without exposing environment contents.
 - Extended the dependency-free future OrcMe fixture with direct Pi RPC environment tombstones, one-shot technical-ID retry, nested identity propagation, and exactly-once lifecycle-order contracts.
 - Added a dependency-free structural fixture for planned future OrcMe v2 negotiation, exact four-role identity mapping, and unchanged definition-name capabilities without claiming current OrcMe v2 support.

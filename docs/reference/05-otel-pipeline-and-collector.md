@@ -177,6 +177,16 @@ processors:
         action: delete
       - key: pi.agent.root_id
         action: delete
+      # Display names and capabilities remain available to Tempo and Loki, but
+      # are removed before Prometheus resource-to-label conversion.
+      - key: pi.agent.display_name
+        action: delete
+      - key: pi.agent.capability
+        action: delete
+      - key: pi.agent.child.display_name
+        action: delete
+      - key: pi.agent.child.capability
+        action: delete
       - key: pi.agent.run.id
         action: delete
       - key: pi.agent.spawn.id
@@ -361,7 +371,7 @@ Use Tempo for traces. Send via OTLP gRPC or HTTP. Prefer Collector -> Tempo.
 
 ### Loki
 
-Use Loki OTLP ingestion for logs. Ensure structured metadata support is enabled for Loki versions/configurations that require it.
+Use Loki OTLP ingestion for logs. Ensure structured metadata support is enabled for Loki versions/configurations that require it. The bundled local stack sends logs to Loki's native OTLP endpoint so non-indexed identity attributes such as `pi.agent.display_name` and `pi.agent.capability` remain queryable structured metadata, while Loki explicitly indexes only the existing bounded selector attributes.
 
 ### Prometheus / Mimir
 

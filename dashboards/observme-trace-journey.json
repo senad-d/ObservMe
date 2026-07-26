@@ -1363,7 +1363,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Chronological parent/child handoff and lineage-failure rows from Loki. Deterministic safe fields expose event, session, workflow, parent, child/agent, run, trace, and span context while hiding the raw line. trace_id opens Tempo and agent_run reopens this dashboard with matching filters. Empty means no matching handoff or lineage-failure logs were observed in the selected range.",
+      "description": "Chronological parent/child handoff and lineage-failure rows from Loki. The running agent's pi.agent.display_name appears beside pi.agent.id and pi.agent.role, while pi.agent.child.display_name and pi.agent.child.role identify presentation text for spawn rows. Names may be duplicated, so workflow, agent, child, trace, and span IDs remain the correlation and link keys. Empty means no matching handoff or lineage-failure logs were observed in the selected range.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1452,7 +1452,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", event_category=\"agent-tree\", event_name=~\"agent[.]spawn[.](started|completed|failed)|agent[.](wait|join)[.](started|completed)|agent[.]orphaned|trace_context[.]propagation_failed\"} | line_format `{\"event\":{{ printf \"%q\" .event_name }},\"session\":{{ printf \"%q\" .pi_session_id }},\"workflow\":{{ printf \"%q\" .pi_workflow_id }},\"parent\":{{ printf \"%q\" .pi_agent_parent_id }},\"child\":{{ printf \"%q\" .pi_agent_child_id }},\"agent\":{{ printf \"%q\" .pi_agent_id }},\"agent_run\":{{ printf \"%q\" .pi_agent_run_id }},\"trace_id\":{{ printf \"%q\" .trace_id }},\"span_id\":{{ printf \"%q\" .span_id }}}`",
+          "expr": "{service_name=\"observme-pi-extension\", service_namespace=\"pi\"} | pi_session_id=~\"${session_id:regex}\" | pi_workflow_id=~\"${workflow_id:regex}\" | pi_agent_id=~\"${agent_id:regex}\" | pi_agent_run_id=~\"${agent_run_id:regex}\" | event_category=\"agent-tree\" | event_name=~\"agent[.]spawn[.](started|completed|failed)|agent[.](wait|join)[.](started|completed)|agent[.]orphaned|trace_context[.]propagation_failed\" | line_format `{\"event\":{{ printf \"%q\" .event_name }},\"session\":{{ printf \"%q\" .pi_session_id }},\"workflow\":{{ printf \"%q\" .pi_workflow_id }},\"agent_name\":{{ printf \"%q\" .pi_agent_display_name }},\"agent_role\":{{ printf \"%q\" .pi_agent_role }},\"parent\":{{ printf \"%q\" .pi_agent_parent_id }},\"child\":{{ printf \"%q\" .pi_agent_child_id }},\"child_name\":{{ printf \"%q\" .pi_agent_child_display_name }},\"child_role\":{{ printf \"%q\" .pi_agent_child_role }},\"agent\":{{ printf \"%q\" .pi_agent_id }},\"agent_run\":{{ printf \"%q\" .pi_agent_run_id }},\"trace_id\":{{ printf \"%q\" .trace_id }},\"span_id\":{{ printf \"%q\" .span_id }}}`",
           "legendFormat": "{{event_name}}",
           "maxLines": 500,
           "queryType": "range",
@@ -1490,15 +1490,33 @@
               "telemetry_source": true
             },
             "renameByName": {
-              "event_name": "event",
-              "pi_session_id": "session",
-              "pi_workflow_id": "workflow",
-              "pi_agent_parent_id": "parent",
-              "pi_agent_child_id": "child",
-              "pi_agent_id": "agent",
-              "pi_agent_run_id": "agent_run",
-              "trace_id": "trace_id",
-              "span_id": "span_id"
+              "event": "Event",
+              "agent_name": "Running agent name",
+              "agent": "Agent ID",
+              "agent_role": "Agent role",
+              "parent": "Parent",
+              "child_name": "Spawned child name",
+              "child": "Child ID",
+              "child_role": "Spawned child role",
+              "workflow": "Workflow",
+              "agent_run": "Agent run",
+              "trace_id": "Trace ID",
+              "span_id": "Span ID"
+            },
+            "indexByName": {
+              "Time": 0,
+              "event": 1,
+              "agent_name": 2,
+              "agent": 3,
+              "agent_role": 4,
+              "parent": 5,
+              "child_name": 6,
+              "child": 7,
+              "child_role": 8,
+              "workflow": 9,
+              "agent_run": 10,
+              "trace_id": 11,
+              "span_id": 12
             }
           }
         }
@@ -1788,6 +1806,6 @@
   "timezone": "browser",
   "title": "ObservMe Trace Journey",
   "uid": "observme-trace-journey",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

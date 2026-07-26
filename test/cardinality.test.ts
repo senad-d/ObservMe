@@ -125,6 +125,7 @@ const invalidSpanContext: TestSpanContext = {
   traceFlags: 0,
 };
 const localCollectorConfigFile = "observability-stack/config/otel/otel-collector.yaml";
+const localLokiConfigFile = "observability-stack/config/loki/loki.yaml";
 const collectorDroppedIdentityResourceAttributes = [
   "pi.agent.display_name",
   "pi.agent.capability",
@@ -616,8 +617,11 @@ test("agent role metric labels accept only v2 catalog and explicit legacy values
   );
 });
 
-test("Collector prevents display name and capability resource promotion to metric labels", async () => {
-  const text = await readFile(localCollectorConfigFile, "utf8");
+test("Collector removes friendly identity only from metrics and retains it for traces and logs", async () => {
+  const [text, lokiConfig] = await Promise.all([
+    readFile(localCollectorConfigFile, "utf8"),
+    readFile(localLokiConfigFile, "utf8"),
+  ]);
   const policyStart = text.indexOf("resource/drop_high_cardinality_metric_attrs:");
   const policyEnd = text.indexOf("attributes/drop_content_attributes:", policyStart);
 
@@ -640,6 +644,30 @@ test("Collector prevents display name and capability resource promotion to metri
     text,
     /metrics:[\s\S]*processors: \[memory_limiter, resource\/observme, resource\/drop_high_cardinality_metric_attrs, batch\]/u,
   );
+
+  const logsPipeline = text.match(/\n {4}logs:\n(?<pipeline>[\s\S]*?)\n {4}traces:/u)?.groups?.pipeline ?? "";
+  const tracesPipeline = text.match(/\n {4}traces:\n(?<pipeline>[\s\S]*?)\n {6}exporters: \[otlp\/tempo\]/u)?.groups?.pipeline ?? "";
+  const lokiAttributeLabels = text.match(/key: loki[.]attribute[.]labels\n\s+value: (?<labels>[^\n]+)/u)?.groups?.labels ?? "";
+
+  assert.ok(logsPipeline, `${localCollectorConfigFile}: logs pipeline is required`);
+  assert.ok(tracesPipeline, `${localCollectorConfigFile}: traces pipeline is required`);
+  assert.doesNotMatch(logsPipeline, /resource\/drop_high_cardinality_metric_attrs/u);
+  assert.doesNotMatch(tracesPipeline, /resource\/drop_high_cardinality_metric_attrs/u);
+  assert.match(lokiConfig, /allow_structured_metadata:\s*true/u);
+  assert.match(logsPipeline, /exporters: \[otlphttp\/loki\]/u);
+  assert.match(text, /otlphttp\/loki:\n\s+endpoint: http:\/\/loki:3100\/otlp/u);
+  for (const attribute of collectorDroppedIdentityResourceAttributes) {
+    assert.equal(
+      lokiAttributeLabels.split(",").includes(attribute),
+      false,
+      `${localCollectorConfigFile}: ${attribute} must remain structured metadata instead of a Loki label`,
+    );
+    assert.equal(
+      lokiConfig.includes(`- ${attribute}`),
+      false,
+      `${localLokiConfigFile}: ${attribute} must not be configured as an index label`,
+    );
+  }
 });
 
 test("hundreds of arbitrary spawn and wait reasons collapse to bounded enum labels", () => {

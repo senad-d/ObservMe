@@ -50,6 +50,16 @@ processors:
         action: delete
       - key: pi.agent.root_id
         action: delete
+      # Display names and capabilities remain available to Tempo and Loki, but
+      # are removed before Prometheus resource-to-label conversion.
+      - key: pi.agent.display_name
+        action: delete
+      - key: pi.agent.capability
+        action: delete
+      - key: pi.agent.child.display_name
+        action: delete
+      - key: pi.agent.child.capability
+        action: delete
       - key: pi.agent.run.id
         action: delete
       - key: pi.agent.spawn.id
