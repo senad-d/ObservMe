@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const lifecycleSmokeScript = readFileSync(new URL("../scripts/smoke-pi-lifecycle.mjs", import.meta.url), "utf8");
+const runtimeSmokeScript = readFileSync(new URL("../scripts/smoke-pi-runtime.mjs", import.meta.url), "utf8");
 const coverageScript = readFileSync(new URL("../scripts/test-coverage.mjs", import.meta.url), "utf8");
 const gitignore = readFileSync(new URL("../.gitignore", import.meta.url), "utf8");
 
@@ -12,6 +14,19 @@ test("Pi lifecycle smoke uses an explicit offline telemetry config", () => {
   assert.match(lifecycleSmokeScript, /metrics:\s*\{\s*\.\.\.config\.metrics,\s*enabled:\s*false\s*\}/u);
   assert.match(lifecycleSmokeScript, /logs:\s*\{\s*\.\.\.config\.logs,\s*enabled:\s*false\s*\}/u);
   assert.doesNotMatch(lifecycleSmokeScript, /otel-collector\.example\.com|grafana\.example\.com/u);
+});
+
+test("Pi runtime smoke keeps telemetry offline while checking query health", () => {
+  assert.match(runtimeSmokeScript, /traces:\s*\n\s*enabled: false/u);
+  assert.match(runtimeSmokeScript, /metrics:\s*\n\s*enabled: false/u);
+  assert.match(runtimeSmokeScript, /logs:\s*\n\s*enabled: false/u);
+  assert.match(runtimeSmokeScript, /Collector transport security: inactive/u);
+  assert.doesNotMatch(runtimeSmokeScript, /assert\.match\(message, \/Collector: reachable/u);
+});
+
+test("CI uses capability-based validation without a fixed Pi version matrix", () => {
+  assert.match(ciWorkflow, /run: npm run validate/u);
+  assert.doesNotMatch(ciWorkflow, /pi-compatibility:|matrix\.pi-version|Install exact Pi compatibility target/u);
 });
 
 test("coverage generation writes only to ignored coverage artifacts", () => {

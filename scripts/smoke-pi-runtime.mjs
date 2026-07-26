@@ -966,7 +966,11 @@ async function assertObsHealthCommand(client) {
   await client.request({ type: "prompt", message: "/obs health" });
   const message = await notification;
 
-  assert.match(message, /Collector: reachable/u, "/obs health should verify the configured Collector endpoint");
+  assert.match(
+    message,
+    /Collector transport security: inactive \(all OTLP signals disabled\)/u,
+    "/obs health should preserve the offline fixture by reporting disabled Collector signals",
+  );
   assert.match(message, /Grafana: reachable/u, "/obs health should verify configured Grafana auth and reachability");
   assert.match(message, /Tempo datasource: ok/u, "/obs health should verify the Tempo datasource");
   assert.match(message, /Loki datasource: ok/u, "/obs health should verify the Loki datasource");
