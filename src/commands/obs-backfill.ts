@@ -806,7 +806,7 @@ function createBackfillTimeoutPromise<T>(timeoutMs: number, label: string): { re
 
 async function waitForBackfillOperationCleanup<T>(operationPromise: Promise<T>, timeoutMs: number): Promise<void> {
   const cleanupTimeoutMs = Math.min(normalizeBackfillOperationTimeoutMs(timeoutMs), OBS_BACKFILL_ABORT_CLEANUP_TIMEOUT_MS);
-  await Promise.race([operationPromise.then(noop, noop), delay(cleanupTimeoutMs, undefined, { ref: false })]);
+  await Promise.race([operationPromise.then(noop, noop), delay(cleanupTimeoutMs)]);
 }
 
 function createBackfillDeliveryProgress(recordsSelected: number): ObsBackfillDeliveryProgress {

@@ -41,6 +41,7 @@
 
 ### Fixed
 
+- Kept bounded `/obs backfill` abort cleanup timers referenced while awaited so timed-out exporter setup settles reliably across supported Node.js releases.
 - Kept the Pi handler facade below its enforced thin-module boundary after adding runtime ownership exports.
 - Reconciled the public integration API environment-key limit at 128 characters across runtime validation, boundary tests, and integration documentation.
 - Neutralized Unicode bidirectional controls in backend labels and final `/obs` notifications without stripping ordinary international text.
