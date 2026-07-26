@@ -574,7 +574,7 @@ LLM failures:
 {service_name="observme-pi-extension", event_name="llm.request.failed"}
 ```
 
-The dedicated `observme-llm-conversations.json` dashboard is the canonical opt-in content view. It shows a redacted conversation timeline, prompt/response/thinking panels, and trace links. Its Loki template filters cover `pi_session_id`, `pi_workflow_id` where promoted, `pi_agent_id`, `pi_agent_run_id`, `provider`, `model`, and content kind; the local Collector promotes the required normalized labels for this dashboard when capture and label policy allow them.
+The dedicated `observme-llm-conversations.json` dashboard is the canonical opt-in content view. It shows a redacted conversation timeline, prompt/response/thinking panels, and trace links. Its Loki template filters cover `pi_session_id`, `pi_workflow_id` where promoted, friendly agent name, `pi_agent_id`, `pi_agent_run_id`, provider, model, and content kind. Friendly names are read from `pi_agent_display_name` structured metadata and may be duplicated, so use `pi_agent_id` for exact correlation; the local Collector promotes the other required normalized labels when capture and label policy allow them.
 
 Captured prompts, responses, and thinking (redacted, opt-in log bodies):
 

@@ -35,6 +35,13 @@ test("coverage generation writes only to ignored coverage artifacts", () => {
   assert.match(gitignore, /^coverage\/$/mu);
 });
 
+test("coverage generation uses TypeScript-aware LCOV and enforces the Sonar threshold", () => {
+  assert.match(coverageScript, /--experimental-monocart/u);
+  assert.match(coverageScript, /src\/\*\*\/\*\.mjs/u);
+  assert.match(coverageScript, /coverage > 80/u);
+  assert.doesNotMatch(coverageScript, /"--all"/u);
+});
+
 test("coverage generation keeps Docker integration tests opt-in", () => {
   assert.match(coverageScript, /OBSERVME_INCLUDE_INTEGRATION_COVERAGE/u);
   assert.match(coverageScript, /isIntegrationTestPath/u);

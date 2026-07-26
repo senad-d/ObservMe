@@ -126,7 +126,7 @@
           "showLineNumbers": false,
           "showMiniMap": false
         },
-        "content": "### Privacy and empty-state guidance\n\n- LLM prompt, response, and thinking capture is **opt-in**. Empty panels normally mean capture is disabled or no matching content exists in the selected range.\n- The recommended configuration redacts content before export. If unsafe capture is explicitly enabled while redaction is disabled, these panels can contain raw sensitive content.\n- Filter with session, workflow, agent, run, provider, model, and content-kind labels. **Never put raw prompt, response, or thinking text into Loki queries.**\n- New settings affect only newly emitted events; previously omitted content cannot be recovered.",
+        "content": "### Privacy and empty-state guidance\n\n- LLM prompt, response, and thinking capture is **opt-in**. Empty panels normally mean capture is disabled or no matching content exists in the selected range.\n- The recommended configuration redacts content before export. If unsafe capture is explicitly enabled while redaction is disabled, these panels can contain raw sensitive content.\n- Filter with session, workflow, agent name, agent ID, run, provider, model, and content-kind context. Agent names are presentation metadata and may be duplicated; use agent IDs for exact correlation. **Never put raw prompt, response, or thinking text into Loki queries.**\n- New settings affect only newly emitted events; previously omitted content cannot be recovered.",
         "mode": "markdown"
       },
       "pluginVersion": "11.1.0",
@@ -177,7 +177,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_category=\"llm_content\"} | json | line_format \"{{.body}}\"",
+          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_category=\"llm_content\"} | pi_agent_display_name=~\"${agent_name:regex}\" | json | line_format \"{{.body}}\"",
           "maxLines": 1000,
           "queryType": "range",
           "range": true,
@@ -243,7 +243,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_name=\"llm.prompt.captured\"} | json | line_format \"{{.body}}\"",
+          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_name=\"llm.prompt.captured\"} | pi_agent_display_name=~\"${agent_name:regex}\" | json | line_format \"{{.body}}\"",
           "maxLines": 500,
           "queryType": "range",
           "range": true,
@@ -296,7 +296,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_name=\"llm.response.captured\"} | json | line_format \"{{.body}}\"",
+          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_name=\"llm.response.captured\"} | pi_agent_display_name=~\"${agent_name:regex}\" | json | line_format \"{{.body}}\"",
           "maxLines": 500,
           "queryType": "range",
           "range": true,
@@ -349,7 +349,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_name=\"llm.thinking.captured\"} | json | line_format \"{{.body}}\"",
+          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_name=\"llm.thinking.captured\"} | pi_agent_display_name=~\"${agent_name:regex}\" | json | line_format \"{{.body}}\"",
           "maxLines": 500,
           "queryType": "range",
           "range": true,
@@ -474,7 +474,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_category=\"llm_content\"} | line_format `{\"event\":{{ printf \"%q\" .event_name }},\"category\":{{ printf \"%q\" .event_category }},\"session\":{{ printf \"%q\" .pi_session_id }},\"workflow\":{{ printf \"%q\" .pi_workflow_id }},\"agent\":{{ printf \"%q\" .pi_agent_id }},\"parent_agent\":{{ printf \"%q\" .pi_agent_parent_id }},\"agent_run\":{{ printf \"%q\" .pi_agent_run_id }},\"provider\":{{ printf \"%q\" .gen_ai_provider_name }},\"model\":{{ printf \"%q\" .gen_ai_request_model }},\"content_kind\":{{ printf \"%q\" .pi_llm_content_kind }},\"trace_id\":{{ printf \"%q\" .trace_id }},\"span_id\":{{ printf \"%q\" .span_id }}}`",
+          "expr": "{service_name=\"observme-pi-extension\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\", pi_agent_run_id=~\"${agent_run_id:regex}\", gen_ai_provider_name=~\"${provider:regex}\", gen_ai_request_model=~\"${model:regex}\", pi_llm_content_kind=~\"${content_kind:regex}\", event_category=\"llm_content\"} | pi_agent_display_name=~\"${agent_name:regex}\" | line_format `{\"event\":{{ printf \"%q\" .event_name }},\"category\":{{ printf \"%q\" .event_category }},\"session\":{{ printf \"%q\" .pi_session_id }},\"workflow\":{{ printf \"%q\" .pi_workflow_id }},\"agent\":{{ printf \"%q\" .pi_agent_id }},\"parent_agent\":{{ printf \"%q\" .pi_agent_parent_id }},\"agent_run\":{{ printf \"%q\" .pi_agent_run_id }},\"provider\":{{ printf \"%q\" .gen_ai_provider_name }},\"model\":{{ printf \"%q\" .gen_ai_request_model }},\"content_kind\":{{ printf \"%q\" .pi_llm_content_kind }},\"trace_id\":{{ printf \"%q\" .trace_id }},\"span_id\":{{ printf \"%q\" .span_id }}}`",
           "legendFormat": "{{event_name}} {{pi_session_id}} {{pi_agent_run_id}}",
           "maxLines": 500,
           "queryType": "range",
@@ -626,6 +626,32 @@
           "type": "loki",
           "uid": "loki"
         },
+        "definition": "query_result(sum by (agent_name) (count_over_time({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\"} | pi_agent_display_name!=\"\" | label_format agent_name=\"{{.pi_agent_display_name}}\" [$__range])))",
+        "description": "Friendly agent names come from Loki structured metadata and may be duplicated. Use Agent ID for exact correlation.",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Agent name",
+        "multi": true,
+        "name": "agent_name",
+        "options": [],
+        "query": "query_result(sum by (agent_name) (count_over_time({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\"} | pi_agent_display_name!=\"\" | label_format agent_name=\"{{.pi_agent_display_name}}\" [$__range])))",
+        "refresh": 2,
+        "regex": "/agent_name=\"([^\"]+)\"/",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
         "definition": "label_values({service_name=\"observme-pi-extension\", event_category=\"llm_content\", pi_session_id=~\"${session_id:regex}\", pi_workflow_id=~\"${workflow_id:regex}\", pi_agent_id=~\"${agent_id:regex}\"}, pi_agent_run_id)",
         "hide": 0,
         "includeAll": true,
@@ -725,6 +751,6 @@
   "timezone": "browser",
   "title": "ObservMe LLM Conversations",
   "uid": "observme-llm-conversations",
-  "version": 3,
+  "version": 4,
   "weekStart": ""
 }

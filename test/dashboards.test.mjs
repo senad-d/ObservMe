@@ -204,6 +204,8 @@ const llmConversationFilterLinkFragments = [
   "${agent_id:queryparam}",
   "${agent_run_id:queryparam}",
 ];
+const llmConversationAgentNameVariable = "agent_name";
+const llmConversationAgentNameFilterFragment = 'pi_agent_display_name=~"${agent_name:regex}"';
 const llmConversationBodyLogPanelTitles = ["Conversation timeline (redacted, opt-in)", "Prompts", "Responses", "Thinking"];
 const overviewLandingRowTitles = ["Health", "Workload", "Cost", "Latency", "Agent lineage", "Links"];
 const overviewHealthChipTitles = [
@@ -1243,8 +1245,21 @@ async function llmConversationDashboardSupportsSafeFilteredDrilldown() {
   const traceLinksPanel = assertNamedPanel(llmConversationsDashboardFile, dashboard, "Conversation trace links");
   const traceLinkOverrides = JSON.stringify(traceLinksPanel.fieldConfig?.overrides ?? []);
   const traceLinkTransforms = (traceLinksPanel.transformations ?? []).map(transformation => transformation.id);
+  const agentNameVariable = dashboard.templating?.list?.find(variable => variable.name === llmConversationAgentNameVariable);
 
-  assertDashboardDefinesVariables(llmConversationsDashboardFile, dashboard, llmConversationFilterVariables);
+  assertDashboardDefinesVariables(llmConversationsDashboardFile, dashboard, [
+    ...llmConversationFilterVariables,
+    llmConversationAgentNameVariable,
+  ]);
+  assert.ok(agentNameVariable, `${llmConversationsDashboardFile}: Agent name variable is required`);
+  assert.match(agentNameVariable.query, /query_result[\s\S]*pi_agent_display_name[\s\S]*label_format agent_name/u);
+  assert.match(agentNameVariable.description ?? "", /may be duplicated.*Agent ID/iu);
+  for (const { panel, target } of lokiTargetsForDashboard(dashboard)) {
+    assert.ok(
+      target.expr.includes(llmConversationAgentNameFilterFragment),
+      `${llmConversationsDashboardFile}: ${panel.title} must filter by agent display-name metadata`,
+    );
+  }
   for (const fragment of llmConversationLokiFilterFragments) {
     assert.ok(expressionText.includes(fragment), `${llmConversationsDashboardFile}: content logs must include ${fragment}`);
   }
