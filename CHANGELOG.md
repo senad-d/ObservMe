@@ -44,6 +44,7 @@
 
 ### Fixed
 
+- Kept LLM Conversations context variables populated from lifecycle logs when optional content capture is disabled and made Agent name selections filter conversation panels immediately while retaining exact Agent ID disambiguation; content-kind choices remain limited to captured records.
 - Aligned the cardinality contract with the intentional Loki agent display-name index label while keeping capabilities and child display names as structured metadata.
 - Restored default LLM Conversations visibility for named and legacy unnamed records, removed the invalid JSON parser from native OTLP content lines, prevented cascading variables from interpolating Agent ID All as the empty regex `()`, and replaced unsupported structured-metadata name scans with a Grafana 11.1/Loki 3.0-compatible name-to-agent-ID filter that disambiguates duplicate names.
 - Replaced line-based native TypeScript coverage remapping with Monocart LCOV generation, covering the runtime helper and enforcing Sonar's combined coverage above 80%.

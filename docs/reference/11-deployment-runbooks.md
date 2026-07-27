@@ -228,10 +228,10 @@ Check:
 Diagnose the producer and dashboard separately:
 
 1. Preserve or widen the Grafana time range so it includes a new LLM request. A successful empty Loki response means no matching telemetry in that range, not a malformed dashboard query.
-2. Run `/obs status`. Prompt, response, and thinking capture are opt-in, and a setting change affects only newly emitted events.
+2. Check the context variables. Session, workflow, agent, run, provider, and model choices come from LLM lifecycle logs even when capture is disabled; content-kind choices require captured records. If every context choice is empty, widen the range and verify the lifecycle log pipeline. Run `/obs status`: prompt, response, and thinking capture are opt-in, and a setting change affects only newly emitted events.
 3. Run `/obs health` and confirm the Collector plus Grafana Loki datasource are reachable. Check Collector export errors before changing dashboard JSON.
-4. Reset dashboard variables to **All**. Agent ID must interpolate to `.*`, not the empty regex `()`; this state uses indexed context labels only and keeps legacy records without `pi_agent_display_name` without adding a structured-metadata wildcard stage.
-5. To filter by friendly name, choose **Agent name**, then explicitly select the resolved **Agent ID**. Name selection alone only bounds the ID choices. Duplicate names intentionally expose multiple IDs for explicit disambiguation.
+4. Reset dashboard variables to **All**. Agent name and Agent ID must interpolate to `.*`, not the empty regex `()`; their indexed matchers keep legacy records without `pi_agent_display_name` visible.
+5. To filter by friendly name, choose **Agent name**; the conversation panels filter immediately. Duplicate names intentionally show combined records and expose multiple IDs, so select an exact **Agent ID** only when disambiguation is needed.
 6. A red query-error state indicates invalid/interpolated LogQL. `JSONParserErr` means a panel incorrectly applied `| json` to the native OTLP log line; remove that parser rather than changing capture. A datasource timeout indicates an overly broad range or selector; narrow the range and select Session ID or Agent ID before retrying. Never add captured bodies to variables, URLs, labels, or diagnostics.
 
 The bundled Grafana 11.1/Loki 3.0 stack requires `pi.agent.display_name` in the Loki-only index-label policy for the bounded name lookup. Keep `pi.agent.id` as the exact correlation key and continue dropping both attributes from Prometheus metric labels.

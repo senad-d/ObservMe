@@ -56,6 +56,7 @@ const llmConversationPanelTitles = [
 const llmConversationDefaultRegexValues = {
   session_id: ".*",
   workflow_id: ".*",
+  agent_name: ".*",
   agent_id: ".*",
   agent_run_id: ".*",
   provider: ".*",
@@ -1351,11 +1352,16 @@ async function verifyAgentNameFiltering(stack, dashboard, fixtureIds, range) {
     namedIds.map(ids => ids.agentId).sort(),
     "A duplicate friendly name should resolve to every matching indexed technical ID",
   );
+  for (const title of llmConversationPanelTitles) {
+    const payload = await queryDashboardPanel(stack, dashboard, title, selectedNameValues, range);
+    assertSuccessfulLokiResponse(payload, `${title} selected-name filter`);
+    assertAgentSet(payload, namedIds.map(ids => ids.agentId), `${title} selected-name filter`);
+  }
 
   const selectedAgent = namedIds[0];
   assert.ok(selectedAgent, "Duplicate-name fixture should provide a selectable agent");
   const selectedPanelValues = {
-    ...llmConversationDefaultRegexValues,
+    ...selectedNameValues,
     agent_id: escapeRegExp(selectedAgent.agentId),
   };
 
@@ -1363,6 +1369,33 @@ async function verifyAgentNameFiltering(stack, dashboard, fixtureIds, range) {
     const payload = await queryDashboardPanel(stack, dashboard, title, selectedPanelValues, range);
     assertSuccessfulLokiResponse(payload, `${title} selected-agent filter`);
     assertAgentSet(payload, [selectedAgent.agentId], `${title} selected-agent filter`);
+  }
+}
+
+async function verifyCaptureDisabledVariableDiscovery(stack, dashboard, ids, range) {
+  const variableValues = {
+    ...llmConversationDefaultRegexValues,
+    session_id: escapeRegExp(ids.sessionId),
+    workflow_id: escapeRegExp(ids.workflowId),
+    agent_name: escapeRegExp(ids.agentDisplayName),
+    agent_id: escapeRegExp(ids.agentId),
+    agent_run_id: escapeRegExp(ids.agentRunId),
+    provider: "anthropic",
+    model: "claude-grafana-stack-it",
+  };
+  const expectedValues = new Map([
+    ["session_id", ids.sessionId],
+    ["workflow_id", ids.workflowId],
+    ["agent_name", ids.agentDisplayName],
+    ["agent_id", ids.agentId],
+    ["agent_run_id", ids.agentRunId],
+    ["provider", "anthropic"],
+    ["model", "claude-grafana-stack-it"],
+  ]);
+
+  for (const [name, expected] of expectedValues) {
+    const values = await queryDashboardVariable(stack, dashboard, name, variableValues, range);
+    assert.ok(values.includes(expected), `Capture-disabled LLM lifecycle logs should populate ${name}`);
   }
 }
 
@@ -1378,6 +1411,7 @@ async function verifyConversationEmptyAndQueryErrorStates(stack, dashboard, capt
   assert.equal(lokiResultCount(emptyPayload), 0, "A range before the fixture should be a successful empty state");
 
   await waitForLokiLlmLifecycle(stack, captureDisabledIds, fixtureRange);
+  await verifyCaptureDisabledVariableDiscovery(stack, dashboard, captureDisabledIds, fixtureRange);
   const disabledValues = {
     ...llmConversationDefaultRegexValues,
     session_id: escapeRegExp(captureDisabledIds.sessionId),

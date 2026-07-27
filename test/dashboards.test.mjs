@@ -189,6 +189,16 @@ const llmConversationFilterVariables = [
   "model",
   "content_kind",
 ];
+const llmConversationLifecycleDiscoveryVariables = [
+  "session_id",
+  "workflow_id",
+  "agent_name",
+  "agent_id",
+  "agent_run_id",
+  "provider",
+  "model",
+];
+const llmLifecycleVariableSelectorFragment = 'event_name=~"llm[.]request[.](started|completed|failed)|llm[.](prompt|response|thinking)[.]captured"';
 const llmConversationLokiFilterFragments = [
   "pi_session_id=~\"${session_id:regex}\"",
   "pi_workflow_id=~\"${workflow_id:regex}\"",
@@ -206,6 +216,7 @@ const llmConversationFilterLinkFragments = [
   "${agent_run_id:queryparam}",
 ];
 const llmConversationAgentNameVariable = "agent_name";
+const llmConversationAgentNameFilterFragment = 'pi_agent_display_name=~"${agent_name:regex}"';
 const llmConversationBodyLogPanelTitles = ["Conversation timeline (redacted, opt-in)", "Prompts", "Responses", "Thinking"];
 const overviewLandingRowTitles = ["Health", "Workload", "Cost", "Latency", "Agent lineage", "Links"];
 const overviewHealthChipTitles = [
@@ -1253,6 +1264,7 @@ async function llmConversationDashboardSupportsSafeFilteredDrilldown() {
   const variableNames = variables.map(variable => variable.name);
   const agentNameVariable = variables.find(variable => variable.name === llmConversationAgentNameVariable);
   const agentIdVariable = variables.find(variable => variable.name === "agent_id");
+  const contentKindVariable = variables.find(variable => variable.name === "content_kind");
   const guidance = panelMarkdownContent(guidancePanel);
 
   assertDashboardDefinesVariables(llmConversationsDashboardFile, dashboard, [
@@ -1267,7 +1279,7 @@ async function llmConversationDashboardSupportsSafeFilteredDrilldown() {
   );
   assert.match(agentNameVariable.query, /^label_values\([\s\S]*pi_agent_display_name\)$/u);
   assert.doesNotMatch(JSON.stringify(dashboard.templating), /query_result\s*\(/u);
-  assert.match(agentNameVariable.description ?? "", /duplicated.*Agent ID/iu);
+  assert.match(agentNameVariable.description ?? "", /duplicate names.*Agent ID/iu);
   assert.match(agentIdVariable.query, /pi_agent_display_name=~"\$\{agent_name:regex\}"[\s\S]*pi_agent_id/u);
   assert.equal(
     agentIdVariable.allValue,
@@ -1275,15 +1287,20 @@ async function llmConversationDashboardSupportsSafeFilteredDrilldown() {
     `${llmConversationsDashboardFile}: Agent ID All must stay visible while cascading variables load`,
   );
   assert.match(agentIdVariable.description ?? "", /exact correlation key.*select an exact Agent ID/iu);
+  assert.ok(contentKindVariable, `${llmConversationsDashboardFile}: Content kind variable is required`);
+  for (const name of llmConversationLifecycleDiscoveryVariables) {
+    const variable = variables.find(candidate => candidate.name === name);
+    assert.ok(variable?.query.includes(llmLifecycleVariableSelectorFragment), `${llmConversationsDashboardFile}: ${name} must remain discoverable from LLM lifecycle logs when content capture is disabled`);
+  }
+  assert.match(contentKindVariable.query, /event_category="llm_content"/u);
   assert.match(collectorConfig, /loki[.]attribute[.]labels[\s\S]*pi[.]agent[.]display_name/u);
   assert.match(lokiConfig, /default_resource_attributes_as_index_labels:[\s\S]*pi[.]agent[.]display_name/u);
   assert.match(collectorConfig, /groupbyattrs\/loki_index_labels:[\s\S]*pi[.]agent[.]display_name/u);
 
   for (const { panel, target } of lokiTargets) {
-    assert.doesNotMatch(
-      target.expr,
-      /pi_agent_display_name|\$\{agent_name:/u,
-      `${llmConversationsDashboardFile}: ${panel.title} must filter panels only through indexed technical IDs`,
+    assert.ok(
+      target.expr.includes(llmConversationAgentNameFilterFragment),
+      `${llmConversationsDashboardFile}: ${panel.title} must apply the indexed Agent name filter directly`,
     );
   }
   for (const fragment of llmConversationLokiFilterFragments) {
@@ -1305,6 +1322,8 @@ async function llmConversationDashboardSupportsSafeFilteredDrilldown() {
   for (const guidancePattern of [/no telemetry in range/iu, /lifecycle events but no captured content/iu, /query error/iu, /datasource timeout/iu, /\/obs status/u, /\/obs health/u]) {
     assert.match(guidance, guidancePattern, `${llmConversationsDashboardFile}: empty-state guidance must distinguish ${guidancePattern}`);
   }
+  assert.match(guidance, /context variables remain available from LLM lifecycle logs/iu);
+  assert.match(guidance, /Selecting a name filters conversations immediately/iu);
   assert.match(guidance, /All keeps legacy unnamed records visible/iu);
   assert.match(timelinePanel.description ?? "", /(?:redacted.*opt-in|opt-in.*redacted)/i, `${llmConversationsDashboardFile}: timeline must explain redacted opt-in content`);
   assert.match(timelinePanel.description ?? "", /do not query by raw/i, `${llmConversationsDashboardFile}: timeline must discourage raw-content queries`);
