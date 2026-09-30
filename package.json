@@ -98,7 +98,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.82.0",
-    "@earendil-works/pi-coding-agent": "0.82.0",
+    "@earendil-works/pi-coding-agent": "0.99.1",
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.1",
     "c8": "^11.0.0",
